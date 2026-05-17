@@ -13,6 +13,9 @@ jobs:
     name: "Build Android APK (multiarch)"
     runs-on: ubuntu-latest
     env:
+      # Used by scripts/gha/deps_android.sh to fetch SDL2 source tarball.
+      # Bump in lockstep with upstream FWGS when needed.
+      SDL_VERSION: 2.32.10
       GH_CPU_ARCH: multiarch
       GH_CPU_OS: android
     steps:
