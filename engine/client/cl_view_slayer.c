@@ -1,0 +1,327 @@
+/*
+cl_view_slayer.c - Slayer3D third-person camera extension
+Copyright (C) 2026 Slayer3D contributors
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+*/
+
+#include "common.h"
+#include "client.h"
+#include "cl_view_slayer.h"
+
+// ---------------------------------------------------------------------------
+// Cvars
+// ---------------------------------------------------------------------------
+
+static CVAR_DEFINE_AUTO( slayer_thirdperson, "0",   FCVAR_ARCHIVE, "enable Slayer3D third-person camera" );
+static CVAR_DEFINE_AUTO( slayer_cam_ofs,     "120", FCVAR_ARCHIVE, "Slayer3D third-person camera distance" );
+static CVAR_DEFINE_AUTO( slayer_cam_clip,    "1",   FCVAR_ARCHIVE, "Slayer3D third-person wall clipping (1=trace, 0=through walls)" );
+static CVAR_DEFINE_AUTO( slayer_cam_free,    "0",   FCVAR_ARCHIVE, "Slayer3D third-person free look" );
+static CVAR_DEFINE_AUTO( slayer_cam_pitch,   "0",   FCVAR_ARCHIVE, "Slayer3D free-look camera pitch" );
+static CVAR_DEFINE_AUTO( slayer_cam_yaw,     "0",   FCVAR_ARCHIVE, "Slayer3D free-look camera yaw" );
+
+// Sound played when the local player gets killed. Empty string disables
+// the feature.
+static CVAR_DEFINE_AUTO( slayer_killsound,          "weapons/explode3.wav", FCVAR_ARCHIVE, "Slayer3D: sound to play when the local player dies (empty = off)" );
+static CVAR_DEFINE_AUTO( slayer_killsound_volume,   "1.0",                  FCVAR_ARCHIVE, "Slayer3D: kill sound volume, 0..1" );
+
+// Distinct sound for headshot deaths (CS-style). Falls back to
+// slayer_killsound when empty.
+static CVAR_DEFINE_AUTO( slayer_killsound_headshot, "",                     FCVAR_ARCHIVE, "Slayer3D: sound to play when the local player dies from a headshot (empty = use slayer_killsound)" );
+
+// Distinct sound for teamkill deaths. Falls back to slayer_killsound
+// when empty. Only triggers when killer != victim and both have a
+// known, equal, non-empty team (so suicide / unknown team won't fire it).
+static CVAR_DEFINE_AUTO( slayer_killsound_teamkill, "",                     FCVAR_ARCHIVE, "Slayer3D: sound to play when the local player dies to a teammate (empty = use slayer_killsound)" );
+
+// ---------------------------------------------------------------------------
+// Tunables
+// ---------------------------------------------------------------------------
+
+#define SLAYER_CAM_MIN_OFS  0.0f
+#define SLAYER_CAM_MAX_OFS  256.0f
+// Distance kept from a contact surface so the camera does not z-fight with it.
+#define SLAYER_CAM_PADDING  4.0f
+
+// ---------------------------------------------------------------------------
+// Console commands for binding camera rotation keys
+// ---------------------------------------------------------------------------
+
+static void Cmd_SlayerCamYaw_f( void )
+{
+	float delta;
+
+	if( Cmd_Argc() < 2 )
+	{
+		Con_Printf( "usage: slayer_camyaw <degrees>\n" );
+		return;
+	}
+
+	delta = Q_atof( Cmd_Argv( 1 ));
+	Cvar_SetValue( "slayer_cam_yaw", slayer_cam_yaw.value + delta );
+}
+
+static void Cmd_SlayerCamPitch_f( void )
+{
+	float delta, v;
+
+	if( Cmd_Argc() < 2 )
+	{
+		Con_Printf( "usage: slayer_campitch <degrees>\n" );
+		return;
+	}
+
+	delta = Q_atof( Cmd_Argv( 1 ));
+	v = bound( -89.0f, slayer_cam_pitch.value + delta, 89.0f );
+	Cvar_SetValue( "slayer_cam_pitch", v );
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+void V_InitSlayerCvars( void )
+{
+	Cvar_RegisterVariable( &slayer_thirdperson );
+	Cvar_RegisterVariable( &slayer_cam_ofs );
+	Cvar_RegisterVariable( &slayer_cam_clip );
+	Cvar_RegisterVariable( &slayer_cam_free );
+	Cvar_RegisterVariable( &slayer_cam_pitch );
+	Cvar_RegisterVariable( &slayer_cam_yaw );
+
+	Cvar_RegisterVariable( &slayer_killsound );
+	Cvar_RegisterVariable( &slayer_killsound_volume );
+	Cvar_RegisterVariable( &slayer_killsound_headshot );
+	Cvar_RegisterVariable( &slayer_killsound_teamkill );
+
+	Cmd_AddCommand( "slayer_camyaw", Cmd_SlayerCamYaw_f,
+		"rotate Slayer3D free-look camera by N degrees on yaw axis" );
+	Cmd_AddCommand( "slayer_campitch", Cmd_SlayerCamPitch_f,
+		"tilt Slayer3D free-look camera by N degrees on pitch axis" );
+}
+
+qboolean V_IsSlayerThirdPerson( void )
+{
+	return slayer_thirdperson.value != 0.0f;
+}
+
+// ---------------------------------------------------------------------------
+// Death message hook
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Per-match state
+// ---------------------------------------------------------------------------
+
+// Team name lookup populated by the server-sent "TeamInfo" message
+// (CS / DM-style mods). Indexed by 1-based entindex so [0] is unused.
+// Empty string means "team unknown".
+#define SLAYER_TEAM_LEN  16
+static char slayer_player_team[MAX_CLIENTS + 1][SLAYER_TEAM_LEN];
+
+void V_SlayerResetMatchState( void )
+{
+	memset( slayer_player_team, 0, sizeof( slayer_player_team ));
+}
+
+// ---------------------------------------------------------------------------
+// User message hooks
+// ---------------------------------------------------------------------------
+
+void V_OnTeamInfo( const byte *pbuf, int iSize )
+{
+	int slot;
+
+	// TeamInfo layout: byte client_slot (1..MAX_CLIENTS), then a
+	// NUL-terminated ASCII team name. Anything shorter than 2 bytes
+	// is malformed, ignore.
+	if( !pbuf || iSize < 2 )
+		return;
+
+	slot = pbuf[0];
+	if( slot < 1 || slot > MAX_CLIENTS )
+		return;
+
+	// Defensive copy: pbuf is not necessarily NUL-terminated within
+	// iSize, so we cap the read.
+	{
+		int max = iSize - 1;
+		if( max >= SLAYER_TEAM_LEN )
+			max = SLAYER_TEAM_LEN - 1;
+		Q_strncpy( slayer_player_team[slot], (const char *)( pbuf + 1 ), max + 1 );
+	}
+}
+
+// Returns true when both players have a known, non-empty team and
+// those teams match. Suicide and self-kill are not teamkills.
+static qboolean Slayer_IsTeamkill( int killer, int victim )
+{
+	const char *kt, *vt;
+
+	if( killer == victim )
+		return false;
+	if( killer < 1 || killer > MAX_CLIENTS )
+		return false;
+	if( victim < 1 || victim > MAX_CLIENTS )
+		return false;
+
+	kt = slayer_player_team[killer];
+	vt = slayer_player_team[victim];
+
+	if( COM_StringEmptyOrNULL( kt ) || COM_StringEmptyOrNULL( vt ))
+		return false;
+
+	return Q_stricmp( kt, vt ) == 0 ? true : false;
+}
+
+// Pick which sound cvar to use for this death. Priority is
+// teamkill > headshot > generic. Falls back to slayer_killsound when
+// the more specific cvar is empty.
+static const char *Slayer_PickKillSound( qboolean is_teamkill, qboolean is_headshot )
+{
+	const char *fallback = slayer_killsound.string;
+
+	if( is_teamkill && !COM_StringEmptyOrNULL( slayer_killsound_teamkill.string ))
+		return slayer_killsound_teamkill.string;
+
+	if( is_headshot && !COM_StringEmptyOrNULL( slayer_killsound_headshot.string ))
+		return slayer_killsound_headshot.string;
+
+	if( COM_StringEmptyOrNULL( fallback ))
+		return NULL;
+
+	return fallback;
+}
+
+void V_OnDeathMsg( const byte *pbuf, int iSize )
+{
+	const char *snd;
+	float       vol;
+	int         killer, victim;
+	qboolean    is_teamkill = false;
+	qboolean    is_headshot = false;
+
+	// HL/CS DeathMsg layout: byte killer_id, byte victim_id, ...optional rest
+	if( !pbuf || iSize < 2 )
+		return;
+
+	killer = pbuf[0];
+	victim = pbuf[1];
+
+	// cl.playernum is 0-based, entindex is 1-based.
+	if( victim != cl.playernum + 1 )
+		return;
+
+	// CS / CSCZ DeathMsg layout adds one extra byte before the weapon
+	// name string: pbuf[2] is 0 or 1 for the headshot flag.
+	// In vanilla HL / DM the third byte is the first character of the
+	// weapon name (always >= 0x20 for printable ASCII), so treating
+	// values <= 1 as "headshot flag" is a safe heuristic that does
+	// not misfire on non-CS games.
+	if( iSize >= 3 && pbuf[2] <= 1 )
+		is_headshot = ( pbuf[2] != 0 );
+
+	is_teamkill = Slayer_IsTeamkill( killer, victim );
+
+	snd = Slayer_PickKillSound( is_teamkill, is_headshot );
+	if( COM_StringEmptyOrNULL( snd ))
+		return;
+
+	vol = bound( 0.0f, slayer_killsound_volume.value, 1.0f );
+	if( vol <= 0.0f )
+		return;
+
+	// Force-load it on first death (S_RegisterSound inside S_StartLocalSound
+	// is fine to call without precache for a local UI-style sound).
+	S_StartLocalSound( snd, vol, false );
+}
+
+void V_ApplySlayerThirdPerson( ref_viewpass_t *rvp )
+{
+	// Tracks rising/falling edges of slayer_cam_free so we can snap the
+	// camera angles to the player's current view at the moment free look
+	// is activated, instead of jumping to (0, 0) which feels broken.
+	// -1 = third-person off entirely; 0 = third-person on, free look off;
+	// 1  = third-person on, free look on.
+	static int free_state = -1;
+
+	vec3_t    forward;
+	vec3_t    camangles;
+	vec3_t    ideal_org;
+	float     ofs;
+	pmtrace_t *tr;
+
+	if( !V_IsSlayerThirdPerson( ))
+	{
+		free_state = -1;
+		return;
+	}
+
+	// Free look uses the dedicated slayer_cam_pitch / slayer_cam_yaw
+	// cvars so the camera can orbit without affecting the player's
+	// aim. Bind keys to the slayer_camyaw / slayer_campitch console
+	// commands (or use 'incrementvar') to actually rotate it.
+	if( slayer_cam_free.value != 0.0f )
+	{
+		// Rising edge: anchor the cvars to the current player view so
+		// the camera does not snap to whatever stale value was saved in
+		// config.cfg (typically 0, 0).
+		if( free_state != 1 )
+		{
+			Cvar_SetValue( "slayer_cam_pitch", rvp->viewangles[PITCH] );
+			Cvar_SetValue( "slayer_cam_yaw",   rvp->viewangles[YAW] );
+			free_state = 1;
+		}
+
+		camangles[PITCH] = slayer_cam_pitch.value;
+		camangles[YAW]   = slayer_cam_yaw.value;
+		camangles[ROLL]  = 0.0f;
+	}
+	else
+	{
+		free_state = 0;
+		VectorCopy( rvp->viewangles, camangles );
+	}
+
+	// Only the forward axis is needed; AngleVectors accepts NULLs.
+	AngleVectors( camangles, forward, NULL, NULL );
+
+	ofs = bound( SLAYER_CAM_MIN_OFS, slayer_cam_ofs.value, SLAYER_CAM_MAX_OFS );
+	VectorMA( rvp->vieworigin, -ofs, forward, ideal_org );
+
+	if( slayer_cam_clip.value != 0.0f && ofs > 0.0f )
+	{
+		// PM_CL_TraceLine returns a pointer to a static pmtrace_t inside
+		// pm_trace.c; do not store the pointer past this call.
+		tr = PM_CL_TraceLine( rvp->vieworigin, ideal_org,
+			PM_TRACELINE_PHYSENTSONLY, 2 /* small hull */, -1 );
+
+		if( tr->fraction < 1.0f )
+		{
+			// Pull the camera back along the contact normal so it does
+			// not z-fight with the surface it just hit.
+			VectorMA( tr->endpos, SLAYER_CAM_PADDING, tr->plane.normal,
+				rvp->vieworigin );
+		}
+		else
+		{
+			VectorCopy( ideal_org, rvp->vieworigin );
+		}
+	}
+	else
+	{
+		VectorCopy( ideal_org, rvp->vieworigin );
+	}
+
+	// Render-only override of the angles. cl.viewangles (used for
+	// movement / aiming) is left untouched on purpose.
+	VectorCopy( camangles, rvp->viewangles );
+}

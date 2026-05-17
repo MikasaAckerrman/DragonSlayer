@@ -18,6 +18,7 @@ GNU General Public License for more details.
 #include "mod_local.h"
 #include "net_encode.h"
 #include "cl_tent.h"
+#include "cl_view_slayer.h"
 #include "shake.h"
 #include "input.h"
 #include "eiface.h"
@@ -2339,6 +2340,13 @@ void CL_ParseUserMessage( sizebuf_t *msg, int svc_num, connprotocol_t proto )
 		Con_Reportf( "^3USERMSG %s SIZE %i SVC_NUM %i\n",
 			clgame.msg[i].name, iSize, clgame.msg[i].number );
 	}
+
+	// Slayer3D: notify our hook before client.dll consumes the message,
+	// so a custom kill sound plays even if the game DLL ignores it.
+	if( !Q_strcmp( clgame.msg[i].name, "DeathMsg" ))
+		V_OnDeathMsg( pbuf, iSize );
+	else if( !Q_strcmp( clgame.msg[i].name, "TeamInfo" ))
+		V_OnTeamInfo( pbuf, iSize );
 
 	if( clgame.msg[i].func )
 	{

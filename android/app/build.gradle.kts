@@ -124,6 +124,18 @@ extensions.configure<ApplicationExtension> {
 			buildConfigField("boolean", "ENABLE_AUTO_UPDATE", "true")
 			signingConfig = signingConfigs.getByName("androidDebugKey")
 		}
+
+		// Slayer3D: release build signed with the bundled debug key.
+		// IMPORTANT: keeps applicationId = su.xash.engine (no suffix)
+		// and the default app name "Xash3D FWGS" so external clients
+		// (e.g. Counter-Strike launcher) that look up the engine by
+		// package id keep working. Auto-updater is left off so it does
+		// not pull stock Xash3D over our build.
+		register("slayer3d") {
+			initWith(getByName("release"))
+			buildConfigField("boolean", "ENABLE_AUTO_UPDATE", "false")
+			signingConfig = signingConfigs.getByName("androidDebugKey")
+		}
 	}
 }
 

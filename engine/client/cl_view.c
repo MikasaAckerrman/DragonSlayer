@@ -21,6 +21,7 @@ GNU General Public License for more details.
 #include "sound.h"
 #include "input.h" // touch
 #include "platform/platform.h" // GL_UpdateSwapInterval
+#include "cl_view_slayer.h" // Slayer3D third-person camera
 
 /*
 ===============
@@ -100,8 +101,19 @@ static void V_SetupViewModel( void )
 	view->curstate.colormap = (info->topcolor & 0xFFFF)|((info->bottomcolor << 8) & 0xFFFF);
 	view->curstate.number = cl.playernum + 1;
 	view->index = cl.playernum + 1;
-	view->model = CL_ModelHandle( cl.local.viewmodel );
-	view->curstate.modelindex = cl.local.viewmodel;
+
+	// Slayer3D: hide the first-person weapon model when third-person is active.
+	if( V_IsSlayerThirdPerson( ))
+	{
+		view->model = NULL;
+		view->curstate.modelindex = 0;
+	}
+	else
+	{
+		view->model = CL_ModelHandle( cl.local.viewmodel );
+		view->curstate.modelindex = cl.local.viewmodel;
+	}
+
 	view->curstate.sequence = cl.local.weaponsequence;
 	view->curstate.rendermode = kRenderNormal;
 
@@ -413,6 +425,7 @@ void V_RenderView( void )
 		V_GetRefParams( &rp, &rvp );
 		V_RefApplyOverview( &rvp );
 		V_ApplyRefUnderwater( &rvp );
+		V_ApplySlayerThirdPerson( &rvp ); // Slayer3D: orbit camera around the player
 
 		if( viewnum == 0 && FBitSet( rvp.flags, RF_ONLY_CLIENTDRAW ))
 		{

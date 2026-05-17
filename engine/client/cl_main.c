@@ -17,6 +17,7 @@ GNU General Public License for more details.
 #include "client.h"
 #include "net_encode.h"
 #include "cl_tent.h"
+#include "cl_view_slayer.h"
 #include "input.h"
 #include "vgui_draw.h"
 #include "library.h"
@@ -1618,6 +1619,9 @@ void CL_ClearState( void )
 
 	CL_CreateResourceList();
 	CL_ClearSpriteTextures();	// now all hud sprites are invalid
+
+	// Slayer3D: forget any cached team membership from the previous match.
+	V_SlayerResetMatchState();
 
 	cl.local.interp_amount = 0.1f;
 	cl.local.scr_fov = 90.0f;
