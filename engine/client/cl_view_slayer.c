@@ -38,6 +38,39 @@ static CVAR_DEFINE_AUTO( slayer_cam_yaw,     "0",   FCVAR_ARCHIVE, "Slayer3D fre
 #define SLAYER_CAM_PADDING  4.0f
 
 // ---------------------------------------------------------------------------
+// Console commands for binding camera rotation keys
+// ---------------------------------------------------------------------------
+
+static void Cmd_SlayerCamYaw_f( void )
+{
+	float delta;
+
+	if( Cmd_Argc() < 2 )
+	{
+		Con_Printf( "usage: slayer_camyaw <degrees>\n" );
+		return;
+	}
+
+	delta = Q_atof( Cmd_Argv( 1 ));
+	Cvar_SetValue( "slayer_cam_yaw", slayer_cam_yaw.value + delta );
+}
+
+static void Cmd_SlayerCamPitch_f( void )
+{
+	float delta, v;
+
+	if( Cmd_Argc() < 2 )
+	{
+		Con_Printf( "usage: slayer_campitch <degrees>\n" );
+		return;
+	}
+
+	delta = Q_atof( Cmd_Argv( 1 ));
+	v = bound( -89.0f, slayer_cam_pitch.value + delta, 89.0f );
+	Cvar_SetValue( "slayer_cam_pitch", v );
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -49,6 +82,11 @@ void V_InitSlayerCvars( void )
 	Cvar_RegisterVariable( &slayer_cam_free );
 	Cvar_RegisterVariable( &slayer_cam_pitch );
 	Cvar_RegisterVariable( &slayer_cam_yaw );
+
+	Cmd_AddCommand( "slayer_camyaw", Cmd_SlayerCamYaw_f,
+		"rotate Slayer3D free-look camera by N degrees on yaw axis" );
+	Cmd_AddCommand( "slayer_campitch", Cmd_SlayerCamPitch_f,
+		"tilt Slayer3D free-look camera by N degrees on pitch axis" );
 }
 
 qboolean V_IsSlayerThirdPerson( void )
@@ -58,6 +96,13 @@ qboolean V_IsSlayerThirdPerson( void )
 
 void V_ApplySlayerThirdPerson( ref_viewpass_t *rvp )
 {
+	// Tracks rising/falling edges of slayer_cam_free so we can snap the
+	// camera angles to the player's current view at the moment free look
+	// is activated, instead of jumping to (0, 0) which feels broken.
+	// -1 = third-person off entirely; 0 = third-person on, free look off;
+	// 1  = third-person on, free look on.
+	static int free_state = -1;
+
 	vec3_t    forward;
 	vec3_t    camangles;
 	vec3_t    ideal_org;
@@ -65,19 +110,34 @@ void V_ApplySlayerThirdPerson( ref_viewpass_t *rvp )
 	pmtrace_t *tr;
 
 	if( !V_IsSlayerThirdPerson( ))
+	{
+		free_state = -1;
 		return;
+	}
 
-	// Free-look uses dedicated cvars so the camera can orbit without
-	// affecting the player's aim. Otherwise the camera follows the
-	// player's view angles.
+	// Free look uses the dedicated slayer_cam_pitch / slayer_cam_yaw
+	// cvars so the camera can orbit without affecting the player's
+	// aim. Bind keys to the slayer_camyaw / slayer_campitch console
+	// commands (or use 'incrementvar') to actually rotate it.
 	if( slayer_cam_free.value != 0.0f )
 	{
+		// Rising edge: anchor the cvars to the current player view so
+		// the camera does not snap to whatever stale value was saved in
+		// config.cfg (typically 0, 0).
+		if( free_state != 1 )
+		{
+			Cvar_SetValue( "slayer_cam_pitch", rvp->viewangles[PITCH] );
+			Cvar_SetValue( "slayer_cam_yaw",   rvp->viewangles[YAW] );
+			free_state = 1;
+		}
+
 		camangles[PITCH] = slayer_cam_pitch.value;
 		camangles[YAW]   = slayer_cam_yaw.value;
 		camangles[ROLL]  = 0.0f;
 	}
 	else
 	{
+		free_state = 0;
 		VectorCopy( rvp->viewangles, camangles );
 	}
 
