@@ -30,4 +30,15 @@ qboolean V_IsSlayerThirdPerson( void );
 // Safe to call every frame; no-op when slayer_thirdperson is 0.
 void V_ApplySlayerThirdPerson( ref_viewpass_t *rvp );
 
+// Hook for a server-sent "DeathMsg" user message. Plays the configured
+// kill sound when the local player is the victim.
+//
+//   pbuf  - raw payload bytes after the 1-byte size prefix has been
+//           stripped (same buffer that gets handed to client.dll)
+//   iSize - payload length in bytes
+//
+// Implements the standard HL/CS/CSCZ/DM layout where pbuf[0] is the
+// killer entindex and pbuf[1] is the victim entindex.
+void V_OnDeathMsg( const byte *pbuf, int iSize );
+
 #endif // CL_VIEW_SLAYER_H

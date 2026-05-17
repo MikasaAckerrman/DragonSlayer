@@ -28,6 +28,11 @@ static CVAR_DEFINE_AUTO( slayer_cam_free,    "0",   FCVAR_ARCHIVE, "Slayer3D thi
 static CVAR_DEFINE_AUTO( slayer_cam_pitch,   "0",   FCVAR_ARCHIVE, "Slayer3D free-look camera pitch" );
 static CVAR_DEFINE_AUTO( slayer_cam_yaw,     "0",   FCVAR_ARCHIVE, "Slayer3D free-look camera yaw" );
 
+// Sound played when the local player gets killed. Empty string disables
+// the feature.
+static CVAR_DEFINE_AUTO( slayer_killsound,        "weapons/explode3.wav", FCVAR_ARCHIVE, "Slayer3D: sound to play when the local player dies (empty = off)" );
+static CVAR_DEFINE_AUTO( slayer_killsound_volume, "1.0",                  FCVAR_ARCHIVE, "Slayer3D: kill sound volume, 0..1" );
+
 // ---------------------------------------------------------------------------
 // Tunables
 // ---------------------------------------------------------------------------
@@ -83,6 +88,9 @@ void V_InitSlayerCvars( void )
 	Cvar_RegisterVariable( &slayer_cam_pitch );
 	Cvar_RegisterVariable( &slayer_cam_yaw );
 
+	Cvar_RegisterVariable( &slayer_killsound );
+	Cvar_RegisterVariable( &slayer_killsound_volume );
+
 	Cmd_AddCommand( "slayer_camyaw", Cmd_SlayerCamYaw_f,
 		"rotate Slayer3D free-look camera by N degrees on yaw axis" );
 	Cmd_AddCommand( "slayer_campitch", Cmd_SlayerCamPitch_f,
@@ -92,6 +100,39 @@ void V_InitSlayerCvars( void )
 qboolean V_IsSlayerThirdPerson( void )
 {
 	return slayer_thirdperson.value != 0.0f;
+}
+
+// ---------------------------------------------------------------------------
+// Death message hook
+// ---------------------------------------------------------------------------
+
+void V_OnDeathMsg( const byte *pbuf, int iSize )
+{
+	const char *snd;
+	float       vol;
+	int         victim;
+
+	// HL/CS DeathMsg layout: byte killer_id, byte victim_id, ...optional rest
+	if( !pbuf || iSize < 2 )
+		return;
+
+	victim = pbuf[1];
+
+	// cl.playernum is 0-based, entindex is 1-based.
+	if( victim != cl.playernum + 1 )
+		return;
+
+	snd = slayer_killsound.string;
+	if( COM_StringEmptyOrNULL( snd ))
+		return;
+
+	vol = bound( 0.0f, slayer_killsound_volume.value, 1.0f );
+	if( vol <= 0.0f )
+		return;
+
+	// Force-load it on first death (S_RegisterSound inside S_StartLocalSound
+	// is fine to call without precache for a local UI-style sound).
+	S_StartLocalSound( snd, vol, false );
 }
 
 void V_ApplySlayerThirdPerson( ref_viewpass_t *rvp )
