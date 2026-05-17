@@ -30,8 +30,17 @@ static CVAR_DEFINE_AUTO( slayer_cam_yaw,     "0",   FCVAR_ARCHIVE, "Slayer3D fre
 
 // Sound played when the local player gets killed. Empty string disables
 // the feature.
-static CVAR_DEFINE_AUTO( slayer_killsound,        "weapons/explode3.wav", FCVAR_ARCHIVE, "Slayer3D: sound to play when the local player dies (empty = off)" );
-static CVAR_DEFINE_AUTO( slayer_killsound_volume, "1.0",                  FCVAR_ARCHIVE, "Slayer3D: kill sound volume, 0..1" );
+static CVAR_DEFINE_AUTO( slayer_killsound,          "weapons/explode3.wav", FCVAR_ARCHIVE, "Slayer3D: sound to play when the local player dies (empty = off)" );
+static CVAR_DEFINE_AUTO( slayer_killsound_volume,   "1.0",                  FCVAR_ARCHIVE, "Slayer3D: kill sound volume, 0..1" );
+
+// Distinct sound for headshot deaths (CS-style). Falls back to
+// slayer_killsound when empty.
+static CVAR_DEFINE_AUTO( slayer_killsound_headshot, "",                     FCVAR_ARCHIVE, "Slayer3D: sound to play when the local player dies from a headshot (empty = use slayer_killsound)" );
+
+// Distinct sound for teamkill deaths. Falls back to slayer_killsound
+// when empty. Only triggers when killer != victim and both have a
+// known, equal, non-empty team (so suicide / unknown team won't fire it).
+static CVAR_DEFINE_AUTO( slayer_killsound_teamkill, "",                     FCVAR_ARCHIVE, "Slayer3D: sound to play when the local player dies to a teammate (empty = use slayer_killsound)" );
 
 // ---------------------------------------------------------------------------
 // Tunables
@@ -90,6 +99,8 @@ void V_InitSlayerCvars( void )
 
 	Cvar_RegisterVariable( &slayer_killsound );
 	Cvar_RegisterVariable( &slayer_killsound_volume );
+	Cvar_RegisterVariable( &slayer_killsound_headshot );
+	Cvar_RegisterVariable( &slayer_killsound_teamkill );
 
 	Cmd_AddCommand( "slayer_camyaw", Cmd_SlayerCamYaw_f,
 		"rotate Slayer3D free-look camera by N degrees on yaw axis" );
@@ -106,23 +117,121 @@ qboolean V_IsSlayerThirdPerson( void )
 // Death message hook
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Per-match state
+// ---------------------------------------------------------------------------
+
+// Team name lookup populated by the server-sent "TeamInfo" message
+// (CS / DM-style mods). Indexed by 1-based entindex so [0] is unused.
+// Empty string means "team unknown".
+#define SLAYER_TEAM_LEN  16
+static char slayer_player_team[MAX_CLIENTS + 1][SLAYER_TEAM_LEN];
+
+void V_SlayerResetMatchState( void )
+{
+	memset( slayer_player_team, 0, sizeof( slayer_player_team ));
+}
+
+// ---------------------------------------------------------------------------
+// User message hooks
+// ---------------------------------------------------------------------------
+
+void V_OnTeamInfo( const byte *pbuf, int iSize )
+{
+	int slot;
+
+	// TeamInfo layout: byte client_slot (1..MAX_CLIENTS), then a
+	// NUL-terminated ASCII team name. Anything shorter than 2 bytes
+	// is malformed, ignore.
+	if( !pbuf || iSize < 2 )
+		return;
+
+	slot = pbuf[0];
+	if( slot < 1 || slot > MAX_CLIENTS )
+		return;
+
+	// Defensive copy: pbuf is not necessarily NUL-terminated within
+	// iSize, so we cap the read.
+	{
+		int max = iSize - 1;
+		if( max >= SLAYER_TEAM_LEN )
+			max = SLAYER_TEAM_LEN - 1;
+		Q_strncpy( slayer_player_team[slot], (const char *)( pbuf + 1 ), max + 1 );
+	}
+}
+
+// Returns true when both players have a known, non-empty team and
+// those teams match. Suicide and self-kill are not teamkills.
+static qboolean Slayer_IsTeamkill( int killer, int victim )
+{
+	const char *kt, *vt;
+
+	if( killer == victim )
+		return false;
+	if( killer < 1 || killer > MAX_CLIENTS )
+		return false;
+	if( victim < 1 || victim > MAX_CLIENTS )
+		return false;
+
+	kt = slayer_player_team[killer];
+	vt = slayer_player_team[victim];
+
+	if( COM_StringEmptyOrNULL( kt ) || COM_StringEmptyOrNULL( vt ))
+		return false;
+
+	return Q_stricmp( kt, vt ) == 0 ? true : false;
+}
+
+// Pick which sound cvar to use for this death. Priority is
+// teamkill > headshot > generic. Falls back to slayer_killsound when
+// the more specific cvar is empty.
+static const char *Slayer_PickKillSound( qboolean is_teamkill, qboolean is_headshot )
+{
+	const char *fallback = slayer_killsound.string;
+
+	if( is_teamkill && !COM_StringEmptyOrNULL( slayer_killsound_teamkill.string ))
+		return slayer_killsound_teamkill.string;
+
+	if( is_headshot && !COM_StringEmptyOrNULL( slayer_killsound_headshot.string ))
+		return slayer_killsound_headshot.string;
+
+	if( COM_StringEmptyOrNULL( fallback ))
+		return NULL;
+
+	return fallback;
+}
+
 void V_OnDeathMsg( const byte *pbuf, int iSize )
 {
 	const char *snd;
 	float       vol;
-	int         victim;
+	int         killer, victim;
+	qboolean    is_teamkill = false;
+	qboolean    is_headshot = false;
 
 	// HL/CS DeathMsg layout: byte killer_id, byte victim_id, ...optional rest
 	if( !pbuf || iSize < 2 )
 		return;
 
+	killer = pbuf[0];
 	victim = pbuf[1];
 
 	// cl.playernum is 0-based, entindex is 1-based.
 	if( victim != cl.playernum + 1 )
 		return;
 
-	snd = slayer_killsound.string;
+	// CS / CSCZ DeathMsg layout adds one extra byte before the weapon
+	// name string: pbuf[2] is 0 or 1 for the headshot flag.
+	// In vanilla HL / DM the third byte is the first character of the
+	// weapon name (always >= 0x20 for printable ASCII), so treating
+	// values <= 1 as "headshot flag" is a safe heuristic that does
+	// not misfire on non-CS games.
+	if( iSize >= 3 && pbuf[2] <= 1 )
+		is_headshot = ( pbuf[2] != 0 );
+
+	is_teamkill = Slayer_IsTeamkill( killer, victim );
+
+	snd = Slayer_PickKillSound( is_teamkill, is_headshot );
 	if( COM_StringEmptyOrNULL( snd ))
 		return;
 

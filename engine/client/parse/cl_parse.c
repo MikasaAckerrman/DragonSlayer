@@ -2345,6 +2345,8 @@ void CL_ParseUserMessage( sizebuf_t *msg, int svc_num, connprotocol_t proto )
 	// so a custom kill sound plays even if the game DLL ignores it.
 	if( !Q_strcmp( clgame.msg[i].name, "DeathMsg" ))
 		V_OnDeathMsg( pbuf, iSize );
+	else if( !Q_strcmp( clgame.msg[i].name, "TeamInfo" ))
+		V_OnTeamInfo( pbuf, iSize );
 
 	if( clgame.msg[i].func )
 	{
