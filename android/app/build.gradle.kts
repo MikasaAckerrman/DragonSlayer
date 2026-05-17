@@ -124,6 +124,17 @@ extensions.configure<ApplicationExtension> {
 			buildConfigField("boolean", "ENABLE_AUTO_UPDATE", "true")
 			signingConfig = signingConfigs.getByName("androidDebugKey")
 		}
+
+		// Slayer3D: independent build that does NOT collide with the
+		// official "su.xash.engine" install. Uses the same debug key
+		// so the resulting APK is installable out of the box.
+		register("slayer3d") {
+			initWith(getByName("release"))
+			applicationIdSuffix = ".slayer3d"
+			buildConfigField("boolean", "ENABLE_AUTO_UPDATE", "false")
+			signingConfig = signingConfigs.getByName("androidDebugKey")
+			resValue("string", "app_name", "Slayer3D")
+		}
 	}
 }
 
