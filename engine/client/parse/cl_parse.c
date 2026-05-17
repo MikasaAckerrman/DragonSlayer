@@ -21,6 +21,7 @@ GNU General Public License for more details.
 #include "shake.h"
 #include "input.h"
 #include "eiface.h"
+#include "cl_view_slayer.h"
 
 #if XASH_LOW_MEMORY != 2
 int CL_UPDATE_BACKUP = SINGLEPLAYER_BACKUP;
@@ -2333,6 +2334,14 @@ void CL_ParseUserMessage( sizebuf_t *msg, int svc_num, connprotocol_t proto )
 
 	// parse user message into buffer
 	MSG_ReadBytes( msg, pbuf, iSize );
+
+	// Slayer3D: peek at DeathMsg / TeamInfo before forwarding to client.dll.
+	// Both hooks are read-only; the engine's own dispatch path below is
+	// untouched.
+	if( !Q_strcmp( clgame.msg[i].name, "DeathMsg" ))
+		Slayer_OnDeathMsg( pbuf, iSize );
+	else if( !Q_strcmp( clgame.msg[i].name, "TeamInfo" ))
+		Slayer_OnTeamInfo( pbuf, iSize );
 
 	if( cl_trace_messages.value )
 	{
