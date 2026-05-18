@@ -129,7 +129,8 @@ void V_SlayerCamLook( float yaw_delta, float pitch_delta )
 	float p;
 
 	// Apply yaw (unbounded, wraps around)
-	Cvar_SetValue( "slayer_cam_yaw", slayer_cam_yaw.value - yaw_delta );
+	// Positive yaw_delta = finger moves right = camera rotates right
+	Cvar_SetValue( "slayer_cam_yaw", slayer_cam_yaw.value + yaw_delta );
 
 	// Apply pitch (clamped to -89..89)
 	p = bound( -89.0f, slayer_cam_pitch.value + pitch_delta, 89.0f );
@@ -342,10 +343,17 @@ qboolean Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 	if( killer == 0 )
 		return false;
 
-	// CS-specific headshot detection: pbuf[2] is the headshot flag,
-	// but only in Counter-Strike variants (cstrike/czero/czeror).
-	if( Slayer_GameIsCStrike() && iSize >= 3 )
-		is_headshot = ( pbuf[2] != 0 );
+	// Headshot detection. In CS/CSCZ the DeathMsg layout is:
+	//   byte killer, byte victim, byte headshot(0/1), string weapon
+	// In vanilla HL/DM it's:
+	//   byte killer, byte victim, string weapon
+	// We detect headshot if the third byte is exactly 0 or 1 AND there
+	// are at least 4 bytes (room for the weapon string after the flag).
+	// This heuristic works across CS, CSCZ, and bot mods that mimic
+	// the CS format. For non-CS mods where pbuf[2] is the first char
+	// of the weapon name (always >= 0x20), it safely won't trigger.
+	if( iSize >= 4 && pbuf[2] <= 1 )
+		is_headshot = ( pbuf[2] == 1 );
 
 	is_teamkill = Slayer_IsTeamkill( killer, victim );
 
