@@ -1170,11 +1170,9 @@ void CL_ParseClientData( sizebuf_t *msg, connprotocol_t proto )
 	cl.local.weapons = frame->clientdata.weapons;
 	cl.local.health = frame->clientdata.health;
 
-	// Slayer3D: detect local-player death via health edge >0 -> <=0.
-	// Required because some GameRules (singleplayer, bot matches) do
-	// not broadcast DeathMsg, and our user-message hook would never
-	// fire in that case.
-	Slayer_OnHealthUpdate( cl.local.health );
+	// Slayer3D: health-edge fallback DISABLED — it only detects own death,
+	// not kills by the local player. Kept as comment for reference.
+	// Slayer_OnHealthUpdate( cl.local.health );
 }
 
 /*

@@ -2,32 +2,23 @@
 cl_view_slayer.c - Slayer3D extension: kill-sound feedback
 
 Plays a configurable sound effect on the local client whenever the
-player dies. Three independent sound paths are supported and chosen
-by priority:  teamkill > headshot > generic.
+local player KILLS another player (not when dying). Three independent
+sound paths are supported and chosen by priority:
+  teamkill > headshot > generic.
 
-Two complementary triggers feed the player:
+Trigger:
 
-  1. DeathMsg user-message  (multiplayer-style: HL DM, CS, DoD, TFC, ...)
-     - Gives us killer/victim/weapon, so we can pick teamkill/headshot.
-     - Fires through Slayer_OnDeathMsg() from CL_ParseUserMessage.
+  DeathMsg user-message  (multiplayer-style: HL DM, CS, DoD, TFC, ...)
+    - Gives us killer/victim/weapon, so we can pick teamkill/headshot.
+    - Fires through Slayer_OnDeathMsg() from CL_ParseUserMessage.
+    - Condition: killer == cl.playernum+1 && victim != killer (no suicide).
 
-  2. Local health edge >0 -> <=0 (singleplayer / bot matches)
-     - Some GameRules (e.g. CHalfLifeRules) don't broadcast DeathMsg
-       at all; without this fallback the kill-sound would never play
-       in singleplayer with bots. We can't tell who killed us in that
-       case, so this trigger only ever picks the generic sound.
-     - Fires through Slayer_OnHealthUpdate() from CL_ParseClientData /
-       CL_ParseQuakeMessage right after cl.local.health is updated.
-
-A short cooldown (Slayer_GuardWindowSec) keeps the two triggers from
-double-playing on a real DM-server kill: DeathMsg arrives a few frames
-before clientdata, both report the same death, but only the first one
-to fire wins.
+Note: Slayer_OnHealthUpdate() is retained as dead-code for potential
+future use but is intentionally disabled — it only detects the local
+player's OWN death, which is the opposite of what we want.
 
 Hooks into:
   - CL_ParseUserMessage  (engine/client/parse/cl_parse.c)  - DeathMsg / TeamInfo
-  - CL_ParseClientData   (engine/client/parse/cl_parse.c)  - health edge
-  - CL_ParseQuakeMessage (engine/client/parse/cl_qparse.c) - health edge (Quake)
   - CL_InitLocal         (engine/client/cl_main.c)         - cvar registration
   - CL_ClearState        (engine/client/cl_main.c)         - wipe per-match state
 */
@@ -45,9 +36,9 @@ Hooks into:
 // sound is used as a fallback. This way users get one knob to turn the
 // whole feature off (slayer_killsound "") without losing per-event tuning.
 // ---------------------------------------------------------------------------
-static CVAR_DEFINE_AUTO( slayer_killsound,          "", FCVAR_ARCHIVE, "sound played when local player dies (path under <mod>/sound/, empty = disabled)" );
-static CVAR_DEFINE_AUTO( slayer_killsound_headshot, "", FCVAR_ARCHIVE, "sound played on headshot death (CS-only). Empty = use slayer_killsound" );
-static CVAR_DEFINE_AUTO( slayer_killsound_teamkill, "", FCVAR_ARCHIVE, "sound played when killed by a teammate. Empty = use slayer_killsound" );
+static CVAR_DEFINE_AUTO( slayer_killsound,          "", FCVAR_ARCHIVE, "sound played when local player kills someone (path under <mod>/sound/, empty = disabled)" );
+static CVAR_DEFINE_AUTO( slayer_killsound_headshot, "", FCVAR_ARCHIVE, "sound played on headshot kill (CS-only). Empty = use slayer_killsound" );
+static CVAR_DEFINE_AUTO( slayer_killsound_teamkill, "", FCVAR_ARCHIVE, "sound played on teamkill. Empty = use slayer_killsound" );
 static CVAR_DEFINE_AUTO( slayer_killsound_volume,   "1.0", FCVAR_ARCHIVE, "kill-sound volume, 0..1" );
 
 // ---------------------------------------------------------------------------
@@ -63,22 +54,15 @@ static CVAR_DEFINE_AUTO( slayer_killsound_volume,   "1.0", FCVAR_ARCHIVE, "kill-
 static char slayer_player_team[MAX_CLIENTS + 1][MAX_TEAM_NAME];
 
 // ---------------------------------------------------------------------------
-// Health-edge fallback state.
+// Health-edge fallback state.  (DEAD CODE — kept for potential future use)
 //
-// slayer_last_health  - previous health value seen on this client. Starts
-//                       at 0 so we don't fire on the very first frame
-//                       (when cl.local.health goes from 0 to spawn HP).
+// slayer_last_health  - previous health value seen on this client.
 // slayer_last_play    - host.realtime when we last played a kill-sound.
-//                       Used as a cooldown to avoid double-playing when
-//                       both triggers fire for the same death.
 // ---------------------------------------------------------------------------
 static int    slayer_last_health = 0;
 static double slayer_last_play   = 0.0;
 
-// Time-window during which a recent DeathMsg suppresses the health-edge
-// trigger (and vice-versa). 0.25s is comfortably longer than typical
-// server frame jitter but short enough to not eat a legitimate second
-// death right after a respawn.
+// Cooldown window (unused while health-edge is disabled, but kept).
 static const double Slayer_GuardWindowSec = 0.25;
 
 // ---------------------------------------------------------------------------
@@ -159,12 +143,10 @@ static void Slayer_PlayKillSound( const char *name )
 	// reliable=true -> CHAN_STATIC: not evicted from the dynamic mixer
 	// when many other local sounds are playing.
 	S_StartLocalSound( name, vol, true );
-
-	// Remember when we played, so the other trigger doesn't fire too.
-	slayer_last_play = host.realtime;
 }
 
 // True if a kill-sound was played within the cooldown window.
+// (DEAD CODE — retained for potential future dual-trigger use.)
 static qboolean Slayer_RecentlyPlayed( void )
 {
 	if( slayer_last_play <= 0.0 )
@@ -219,8 +201,18 @@ qboolean Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 	killer = pbuf[0];
 	victim = pbuf[1];
 
+	// We only care when the LOCAL player is the killer.
 	// Engine assigns each client an entity index of (cl.playernum + 1).
-	if( victim != cl.playernum + 1 )
+	if( killer != cl.playernum + 1 )
+		return false;
+
+	// Suicide (kill command, fall damage, etc.) — do NOT play.
+	if( killer == victim )
+		return false;
+
+	// World kill (killer == 0) should never match the check above,
+	// but guard explicitly just in case.
+	if( killer == 0 )
 		return false;
 
 	// Headshot byte is CS-specific. Validate twice: by gamefolder, and by
@@ -233,10 +225,8 @@ qboolean Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 			headshot = ( b == 1 );
 	}
 
-	// Teamkill detection. World kills (killer == 0) and suicides
-	// (killer == victim) are explicitly NOT teamkills.
-	if( killer != 0 && killer != victim )
-		teamkill = Slayer_SameTeam( killer, victim );
+	// Teamkill detection.
+	teamkill = Slayer_SameTeam( killer, victim );
 
 	snd = Slayer_PickKillSound( headshot, teamkill );
 	Slayer_PlayKillSound( snd );
@@ -245,43 +235,34 @@ qboolean Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 }
 
 // ---------------------------------------------------------------------------
-// Health-edge fallback
+// Health-edge fallback  (DEAD CODE)
 //
-// Called from the network-parser path right after cl.local.health has
-// been updated. We only act on the >0 -> <=0 transition; intermediate
-// damage (e.g. health goes from 100 to 23) is ignored.
-//
-// We ALWAYS update the cached health, even when we suppress playback,
-// so that the next transition is detected correctly.
+// Disabled by design: this function detects the LOCAL player's death
+// (health drops to 0), but we want kill-sound to play when the local
+// player KILLS someone else. Kept here in case a future scoreboard-
+// parsing approach needs it as a building block.
 // ---------------------------------------------------------------------------
+#if 0 // DEAD CODE — do not compile
 void Slayer_OnHealthUpdate( int new_health )
 {
 	int prev = slayer_last_health;
 	slayer_last_health = new_health;
 
-	// Spectators don't really die, and the engine pins their health to 1
-	// on the parse path. Treat them as a no-op so we don't fire on
-	// HLTV / first-person-spec mode glitches.
 	if( cls.spectator )
 		return;
 
-	// Demo playback: replays would re-fire the sound on each rewatch,
-	// which is annoying. Skip.
 	if( cls.demoplayback )
 		return;
 
-	// Only the falling edge is interesting.
 	if( prev <= 0 || new_health > 0 )
 		return;
 
-	// If DeathMsg already played a (possibly more-specific) sound for
-	// the same death within the cooldown window, do nothing.
 	if( Slayer_RecentlyPlayed( ))
 		return;
 
-	// We don't know killer/weapon here, so always pick the generic sound.
 	Slayer_PlayKillSound( Slayer_PickKillSound( false, false ));
 }
+#endif
 
 // ---------------------------------------------------------------------------
 // Lifecycle
