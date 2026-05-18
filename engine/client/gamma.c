@@ -15,6 +15,7 @@ GNU General Public License for more details.
 
 #include "common.h"
 #include "client.h"
+#include "cl_view_slayer.h"
 #include "xash3d_mathlib.h"
 #include "enginefeatures.h"
 
@@ -169,6 +170,9 @@ void V_Init( void )
 	Cvar_RegisterVariable( &v_brightness );
 	Cvar_RegisterVariable( &v_gamma );
 	Cvar_RegisterVariable( &v_direct );
+
+	// Slayer3D: register third-person camera + kill-sound cvars
+	V_InitSlayerCvars();
 
 	// force gamma init
 	SetBits( v_gamma.flags, FCVAR_CHANGED );
