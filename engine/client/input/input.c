@@ -639,8 +639,20 @@ static void IN_Commands( void )
 
 		if( cls.key_dest == key_game )
 		{
-			clgame.dllFuncs.pfnLookEvent( yaw, pitch );
-			clgame.dllFuncs.pfnMoveEvent( forward, side );
+			// Slayer3D: intercept look input when free-look camera
+			// is active. Feed it into the orbital camera instead of
+			// letting client.dll rotate the player.
+			if( V_IsSlayerCamFree() && ( yaw || pitch ))
+			{
+				V_SlayerCamLook( yaw, pitch );
+				// Still forward movement to client.dll so WASD works
+				clgame.dllFuncs.pfnMoveEvent( forward, side );
+			}
+			else
+			{
+				clgame.dllFuncs.pfnLookEvent( yaw, pitch );
+				clgame.dllFuncs.pfnMoveEvent( forward, side );
+			}
 		}
 	}
 
