@@ -20,6 +20,7 @@ GNU General Public License for more details.
 #include "input.h"
 #include "vgui_draw.h"
 #include "library.h"
+#include "cl_view_slayer.h"
 #include "vid_common.h"
 #include "pm_local.h"
 #include "multi_emulator.h"
@@ -1601,6 +1602,10 @@ void CL_ClearState( void )
 
 	PM_ClearPhysEnts( clgame.pmove );
 	NetAPI_CancelAllRequests();
+
+	// Slayer3D: drop per-match state (team table) before zeroing cl,
+	// so it does not leak between maps / servers.
+	Slayer_ResetMatchState();
 
 	// wipe the entire cl structure
 	memset( &cl, 0, sizeof( cl ));
@@ -3559,6 +3564,9 @@ static void CL_InitLocal( void )
 	Cmd_AddCommand( "richpresence_update", Cmd_Null_f, "compatibility command, does nothing" );
 
 	Cmd_AddCommand( "cl_list_messages", CL_ListMessages_f, "list registered user messages" );
+
+	// Slayer3D extensions: cvar registration now handled by V_InitSlayerCvars()
+	// called from V_Init() in gamma.c — no separate init needed here.
 }
 
 //============================================================================

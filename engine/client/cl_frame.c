@@ -22,6 +22,7 @@ GNU General Public License for more details.
 #include "studio.h"
 #include "sound.h"
 #include "input.h"
+#include "cl_view_slayer.h"
 
 // #define STUDIO_INTERPOLATION_FIX
 
@@ -959,7 +960,7 @@ qboolean CL_AddVisibleEntity( cl_entity_t *ent, int entityType )
 	{
 		cl.local.apply_effects = true;
 
-		if( !CL_IsThirdPerson( ) && ( ent->index == cl.viewentity ))
+		if( !CL_IsThirdPerson( ) && !V_IsSlayerThirdPerson( ) && ( ent->index == cl.viewentity ))
 		{
 			// we don't draw player in default renderer in firstperson mode
 			// but let the client.dll know about player entity anyway

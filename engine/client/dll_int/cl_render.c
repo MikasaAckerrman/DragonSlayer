@@ -17,6 +17,7 @@ GNU General Public License for more details.
 #include "client.h"
 #include "library.h"
 #include "platform/platform.h"
+#include "cl_view_slayer.h"
 
 int R_FatPVS( const vec3_t org, float radius, byte *visbuffer, qboolean merge, qboolean fullvis )
 {
@@ -161,7 +162,7 @@ intptr_t CL_RenderGetParm( const int parm, const int arg, const qboolean checkRe
 		case PARM_DEV_OVERVIEW:
 			return CL_IsDevOverviewMode();
 		case PARM_THIRDPERSON:
-			return CL_IsThirdPerson();
+			return CL_IsThirdPerson() || V_IsSlayerThirdPerson();
 		case PARM_QUAKE_COMPATIBLE:
 			return Host_IsQuakeCompatible();
 		case PARM_CONNSTATE:

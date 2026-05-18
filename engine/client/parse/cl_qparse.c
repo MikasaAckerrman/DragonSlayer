@@ -20,6 +20,7 @@ GNU General Public License for more details.
 #include "shake.h"
 #include "input.h"
 #include "base_cmd.h"
+#include "cl_view_slayer.h"
 
 enum {
 	STAT_HEALTH = 0,
@@ -398,6 +399,9 @@ static void CL_ParseQuakeClientData( sizebuf_t *msg )
 	else frame->clientdata.viewmodel = CL_UpdateQuakeStats( msg, STAT_WEAPON, false );
 
 	cl.local.health = CL_UpdateQuakeStats( msg, STAT_HEALTH, true );
+	// Slayer3D: health-edge fallback DISABLED — it only detects own death,
+	// not kills. Retained for potential future use.
+	// Slayer_OnHealthUpdate( cl.local.health );
 	CL_UpdateQuakeStats( msg, STAT_AMMO, true );
 	CL_UpdateQuakeStats( msg, STAT_SHELLS, true );
 	CL_UpdateQuakeStats( msg, STAT_NAILS, true );
