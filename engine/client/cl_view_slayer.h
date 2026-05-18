@@ -34,6 +34,14 @@ qboolean V_IsSlayerThirdPerson( void );
 // Safe to call every frame; no-op when slayer_thirdperson is 0.
 void V_ApplySlayerThirdPerson( ref_viewpass_t *rvp );
 
+// Returns true when slayer_thirdperson AND slayer_cam_free are both on.
+// Used by the input system to redirect touch/mouse to the camera orbit.
+qboolean V_IsSlayerCamFree( void );
+
+// Feed touch/mouse look deltas into the orbital camera (instead of
+// rotating the player). Called from IN_EngineAppendMove when cam_free is on.
+void V_SlayerCamLook( float yaw_delta, float pitch_delta );
+
 // ---------------------------------------------------------------------------
 // Kill-sound
 // ---------------------------------------------------------------------------

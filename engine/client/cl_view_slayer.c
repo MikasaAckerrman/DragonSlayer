@@ -119,6 +119,23 @@ qboolean V_IsSlayerThirdPerson( void )
 	return slayer_thirdperson.value != 0.0f;
 }
 
+qboolean V_IsSlayerCamFree( void )
+{
+	return V_IsSlayerThirdPerson() && slayer_cam_free.value != 0.0f;
+}
+
+void V_SlayerCamLook( float yaw_delta, float pitch_delta )
+{
+	float p;
+
+	// Apply yaw (unbounded, wraps around)
+	Cvar_SetValue( "slayer_cam_yaw", slayer_cam_yaw.value - yaw_delta );
+
+	// Apply pitch (clamped to -89..89)
+	p = bound( -89.0f, slayer_cam_pitch.value + pitch_delta, 89.0f );
+	Cvar_SetValue( "slayer_cam_pitch", p );
+}
+
 void V_ApplySlayerThirdPerson( ref_viewpass_t *rvp )
 {
 	// Tracks rising/falling edges of slayer_cam_free so we can snap the
