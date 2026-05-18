@@ -1979,7 +1979,16 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 {
 	cl_font_t *font = Con_GetFont( con_fontsize.value );
 	rgba_t color;
-	Vector4Copy( clgame.ds.textColor, color );
+
+	// Slayer3D: apply con_color to all HUD/chat text.
+	// g_color_table[7] is set by con_color cvar and represents the
+	// user's preferred text color. Override whatever client.dll set.
+	{
+		extern rgba_t g_color_table[8];
+		Vector4Copy( g_color_table[7], color );
+		color[3] = 255;
+	}
+
 	Vector4Set( clgame.ds.textColor, 255, 255, 255, 255 );
 
 	return x + CL_DrawString( x, y, string, color, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD );
