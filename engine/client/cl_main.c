@@ -3565,8 +3565,8 @@ static void CL_InitLocal( void )
 
 	Cmd_AddCommand( "cl_list_messages", CL_ListMessages_f, "list registered user messages" );
 
-	// Slayer3D extensions: register kill-sound cvars and clear team table.
-	Slayer_Init();
+	// Slayer3D extensions: cvar registration now handled by V_InitSlayerCvars()
+	// called from V_Init() in gamma.c — no separate init needed here.
 }
 
 //============================================================================

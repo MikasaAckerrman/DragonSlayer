@@ -1,8 +1,6 @@
 /*
-cl_view_slayer.h - Slayer3D extension: kill-sound feedback
-
-Plays a sound when the LOCAL PLAYER kills another player.
-Supports generic / headshot / teamkill variants via cvars.
+cl_view_slayer.h - Slayer3D third-person camera + kill-sound module
+Copyright (C) 2026 Slayer3D contributors
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -14,35 +12,50 @@ but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
+
 #ifndef CL_VIEW_SLAYER_H
 #define CL_VIEW_SLAYER_H
 
 #include "xash3d_types.h"
+#include "ref_api.h"
 
-// Register cvars and reset internal state. Called once from CL_InitLocal().
-void Slayer_Init( void );
+// ---------------------------------------------------------------------------
+// Third-person camera
+// ---------------------------------------------------------------------------
 
-// Wipe per-match state (team table, timestamps).
-// Called from CL_ClearState() on disconnect / map change so that data
-// does not leak between games.
-void Slayer_ResetMatchState( void );
+// Register all Slayer3D-specific cvars (camera + kill-sound).
+// Must be called once during client startup (from V_Init in gamma.c).
+void V_InitSlayerCvars( void );
 
-// User-message hooks. Both functions are read-only with respect to the
-// network buffer: they parse a copy of the payload that has already
-// been read by the engine, so they never disturb the regular client.dll
-// dispatch path.
+// Returns true when the Slayer3D third-person mode is active.
+qboolean V_IsSlayerThirdPerson( void );
+
+// Adjust the given viewpass so the camera orbits the player.
+// Safe to call every frame; no-op when slayer_thirdperson is 0.
+void V_ApplySlayerThirdPerson( ref_viewpass_t *rvp );
+
+// ---------------------------------------------------------------------------
+// Kill-sound
+// ---------------------------------------------------------------------------
+
+// Hook for a server-sent "DeathMsg" user message. Plays a configured
+// kill sound when the LOCAL PLAYER is the KILLER (not the victim).
 //
-// pbuf / iSize - exactly the values that the engine is about to forward
-// to clgame.msg[i].func( name, iSize, pbuf ).
+//   pbuf  - raw payload bytes (same buffer handed to client.dll)
+//   iSize - payload length in bytes
 //
-// Slayer_OnDeathMsg fires the kill-sound when killer == local player
-// and victim != killer (no suicide). Returns false (never consumes the
-// message — client.dll still needs it).
+// Returns true if a kill sound was triggered, false otherwise.
 qboolean Slayer_OnDeathMsg( const byte *pbuf, int iSize );
-void     Slayer_OnTeamInfo( const byte *pbuf, int iSize );
 
-// Health-edge fallback — DISABLED (dead code).
-// Only detects own death, not kills. Retained for potential future use.
-// void Slayer_OnHealthUpdate( int new_health );
+// Hook for a server-sent "TeamInfo" user message. Stores the team name
+// of a given client so Slayer_OnDeathMsg can detect teamkills.
+//
+//   pbuf  - raw payload bytes (pbuf[0] = client slot, pbuf[1..] = team)
+//   iSize - payload length in bytes
+void Slayer_OnTeamInfo( const byte *pbuf, int iSize );
+
+// Reset the Slayer3D per-match state (team table, etc).
+// Called when the engine clears client state (disconnect / map change).
+void Slayer_ResetMatchState( void );
 
 #endif // CL_VIEW_SLAYER_H
