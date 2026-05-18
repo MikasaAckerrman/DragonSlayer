@@ -19,8 +19,9 @@ GNU General Public License for more details.
 // Register cvars and reset internal state. Called once from CL_InitLocal().
 void Slayer_Init( void );
 
-// Wipe per-match state (team table). Called from CL_ClearState() on
-// disconnect / map change so that data does not leak between games.
+// Wipe per-match state (team table, last-played timestamp, last health).
+// Called from CL_ClearState() on disconnect / map change so that data
+// does not leak between games.
 void Slayer_ResetMatchState( void );
 
 // User-message hooks. Both functions are read-only with respect to the
@@ -35,5 +36,16 @@ void Slayer_ResetMatchState( void );
 // always returns false: we never swallow DeathMsg, we only react to it).
 qboolean Slayer_OnDeathMsg( const byte *pbuf, int iSize );
 void     Slayer_OnTeamInfo( const byte *pbuf, int iSize );
+
+// Health-edge fallback. Call this immediately AFTER cl.local.health is
+// updated from the network (clientdata in HL/Xash, STAT_HEALTH in Quake).
+//
+// The DeathMsg hook above does not fire in singleplayer / bot matches
+// where the server's GameRules don't broadcast DeathMsg. To still get a
+// kill-sound in those cases, this function watches the local player's
+// health crossing the >0 -> <=0 boundary and plays slayer_killsound,
+// but only if Slayer_OnDeathMsg has not already played a sound very
+// recently (so we don't double-play in true multiplayer).
+void Slayer_OnHealthUpdate( int new_health );
 
 #endif // CL_VIEW_SLAYER_H
