@@ -22,6 +22,7 @@ GNU General Public License for more details.
 #include "common.h"
 #include "input.h"
 #include "client.h"
+#include "cl_view_slayer.h"
 #include "vgui_draw.h"
 #include "cursor_type.h"
 #include "platform/platform.h"
@@ -606,10 +607,20 @@ void IN_EngineAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 
 		if( pitch || yaw )
 		{
-			cmd->viewangles[YAW]   += yaw * sensitivity;
-			cmd->viewangles[PITCH] += pitch * sensitivity;
-			cmd->viewangles[PITCH] = bound( -90, cmd->viewangles[PITCH], 90 );
-			VectorCopy( cmd->viewangles, cl.viewangles );
+			// Slayer3D: when free-look camera is active, redirect
+			// touch/mouse input to orbit the camera instead of
+			// rotating the player.
+			if( V_IsSlayerCamFree( ))
+			{
+				V_SlayerCamLook( yaw * sensitivity, pitch * sensitivity );
+			}
+			else
+			{
+				cmd->viewangles[YAW]   += yaw * sensitivity;
+				cmd->viewangles[PITCH] += pitch * sensitivity;
+				cmd->viewangles[PITCH] = bound( -90, cmd->viewangles[PITCH], 90 );
+				VectorCopy( cmd->viewangles, cl.viewangles );
+			}
 		}
 	}
 }
