@@ -71,6 +71,11 @@ static CVAR_DEFINE_AUTO( slayer_killsound_volume,   "1.0",                  FCVA
 
 static int slayer_ducktap_active = 0;
 
+// Movement tweak state (file-scoped so Slayer_ResetMatchState can clear them)
+static float slayer_prev_yaw = 0.0f;
+static int   slayer_prev_onground = 0;
+static int   slayer_yaw_initialized = 0;
+
 static void Cmd_DucktapDown_f( void )
 {
 	slayer_ducktap_active = 1;
@@ -306,6 +311,12 @@ static char slayer_player_team[MAX_CLIENTS + 1][SLAYER_TEAM_LEN];
 void Slayer_ResetMatchState( void )
 {
 	memset( slayer_player_team, 0, sizeof( slayer_player_team ));
+
+	// Reset movement tweak statics so stale values from a prior map
+	// do not bleed into the first frame of a new one.
+	slayer_prev_yaw = 0.0f;
+	slayer_prev_onground = 0;
+	slayer_yaw_initialized = 0;
 }
 
 // ===========================================================================
@@ -452,9 +463,7 @@ qboolean Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 
 void V_SlayerMovementTweaks( usercmd_t *cmd )
 {
-	static float prev_yaw = 0.0f;
-	static int   prev_onground = 0;
-	static int   yaw_initialized = 0;
+	int do_autojump = 0;
 
 	// --- Ducktap ---
 	if( slayer_ducktap.value != 0.0f && slayer_ducktap_active )
@@ -470,13 +479,13 @@ void V_SlayerMovementTweaks( usercmd_t *cmd )
 	{
 		float delta;
 
-		if( !yaw_initialized )
+		if( !slayer_yaw_initialized )
 		{
-			prev_yaw = cmd->viewangles[YAW];
-			yaw_initialized = 1;
+			slayer_prev_yaw = cmd->viewangles[YAW];
+			slayer_yaw_initialized = 1;
 		}
 
-		delta = cmd->viewangles[YAW] - prev_yaw;
+		delta = cmd->viewangles[YAW] - slayer_prev_yaw;
 
 		// Normalize to -180..180
 		if( delta > 180.0f )
@@ -497,28 +506,29 @@ void V_SlayerMovementTweaks( usercmd_t *cmd )
 	}
 
 	// Always update prev_yaw so delta is frame-to-frame
-	prev_yaw = cmd->viewangles[YAW];
-	yaw_initialized = 1;
+	slayer_prev_yaw = cmd->viewangles[YAW];
+	slayer_yaw_initialized = 1;
 
 	// --- Autojump ---
+	// Determine if autojump should process this frame.
+	// Ladder safety: do not auto-bhop on ladders (MOVETYPE_FLY).
 	if( slayer_autojump.value != 0.0f && ( cmd->buttons & IN_JUMP ))
 	{
-		// Ladder safety: do not auto-bhop on ladders (MOVETYPE_FLY)
-		if( clgame.pmove != NULL && clgame.pmove->movetype == MOVETYPE_FLY )
-		{
-			prev_onground = cl.local.onground;
-			return;
-		}
+		if( clgame.pmove == NULL || clgame.pmove->movetype != MOVETYPE_FLY )
+			do_autojump = 1;
+	}
 
+	if( do_autojump )
+	{
 		if( cl.local.onground >= 0 )
 		{
 			// Just landed: release IN_JUMP for one frame (anti-bhop bypass)
-			if( prev_onground == -1 )
+			if( slayer_prev_onground == -1 )
 				cmd->buttons &= ~IN_JUMP;
 			else
 				cmd->buttons |= IN_JUMP;
 		}
 	}
 
-	prev_onground = cl.local.onground;
+	slayer_prev_onground = cl.local.onground;
 }
