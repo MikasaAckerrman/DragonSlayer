@@ -503,6 +503,13 @@ void V_SlayerMovementTweaks( usercmd_t *cmd )
 			cmd->sidemove = 400.0f;
 			cmd->buttons |= IN_MOVERIGHT;
 		}
+
+		// When ducktap is active during air-strafe, inject forward for speed boost
+		if( slayer_ducktap_active )
+		{
+			cmd->forwardmove = 400.0f;
+			cmd->buttons |= IN_FORWARD;
+		}
 	}
 
 	// Always update prev_yaw so delta is frame-to-frame
