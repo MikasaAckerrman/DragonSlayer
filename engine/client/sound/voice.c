@@ -34,6 +34,7 @@ static CVAR_DEFINE_AUTO( voice_maxgain, "5.0", FCVAR_PRIVILEGED | FCVAR_ARCHIVE,
 static CVAR_DEFINE_AUTO( voice_inputfromfile, "0", FCVAR_PRIVILEGED, "input voice from voice_input.wav" );
 
 static void Voice_StartChannel( uint samples, byte *data, int entnum );
+static void Voice_ShutdownSilkDecoder( void );
 
 /*
 ===============================================================================
@@ -297,12 +298,13 @@ static qboolean Voice_InitSilkDecoder( void )
 		return false;
 	}
 
-	for( int i = 0; i < cl.maxclients; i++ )
+	for( int i = 0; i < MAX_CLIENTS; i++ )
 	{
 		voice.silk_decoders[i] = Mem_Malloc( host.mempool, dec_size );
 		if( !voice.silk_decoders[i] )
 		{
 			Con_Printf( S_ERROR "Can't allocate SILK decoder for %i\n", i );
+			Voice_ShutdownSilkDecoder();
 			return false;
 		}
 
@@ -310,6 +312,7 @@ static qboolean Voice_InitSilkDecoder( void )
 		if( ret )
 		{
 			Con_Printf( S_ERROR "Can't init SILK decoder for %i\n", i );
+			Voice_ShutdownSilkDecoder();
 			return false;
 		}
 	}
@@ -348,23 +351,26 @@ static int Voice_Resample16to24( const int16_t *in, int in_samples, int16_t *out
 {
 	int out_samples = (int)( (int64_t)in_samples * GS_DEFAULT_SAMPLE_RATE / GS_SILK_SAMPLE_RATE );
 	int i;
+	int32_t pos_fixed = 0;
+	// Fixed-point step: (16000 << 16) / 24000 = 43690 (approx 2/3 in 16.16 format)
+	const int32_t step_fixed = ( GS_SILK_SAMPLE_RATE << 16 ) / GS_DEFAULT_SAMPLE_RATE;
 
 	if( out_samples > max_out_samples )
 		out_samples = max_out_samples;
 
 	for( i = 0; i < out_samples; i++ )
 	{
-		// Map output index to input position
-		double src_pos = (double)i * GS_SILK_SAMPLE_RATE / GS_DEFAULT_SAMPLE_RATE;
-		int idx = (int)src_pos;
-		double frac = src_pos - idx;
+		int idx = pos_fixed >> 16;
+		int frac = pos_fixed & 0xFFFF;
 
 		if( idx + 1 < in_samples )
-			out[i] = (int16_t)( in[idx] * ( 1.0 - frac ) + in[idx + 1] * frac );
+			out[i] = (int16_t)( ( in[idx] * ( 65536 - frac ) + in[idx + 1] * frac ) >> 16 );
 		else if( idx < in_samples )
 			out[i] = in[idx];
 		else
 			out[i] = 0;
+
+		pos_fixed += step_fixed;
 	}
 
 	return out_samples;
@@ -741,6 +747,12 @@ static int Voice_ProcessGSData( int ent, const uint8_t *data, uint32_t size )
 	vpc_type = data[offset++];
 	data_len = LittleShort( *(uint16_t *)( data + offset ));
 	offset += sizeof( uint16_t );
+
+	if( offset + data_len > size - sizeof( uint32_t ))
+	{
+		Con_Printf( S_WARN "Voice data length exceeds packet size\n" );
+		return 0;
+	}
 
 	if( vpc_type == GS_VPC_VDATA_OPUS_PLC )
 	{
