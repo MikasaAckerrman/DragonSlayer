@@ -22,6 +22,12 @@ GNU General Public License for more details.
 // ===========================================================================
 
 static CVAR_DEFINE_AUTO( slayer_scoreboard, "1", FCVAR_ARCHIVE, "Slayer3D: enable custom scoreboard (0 = disabled)" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_bg_color, "20 20 20 180", FCVAR_ARCHIVE, "Slayer3D: scoreboard background RGBA" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_text_color, "255 255 255 255", FCVAR_ARCHIVE, "Slayer3D: scoreboard text RGBA" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_ct_color, "120 180 255", FCVAR_ARCHIVE, "Slayer3D: CT team RGB" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_t_color, "255 100 80", FCVAR_ARCHIVE, "Slayer3D: T team RGB" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_opacity, "220", FCVAR_ARCHIVE, "Slayer3D: overall scoreboard opacity (0-255)" );
+static CVAR_DEFINE_AUTO( slayer_steam_apikey, "", FCVAR_ARCHIVE | FCVAR_PROTECTED, "Slayer3D: Steam Web API key (for future avatar use)" );
 
 // ===========================================================================
 // Types
@@ -32,21 +38,71 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard, "1", FCVAR_ARCHIVE, "Slayer3D: enabl
 #define SLAYER_TEAM_CT          2
 #define SLAYER_TEAM_SPECTATOR   3
 
+#define SLAYER_MAX_AVATARS      64
+
 typedef struct
 {
 	int  frags;
 	int  deaths;
 	int  team_id;    // SLAYER_TEAM_*
+	int  health;     // HP from cl.local.health (only valid for local/spectated player)
 	byte flags;      // bit 0 = dead, bit 2 = has bomb
 	byte connected;  // set when ScoreInfo received for this slot
 } slayer_score_t;
+
+typedef struct
+{
+	char   steamid[32];   // SteamID64 string
+	int    texnum;        // GL texture number, 0 = not loaded
+} slayer_avatar_t;
 
 // ===========================================================================
 // Static state
 // ===========================================================================
 
-static slayer_score_t slayer_scores[MAX_CLIENTS];
-static qboolean       slayer_scoreboard_active = false;
+static slayer_score_t  slayer_scores[MAX_CLIENTS];
+static slayer_avatar_t slayer_avatars[SLAYER_MAX_AVATARS];
+static int             slayer_avatar_count = 0;
+static qboolean        slayer_scoreboard_active = false;
+
+// ===========================================================================
+// Cvar color parsing helper
+// ===========================================================================
+
+static void Slayer_ParseColorString( const char *str, rgba_t out )
+{
+	int r = 255, g = 255, b = 255, a = 255;
+	int count;
+
+	if( !str || str[0] == '\0' )
+	{
+		MakeRGBA( out, 255, 255, 255, 255 );
+		return;
+	}
+
+	count = sscanf( str, "%d %d %d %d", &r, &g, &b, &a );
+
+	if( count < 3 )
+	{
+		MakeRGBA( out, 255, 255, 255, 255 );
+		return;
+	}
+
+	// Clamp values
+	if( r < 0 ) r = 0;
+	if( r > 255 ) r = 255;
+	if( g < 0 ) g = 0;
+	if( g > 255 ) g = 255;
+	if( b < 0 ) b = 0;
+	if( b > 255 ) b = 255;
+	if( a < 0 ) a = 0;
+	if( a > 255 ) a = 255;
+
+	out[0] = (byte)r;
+	out[1] = (byte)g;
+	out[2] = (byte)b;
+	out[3] = (byte)a;
+}
 
 // ===========================================================================
 // +slayer_scoreboard / -slayer_scoreboard commands
@@ -63,12 +119,67 @@ static void Cmd_ScoreboardUp_f( void )
 }
 
 // ===========================================================================
-// Public API - Init / Reset
+// Avatar support (local file cache)
+// ===========================================================================
+
+static int Slayer_FindAvatarTexture( const char *steamid )
+{
+	int i;
+
+	for( i = 0; i < slayer_avatar_count; i++ )
+	{
+		if( !Q_strcmp( slayer_avatars[i].steamid, steamid ) )
+			return slayer_avatars[i].texnum;
+	}
+
+	return 0;
+}
+
+static int Slayer_LoadAvatarFromFile( const char *steamid )
+{
+	char path[MAX_QPATH];
+	int  texnum;
+
+	if( !steamid || steamid[0] == '\0' )
+		return 0;
+
+	// Check if already cached
+	texnum = Slayer_FindAvatarTexture( steamid );
+	if( texnum > 0 )
+		return texnum;
+
+	// Try to load from avatars/<steamid64>.png
+	Q_snprintf( path, sizeof( path ), "avatars/%s.png", steamid );
+
+	texnum = ref.dllFuncs.GL_LoadTexture( path, NULL, 0, TF_IMAGE );
+	if( texnum <= 0 )
+		return 0;
+
+	// Cache it
+	if( slayer_avatar_count < SLAYER_MAX_AVATARS )
+	{
+		Q_strncpy( slayer_avatars[slayer_avatar_count].steamid, steamid, sizeof( slayer_avatars[0].steamid ) );
+		slayer_avatars[slayer_avatar_count].texnum = texnum;
+		slayer_avatar_count++;
+	}
+
+	return texnum;
+}
+
+// ===========================================================================
+// Public API - Init / Reset / Health
 // ===========================================================================
 
 void Slayer_Scoreboard_Init( void )
 {
 	Cvar_RegisterVariable( &slayer_scoreboard );
+	Cvar_RegisterVariable( &slayer_scoreboard_bg_color );
+	Cvar_RegisterVariable( &slayer_scoreboard_text_color );
+	Cvar_RegisterVariable( &slayer_scoreboard_ct_color );
+	Cvar_RegisterVariable( &slayer_scoreboard_t_color );
+	Cvar_RegisterVariable( &slayer_scoreboard_opacity );
+	Cvar_RegisterVariable( &slayer_steam_apikey );
+
 	Cmd_AddCommand( "+slayer_scoreboard", Cmd_ScoreboardDown_f,
 		"show Slayer3D custom scoreboard" );
 	Cmd_AddCommand( "-slayer_scoreboard", Cmd_ScoreboardUp_f,
@@ -79,6 +190,12 @@ void Slayer_Scoreboard_Reset( void )
 {
 	memset( slayer_scores, 0, sizeof( slayer_scores ) );
 	slayer_scoreboard_active = false;
+}
+
+void Slayer_OnHealthUpdate( int hp )
+{
+	if( cl.playernum >= 0 && cl.playernum < MAX_CLIENTS )
+		slayer_scores[cl.playernum].health = hp;
 }
 
 // ===========================================================================
@@ -139,6 +256,18 @@ static void Slayer_DrawRect( int x, int y, int w, int h, byte r, byte g, byte b,
 	ref.dllFuncs.FillRGBA( kRenderTransTexture, x, y, w, h, r, g, b, a );
 }
 
+static void Slayer_DrawBorder( int x, int y, int w, int h, byte r, byte g, byte b, byte a, int thickness )
+{
+	// Top
+	Slayer_DrawRect( x, y, w, thickness, r, g, b, a );
+	// Bottom
+	Slayer_DrawRect( x, y + h - thickness, w, thickness, r, g, b, a );
+	// Left
+	Slayer_DrawRect( x, y, thickness, h, r, g, b, a );
+	// Right
+	Slayer_DrawRect( x + w - thickness, y, thickness, h, r, g, b, a );
+}
+
 // ===========================================================================
 // Sorting
 // ===========================================================================
@@ -192,7 +321,9 @@ void Slayer_Scoreboard_Draw( void )
 	int          drawn_ct_header = 0, drawn_t_header = 0, drawn_spec_header = 0;
 	const char  *hostname;
 	char         buf[128];
-	rgba_t       color_white, color_ct, color_t, color_spec, color_header;
+	rgba_t       color_text, color_ct, color_t, color_spec, color_header;
+	rgba_t       color_bg;
+	int          global_opacity;
 	cl_font_t   *font;
 
 	if( !slayer_scoreboard_active )
@@ -215,7 +346,21 @@ void Slayer_Scoreboard_Draw( void )
 	if( !font )
 		return;
 
-	row_h = font->charHeight + 4;
+	row_h = font->charHeight + 8;
+
+	// Parse cvar colors
+	Slayer_ParseColorString( slayer_scoreboard_bg_color.string, color_bg );
+	Slayer_ParseColorString( slayer_scoreboard_text_color.string, color_text );
+	Slayer_ParseColorString( slayer_scoreboard_ct_color.string, color_ct );
+	color_ct[3] = 255;
+	Slayer_ParseColorString( slayer_scoreboard_t_color.string, color_t );
+	color_t[3] = 255;
+	MakeRGBA( color_spec, 180, 180, 180, 255 );
+	MakeRGBA( color_header, color_text[0] * 200 / 255, color_text[1] * 200 / 255, color_text[2] * 200 / 255, 255 );
+
+	global_opacity = (int)slayer_scoreboard_opacity.value;
+	if( global_opacity < 0 ) global_opacity = 0;
+	if( global_opacity > 255 ) global_opacity = 255;
 
 	// Count active players (must have a name and have received ScoreInfo)
 	for( i = 0; i < cl.maxclients && i < MAX_CLIENTS; i++ )
@@ -247,75 +392,86 @@ void Slayer_Scoreboard_Draw( void )
 			t_frags_sum += sorted[i].frags;
 	}
 
-	// Adaptive board dimensions
-	// Compact mode for 1 player, expand for more
-	if( num_players == 1 )
-	{
-		board_w = (int)( screen_w * 0.40f );
-		board_h = (int)( screen_h * 0.15f );
-	}
-	else
-	{
-		float w_frac = 0.45f + 0.025f * num_players;
-		float h_frac = 0.20f + 0.04f * num_players;
+	// Fixed board width: 60% of screen_w
+	board_w = (int)( screen_w * 0.60f );
 
-		if( w_frac > 0.70f ) w_frac = 0.70f;
-		if( h_frac > 0.80f ) h_frac = 0.80f;
-
-		board_w = (int)( screen_w * w_frac );
-		board_h = (int)( screen_h * h_frac );
-	}
-
-	// Ensure minimum height for all rows
+	// Height adapts to content: header + column headers + team headers + rows + padding
 	{
-		int min_h = row_h * ( num_players + 5 ); // rows + headers + padding
-		if( board_h < min_h )
-			board_h = min_h;
-		if( board_h > (int)( screen_h * 0.85f ) )
-			board_h = (int)( screen_h * 0.85f );
+		int content_rows = num_players + 4; // +4 for header, column header, 2 team headers
+		int min_h = row_h * content_rows + 40;
+		int max_h = (int)( screen_h * 0.85f );
+
+		board_h = min_h;
+		if( board_h > max_h )
+			board_h = max_h;
+		if( board_h < (int)( screen_h * 0.20f ) )
+			board_h = (int)( screen_h * 0.20f );
 	}
 
 	// Center the board
 	board_x = ( screen_w - board_w ) / 2;
 	board_y = ( screen_h - board_h ) / 2;
 
-	// Draw background
-	Slayer_DrawRect( board_x, board_y, board_w, board_h, 0, 0, 0, 180 );
+	// Draw main background
+	Slayer_DrawRect( board_x, board_y, board_w, board_h,
+		color_bg[0], color_bg[1], color_bg[2], (byte)( color_bg[3] * global_opacity / 255 ) );
 
-	// Setup colors
-	MakeRGBA( color_white, 255, 255, 255, 255 );
-	MakeRGBA( color_ct, 120, 180, 255, 255 );
-	MakeRGBA( color_t, 255, 100, 80, 255 );
-	MakeRGBA( color_spec, 180, 180, 180, 255 );
-	MakeRGBA( color_header, 200, 200, 200, 255 );
+	// Draw thin border (2px)
+	Slayer_DrawBorder( board_x, board_y, board_w, board_h, 80, 80, 80, (byte)global_opacity, 2 );
 
-	header_h = row_h;
-	cur_y = board_y + 8;
+	header_h = row_h + 4;
+	cur_y = board_y;
 
-	// Draw server name
+	// Draw dark header bar
+	Slayer_DrawRect( board_x, cur_y, board_w, header_h + row_h,
+		10, 10, 10, (byte)( global_opacity * 240 / 255 ) );
+
+	// Draw server name (centered in header)
 	hostname = Info_ValueForKey( cl.serverinfo, "hostname" );
+	if( !hostname || hostname[0] == '\0' )
+		hostname = Cvar_VariableString( "hostname" );
+	if( !hostname || hostname[0] == '\0' )
+		hostname = cls.servername;
 	if( !hostname || hostname[0] == '\0' )
 		hostname = "Unknown Server";
 
+	cur_y += 6;
 	Con_DrawStringLen( hostname, &text_w, &text_h );
-	Con_DrawString( board_x + ( board_w - text_w ) / 2, cur_y, hostname, color_white );
-	cur_y += header_h + 4;
+	Con_DrawString( board_x + ( board_w - text_w ) / 2, cur_y, hostname, color_text );
+	cur_y += row_h;
+
+	// Map name / round info line (below hostname)
+	{
+		const char *mapname = Info_ValueForKey( cl.serverinfo, "map" );
+		if( mapname && mapname[0] != '\0' )
+		{
+			rgba_t color_map;
+			MakeRGBA( color_map, color_text[0] * 160 / 255, color_text[1] * 160 / 255, color_text[2] * 160 / 255, 200 );
+			Con_DrawStringLen( mapname, &text_w, &text_h );
+			Con_DrawString( board_x + ( board_w - text_w ) / 2, cur_y, mapname, color_map );
+		}
+	}
+	cur_y += row_h;
+
+	// Thin separator below header
+	Slayer_DrawRect( board_x + 2, cur_y, board_w - 4, 1, 60, 60, 60, (byte)global_opacity );
+	cur_y += 4;
 
 	// Column layout (percentage of board width)
 	col_name_x   = board_x + (int)( board_w * 0.05f );
-	col_frags_x  = board_x + (int)( board_w * 0.60f );
+	col_frags_x  = board_x + (int)( board_w * 0.58f );
 	col_deaths_x = board_x + (int)( board_w * 0.72f );
 	col_ping_x   = board_x + (int)( board_w * 0.86f );
 
 	// Draw column headers
 	Con_DrawString( col_name_x, cur_y, "Name", color_header );
-	Con_DrawString( col_frags_x, cur_y, "K", color_header );
-	Con_DrawString( col_deaths_x, cur_y, "D", color_header );
+	Con_DrawString( col_frags_x, cur_y, "Kills", color_header );
+	Con_DrawString( col_deaths_x, cur_y, "Deaths", color_header );
 	Con_DrawString( col_ping_x, cur_y, "Ping", color_header );
-	cur_y += header_h + 2;
+	cur_y += row_h;
 
-	// Draw separator line
-	Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, 100, 100, 100, 200 );
+	// Draw separator line below column headers
+	Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, 80, 80, 80, (byte)global_opacity );
 	cur_y += 4;
 
 	// Draw player rows
@@ -325,6 +481,8 @@ void Slayer_Scoreboard_Draw( void )
 		int     team = sorted[row].team_id;
 		rgba_t  name_color;
 		const char *name;
+		int     icon_size;
+		byte    row_alpha;
 
 		// Stop drawing if we exceed the board
 		if( cur_y + row_h > board_y + board_h - 4 )
@@ -334,88 +492,151 @@ void Slayer_Scoreboard_Draw( void )
 		if( team == SLAYER_TEAM_CT && !drawn_ct_header )
 		{
 			drawn_ct_header = 1;
+			// Thin separator before CT section
+			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, color_ct[0], color_ct[1], color_ct[2], 100 );
+			cur_y += 3;
 			Q_snprintf( buf, sizeof( buf ), "Counter-Terrorists  -  %d", ct_frags_sum );
 			Con_DrawString( col_name_x, cur_y, buf, color_ct );
-			cur_y += header_h;
+			cur_y += row_h;
 		}
 		else if( team == SLAYER_TEAM_T && !drawn_t_header )
 		{
 			drawn_t_header = 1;
-			// Add spacing between team sections
-			if( drawn_ct_header )
-				cur_y += 4;
+			// Spacing + separator between teams
+			cur_y += 4;
+			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, color_t[0], color_t[1], color_t[2], 100 );
+			cur_y += 3;
 			Q_snprintf( buf, sizeof( buf ), "Terrorists  -  %d", t_frags_sum );
 			Con_DrawString( col_name_x, cur_y, buf, color_t );
-			cur_y += header_h;
+			cur_y += row_h;
 		}
 		else if( team != SLAYER_TEAM_CT && team != SLAYER_TEAM_T && !drawn_spec_header )
 		{
 			drawn_spec_header = 1;
-			// Add spacing before spectator section
-			if( drawn_ct_header || drawn_t_header )
-				cur_y += 4;
+			// Spacing before spectator section
+			cur_y += 4;
+			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, 100, 100, 100, 80 );
+			cur_y += 3;
 			Con_DrawString( col_name_x, cur_y, "Spectators", color_spec );
-			cur_y += header_h;
+			cur_y += row_h;
 		}
 
 		// Stop drawing if we exceed the board after team header
 		if( cur_y + row_h > board_y + board_h - 4 )
 			break;
 
-		// Highlight local player row
-		if( pidx == cl.playernum )
+		// Alternating row backgrounds (every other row slightly lighter)
+		if( row % 2 == 0 )
 		{
-			Slayer_DrawRect( board_x + 2, cur_y, board_w - 4, row_h, 255, 255, 255, 30 );
+			Slayer_DrawRect( board_x + 2, cur_y, board_w - 4, row_h, 255, 255, 255, 8 );
 		}
 
-		// Avatar placeholder (small filled square)
+		// Highlight local player row (brighter)
+		if( pidx == cl.playernum )
 		{
-			int icon_size = row_h - 4;
-			byte icon_r = 128, icon_g = 128, icon_b = 128;
+			Slayer_DrawRect( board_x + 2, cur_y, board_w - 4, row_h, 255, 255, 255, 35 );
+		}
 
-			if( team == SLAYER_TEAM_CT )
-			{
-				icon_r = 80; icon_g = 140; icon_b = 220;
-			}
-			else if( team == SLAYER_TEAM_T )
-			{
-				icon_r = 200; icon_g = 80; icon_b = 60;
-			}
+		// Avatar icon (colored square fallback or loaded texture)
+		icon_size = row_h - 4;
+		{
+			int avatar_tex = 0;
+			// player_info_t has no steamid field, so we cannot do file-based
+			// avatar loading yet. Draw colored team fallback icons.
+			(void)avatar_tex;
 
-			Slayer_DrawRect( col_name_x, cur_y + 2, icon_size, icon_size, icon_r, icon_g, icon_b, 200 );
+			{
+				byte icon_r = 128, icon_g = 128, icon_b = 128;
+
+				if( team == SLAYER_TEAM_CT )
+				{
+					icon_r = color_ct[0];
+					icon_g = color_ct[1];
+					icon_b = color_ct[2];
+				}
+				else if( team == SLAYER_TEAM_T )
+				{
+					icon_r = color_t[0];
+					icon_g = color_t[1];
+					icon_b = color_t[2];
+				}
+
+				Slayer_DrawRect( col_name_x, cur_y + 2, icon_size, icon_size,
+					icon_r, icon_g, icon_b, 200 );
+			}
 		}
 
 		// Player name
 		name = cl.players[pidx].name;
 
 		if( team == SLAYER_TEAM_CT )
-			MakeRGBA( name_color, 120, 180, 255, 255 );
+			MakeRGBA( name_color, color_ct[0], color_ct[1], color_ct[2], 255 );
 		else if( team == SLAYER_TEAM_T )
-			MakeRGBA( name_color, 255, 150, 80, 255 );
+			MakeRGBA( name_color, color_t[0], color_t[1], color_t[2], 255 );
 		else
 			MakeRGBA( name_color, 200, 200, 200, 255 );
 
-		// Dead players get dimmed
+		// Dead players: halved alpha (dimmed)
+		row_alpha = 255;
 		if( slayer_scores[pidx].flags & 1 )
 		{
 			name_color[0] = name_color[0] / 2;
 			name_color[1] = name_color[1] / 2;
 			name_color[2] = name_color[2] / 2;
+			row_alpha = 128;
 		}
 
-		Con_DrawString( col_name_x + row_h, cur_y, name, name_color );
+		Con_DrawString( col_name_x + icon_size + 4, cur_y + 2, name, name_color );
 
 		// Frags
-		Q_snprintf( buf, sizeof( buf ), "%d", slayer_scores[pidx].frags );
-		Con_DrawString( col_frags_x, cur_y, buf, color_white );
+		{
+			rgba_t stat_color;
+			MakeRGBA( stat_color, color_text[0], color_text[1], color_text[2], row_alpha );
+			Q_snprintf( buf, sizeof( buf ), "%d", slayer_scores[pidx].frags );
+			Con_DrawString( col_frags_x, cur_y + 2, buf, stat_color );
 
-		// Deaths
-		Q_snprintf( buf, sizeof( buf ), "%d", slayer_scores[pidx].deaths );
-		Con_DrawString( col_deaths_x, cur_y, buf, color_white );
+			// Deaths
+			Q_snprintf( buf, sizeof( buf ), "%d", slayer_scores[pidx].deaths );
+			Con_DrawString( col_deaths_x, cur_y + 2, buf, stat_color );
 
-		// Ping
-		Q_snprintf( buf, sizeof( buf ), "%d", cl.players[pidx].ping );
-		Con_DrawString( col_ping_x, cur_y, buf, color_white );
+			// Ping
+			Q_snprintf( buf, sizeof( buf ), "%d", cl.players[pidx].ping );
+			Con_DrawString( col_ping_x, cur_y + 2, buf, stat_color );
+		}
+
+		// HP bar for local/spectated player
+		if( pidx == cl.playernum && slayer_scores[pidx].health > 0 )
+		{
+			int hp = slayer_scores[pidx].health;
+			int bar_max_w = (int)( board_w * 0.30f );
+			int bar_w, bar_h, bar_x, bar_y;
+			byte hp_r, hp_g, hp_b;
+
+			if( hp > 100 ) hp = 100;
+			bar_w = bar_max_w * hp / 100;
+			bar_h = 3;
+			bar_x = col_name_x + icon_size + 4;
+			bar_y = cur_y + row_h - bar_h - 1;
+
+			// Color: green (>60), yellow (30-60), red (<30)
+			if( hp > 60 )
+			{
+				hp_r = 60; hp_g = 200; hp_b = 60;
+			}
+			else if( hp > 30 )
+			{
+				hp_r = 220; hp_g = 200; hp_b = 40;
+			}
+			else
+			{
+				hp_r = 220; hp_g = 40; hp_b = 40;
+			}
+
+			// Background track
+			Slayer_DrawRect( bar_x, bar_y, bar_max_w, bar_h, 40, 40, 40, 120 );
+			// HP fill
+			Slayer_DrawRect( bar_x, bar_y, bar_w, bar_h, hp_r, hp_g, hp_b, 200 );
+		}
 
 		cur_y += row_h;
 	}
