@@ -17,5 +17,6 @@ def build(bld):
 		target = 'silk',
 		features = 'c',
 		includes = ['silk-src/interface', 'silk-src/src'],
-		export_includes = ['silk-src/interface']
+		export_includes = ['silk-src/interface'],
+		defines = ['NO_ASM']
 	)
