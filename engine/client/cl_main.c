@@ -701,6 +701,9 @@ static void CL_CreateCmd( void )
 	clgame.dllFuncs.CL_CreateMove( host.frametime, cmd, active );
 	IN_EngineAppendMove( host.frametime, cmd, active );
 
+	// Slayer3D: check RMB snap after all input is processed
+	V_SlayerCamSnapCheck( cmd );
+
 	CL_PopPMStates();
 
 	if( !cls.demoplayback )
