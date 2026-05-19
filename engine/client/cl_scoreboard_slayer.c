@@ -337,7 +337,6 @@ void Slayer_Scoreboard_Draw( void )
 	int          header_h, row_h, col_name_x, col_frags_x, col_deaths_x, col_ping_x;
 	int          text_w, text_h;
 	int          cur_y;
-	int          ct_frags_sum = 0, t_frags_sum = 0;
 	int          ct_player_count = 0, t_player_count = 0;
 	int          drawn_ct_header = 0, drawn_t_header = 0, drawn_spec_header = 0;
 	const char  *hostname;
@@ -438,19 +437,13 @@ void Slayer_Scoreboard_Draw( void )
 	// Sort players
 	qsort( sorted, num_players, sizeof( slayer_sort_entry_t ), Slayer_SortCompare );
 
-	// Calculate team frag sums
+	// Calculate team player counts
 	for( i = 0; i < num_players; i++ )
 	{
 		if( sorted[i].team_id == SLAYER_TEAM_CT )
-		{
-			ct_frags_sum += sorted[i].frags;
 			ct_player_count++;
-		}
 		else if( sorted[i].team_id == SLAYER_TEAM_T )
-		{
-			t_frags_sum += sorted[i].frags;
 			t_player_count++;
-		}
 	}
 
 	// Fixed board width: 60% of screen_w
