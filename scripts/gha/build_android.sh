@@ -25,8 +25,17 @@ pushd android
 popd
 
 # 2. Locate the produced APKs.
+# AGP may output to concatenated (scopedContinuous) or nested (scoped/continuous) paths
+# depending on the AGP version. Try concatenated first, fall back to nested.
 SCOPED_APK_DIR="android/app/build/outputs/apk/scopedContinuous"
+if [ ! -d "$SCOPED_APK_DIR" ]; then
+	SCOPED_APK_DIR="android/app/build/outputs/apk/scoped/continuous"
+fi
+
 LEGACY_APK_DIR="android/app/build/outputs/apk/legacyContinuous"
+if [ ! -d "$LEGACY_APK_DIR" ]; then
+	LEGACY_APK_DIR="android/app/build/outputs/apk/legacy/continuous"
+fi
 
 SCOPED_APK="$(find "$SCOPED_APK_DIR" -maxdepth 1 -type f -name '*.apk' ! -name '*-unsigned.apk' | head -n 1)"
 LEGACY_APK="$(find "$LEGACY_APK_DIR" -maxdepth 1 -type f -name '*.apk' ! -name '*-unsigned.apk' | head -n 1)"
@@ -55,6 +64,9 @@ cp "$LEGACY_APK" artifacts/Slayer3D-android-legacy.apk
 
 # 4. Bundle ProGuard/R8 mappings if present for each variant.
 SCOPED_MAPPINGS_DIR="android/app/build/outputs/mapping/scopedContinuous"
+if [ ! -d "$SCOPED_MAPPINGS_DIR" ]; then
+	SCOPED_MAPPINGS_DIR="android/app/build/outputs/mapping/scoped/continuous"
+fi
 if [ -d "$SCOPED_MAPPINGS_DIR" ] && [ -n "$(ls -A "$SCOPED_MAPPINGS_DIR" 2>/dev/null || true)" ]; then
 	tar -czf artifacts/Slayer3D-android-mappings.tar.gz -C "$SCOPED_MAPPINGS_DIR" .
 else
@@ -62,6 +74,9 @@ else
 fi
 
 LEGACY_MAPPINGS_DIR="android/app/build/outputs/mapping/legacyContinuous"
+if [ ! -d "$LEGACY_MAPPINGS_DIR" ]; then
+	LEGACY_MAPPINGS_DIR="android/app/build/outputs/mapping/legacy/continuous"
+fi
 if [ -d "$LEGACY_MAPPINGS_DIR" ] && [ -n "$(ls -A "$LEGACY_MAPPINGS_DIR" 2>/dev/null || true)" ]; then
 	tar -czf artifacts/Slayer3D-android-legacy-mappings.tar.gz -C "$LEGACY_MAPPINGS_DIR" .
 else
