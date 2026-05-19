@@ -1985,24 +1985,28 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 	Vector4Copy( clgame.ds.textColor, color );
 	Vector4Set( clgame.ds.textColor, 255, 255, 255, 255 );
 
-	// DEBUG: log what game DLL passes to us
-	Con_Printf( "[chatdbg] color=(%i,%i,%i) str=\"%s\"\n", color[0], color[1], color[2], string );
-
 	// Slayer3D: apply chat_color to message body text only.
-	// The game DLL sets a team color for player names and a default
-	// (white/yellow) color for message body. We override only the latter.
+	// Team colors for player names are "pure" single-channel dominant
+	// (red for T, blue for CT). Message body is orange/yellow/white.
+	// We preserve pure team colors and override everything else.
 	if( slayer_chat_color.string[0] != '\0'
 		&& sscanf( slayer_chat_color.string, "%i %i %i", &r, &g, &b ) == 3 )
 	{
+		qboolean is_team_color = false;
+
 		r = bound( 0, r, 255 );
 		g = bound( 0, g, 255 );
 		b = bound( 0, b, 255 );
 
-		// If the original color is "default" (set by game for message body),
-		// override it with our chat_color. Team colors for names are preserved.
-		// In HL/CS, default text color from DrawSetTextColor is typically
-		// (255,255,255) or close to it. Team colors are distinctly non-white.
-		if( color[0] > 200 && color[1] > 200 && color[2] > 200 )
+		// Detect pure team colors (one channel dominant, others near zero)
+		if( color[1] < 50 && color[2] < 50 && color[0] > 150 )
+			is_team_color = true; // pure red (Terrorist)
+		else if( color[0] < 50 && color[1] < 50 && color[2] > 150 )
+			is_team_color = true; // pure blue (CT)
+		else if( color[0] < 50 && color[2] < 50 && color[1] > 150 )
+			is_team_color = true; // pure green
+
+		if( !is_team_color )
 		{
 			color[0] = (byte)r;
 			color[1] = (byte)g;
