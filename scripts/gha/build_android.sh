@@ -19,9 +19,19 @@ export JAVA_HOME="$GITHUB_WORKSPACE/java"
 export ANDROID_HOME="$GITHUB_WORKSPACE/sdk"
 export PATH="$PATH:$JAVA_HOME/bin:$ANDROID_HOME/tools:$ANDROID_HOME/tools/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/tools/bin"
 
-# 1. Build both flavor APKs.
+# Quick-build mode: only scoped flavor, only arm64-v8a architecture
+GRADLE_ABI_ARGS=""
+if [ "${SLAYER_BUILD_MODE:-full}" = "quick" ]; then
+	GRADLE_ABI_ARGS="-Pslayer.abiFilter=arm64-v8a"
+fi
+
+# 1. Build APKs.
 pushd android
-./gradlew assembleScopedContinuous assembleLegacyContinuous --no-daemon
+if [ "${SLAYER_BUILD_MODE:-full}" = "quick" ]; then
+	./gradlew assembleScopedContinuous $GRADLE_ABI_ARGS --no-daemon
+else
+	./gradlew assembleScopedContinuous assembleLegacyContinuous $GRADLE_ABI_ARGS --no-daemon
+fi
 popd
 
 # 2. Locate the produced APKs.
@@ -38,7 +48,6 @@ if [ ! -d "$LEGACY_APK_DIR" ]; then
 fi
 
 SCOPED_APK="$(find "$SCOPED_APK_DIR" -maxdepth 1 -type f -name '*.apk' ! -name '*-unsigned.apk' | head -n 1)"
-LEGACY_APK="$(find "$LEGACY_APK_DIR" -maxdepth 1 -type f -name '*.apk' ! -name '*-unsigned.apk' | head -n 1)"
 
 if [ -z "$SCOPED_APK" ]; then
 	echo "::error::No signed scoped APK found under $SCOPED_APK_DIR"
@@ -47,20 +56,29 @@ if [ -z "$SCOPED_APK" ]; then
 	exit 1
 fi
 
-if [ -z "$LEGACY_APK" ]; then
-	echo "::error::No signed legacy APK found under $LEGACY_APK_DIR"
-	echo "Directory contents:"
-	ls -la "$LEGACY_APK_DIR" || true
-	exit 1
-fi
-
 echo "Picked scoped APK: $SCOPED_APK"
-echo "Picked legacy APK: $LEGACY_APK"
+
+if [ "${SLAYER_BUILD_MODE:-full}" = "quick" ]; then
+	echo "Quick build mode: only scoped flavor built"
+else
+	LEGACY_APK="$(find "$LEGACY_APK_DIR" -maxdepth 1 -type f -name '*.apk' ! -name '*-unsigned.apk' | head -n 1)"
+
+	if [ -z "$LEGACY_APK" ]; then
+		echo "::error::No signed legacy APK found under $LEGACY_APK_DIR"
+		echo "Directory contents:"
+		ls -la "$LEGACY_APK_DIR" || true
+		exit 1
+	fi
+
+	echo "Picked legacy APK: $LEGACY_APK"
+fi
 
 # 3. Stage artifacts.
 mkdir -p artifacts/
 cp "$SCOPED_APK" artifacts/Slayer3D-android.apk
-cp "$LEGACY_APK" artifacts/Slayer3D-android-legacy.apk
+if [ "${SLAYER_BUILD_MODE:-full}" != "quick" ]; then
+	cp "$LEGACY_APK" artifacts/Slayer3D-android-legacy.apk
+fi
 
 # 4. Bundle ProGuard/R8 mappings if present for each variant.
 SCOPED_MAPPINGS_DIR="android/app/build/outputs/mapping/scopedContinuous"
@@ -77,7 +95,7 @@ LEGACY_MAPPINGS_DIR="android/app/build/outputs/mapping/legacyContinuous"
 if [ ! -d "$LEGACY_MAPPINGS_DIR" ]; then
 	LEGACY_MAPPINGS_DIR="android/app/build/outputs/mapping/legacy/continuous"
 fi
-if [ -d "$LEGACY_MAPPINGS_DIR" ] && [ -n "$(ls -A "$LEGACY_MAPPINGS_DIR" 2>/dev/null || true)" ]; then
+if [ "${SLAYER_BUILD_MODE:-full}" != "quick" ] && [ -d "$LEGACY_MAPPINGS_DIR" ] && [ -n "$(ls -A "$LEGACY_MAPPINGS_DIR" 2>/dev/null || true)" ]; then
 	tar -czf artifacts/Slayer3D-android-legacy-mappings.tar.gz -C "$LEGACY_MAPPINGS_DIR" .
 else
 	echo "No mappings directory at $LEGACY_MAPPINGS_DIR, skipping."

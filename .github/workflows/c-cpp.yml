@@ -1,5 +1,17 @@
 name: Build & Deploy Android APK
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      build_mode:
+        description: 'Build mode: full (both flavors, all architectures) or quick (scoped only, arm64-v8a only)'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - quick
 
 # Slayer3D: only Android APK is built and released. All desktop, console
 # and Flatpak targets are intentionally disabled - they're not needed for
@@ -28,6 +40,7 @@ jobs:
     - name: Build engine
       env:
         FWGS_PFX_PASSWORD: ${{ secrets.FWGS_PFX_PASSWORD }}
+        SLAYER_BUILD_MODE: ${{ github.event.inputs.build_mode || 'full' }}
       run: bash scripts/gha/build_android.sh
     - name: Upload APK (artifact)
       uses: actions/upload-artifact@v7
