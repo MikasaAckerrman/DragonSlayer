@@ -4,8 +4,7 @@
 	<Preference
 		app:key="game_path"
 		app:layout="@layout/edit_text_preference"
-		app:title="@string/game_data_location"
-		android:summary="/storage/emulated/0/xash" />
+		app:title="@string/game_data_location" />
 
 	<SwitchPreferenceCompat
 		app:key="use_icons"

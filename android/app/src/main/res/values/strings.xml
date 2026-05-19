@@ -63,4 +63,6 @@
 	<string name="engine_update_permission_message">To install the update, allow Slayer3D to install unknown apps in system settings.</string>
 	<string name="engine_update_open_settings">Open settings</string>
 	<string name="engine_install_failed">Update install failed: %1$s</string>
+	<string name="game_path_restart_required">Requires app restart</string>
+	<string name="game_path_invalid_folder">Selected folder must contain valve/ or cstrike/ subfolder</string>
 </resources>
