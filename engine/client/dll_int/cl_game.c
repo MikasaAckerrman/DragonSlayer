@@ -1986,6 +1986,17 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 	Vector4Copy( clgame.ds.textColor, color );
 	Vector4Set( clgame.ds.textColor, 255, 255, 255, 255 );
 
+	// DEBUG: dump hex of first bytes and color
+	{
+		char hexbuf[128];
+		int i, len = Q_strlen( string );
+		if( len > 40 ) len = 40;
+		for( i = 0; i < len && i < 42; i++ )
+			Q_snprintf( hexbuf + i * 3, sizeof(hexbuf) - i * 3, "%02X ", (unsigned char)string[i] );
+		hexbuf[len * 3] = '\0';
+		Con_Printf( "[chatdbg] c=(%i,%i,%i) hex=[%s] str=\"%s\"\n", color[0], color[1], color[2], hexbuf, string );
+	}
+
 	// Slayer3D: if chat_color is disabled, draw normally
 	if( slayer_chat_color.string[0] == '\0'
 		|| sscanf( slayer_chat_color.string, "%i %i %i", &r, &g, &b ) != 3 )
@@ -2012,7 +2023,7 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 		rgba_t chat_clr;
 		char saved;
 
-		// Draw name portion WITHOUT FORCECOL so inline ^1/^2 color codes work
+		// Draw name portion WITHOUT FORCECOL so inline color codes work
 		saved = string[name_len];
 		string[name_len] = '\0';
 		name_width = CL_DrawString( x, y, string, color, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD );
