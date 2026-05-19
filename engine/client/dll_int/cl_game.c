@@ -37,6 +37,7 @@ GNU General Public License for more details.
 #include "vgui_draw.h"
 #include "sound.h"		// SND_STOP_LOOPING
 #include "platform/platform.h"
+#include "cl_view_slayer.h"
 
 #define MAX_LINELENGTH	80
 #define TEXT_MSGNAME	"TextMessage"
@@ -1979,19 +1980,48 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 {
 	cl_font_t *font = Con_GetFont( con_fontsize.value );
 	rgba_t color;
+	int r, g, b;
+	const char *sep;
 
-	// Slayer3D: apply con_color to all HUD/chat text.
-	// g_color_table[7] is set by con_color cvar and represents the
-	// user's preferred text color. Override whatever client.dll set.
-	{
-		extern rgba_t g_color_table[8];
-		Vector4Copy( g_color_table[7], color );
-		color[3] = 255;
-	}
-
+	Vector4Copy( clgame.ds.textColor, color );
 	Vector4Set( clgame.ds.textColor, 255, 255, 255, 255 );
 
-	return x + CL_DrawString( x, y, string, color, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD );
+	// If chat_color is empty or unparseable, draw normally
+	if( slayer_chat_color.string[0] == '\0'
+		|| sscanf( slayer_chat_color.string, "%i %i %i", &r, &g, &b ) != 3 )
+	{
+		return x + CL_DrawString( x, y, string, color, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD );
+	}
+
+	r = bound( 0, r, 255 );
+	g = bound( 0, g, 255 );
+	b = bound( 0, b, 255 );
+
+	// Look for chat separator ": "
+	sep = Q_strstr( string, ": " );
+	if( !sep )
+	{
+		// Not a chat message, draw with original color
+		return x + CL_DrawString( x, y, string, color, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD );
+	}
+
+	// Draw name portion with original color, message body with chat_color
+	{
+		int name_len = (int)( sep - string ) + 2;
+		int name_width, msg_width;
+		rgba_t chat_clr;
+		char saved;
+
+		saved = string[name_len];
+		string[name_len] = '\0';
+		name_width = CL_DrawString( x, y, string, color, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD );
+		string[name_len] = saved;
+
+		Vector4Set( chat_clr, (byte)r, (byte)g, (byte)b, 255 );
+		msg_width = CL_DrawString( x + name_width, y, string + name_len, chat_clr, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD );
+
+		return x + name_width + msg_width;
+	}
 }
 
 /*
