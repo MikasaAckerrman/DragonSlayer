@@ -198,11 +198,9 @@ public class XashActivity extends SDLActivity {
 			String rootPath;
 			if (gamePath != null && !gamePath.isEmpty()) {
 				rootPath = gamePath;
-			} else if (BuildConfig.USE_SCOPED_STORAGE) {
+			} else {
 				File extDir = getExternalFilesDir(null);
 				rootPath = (extDir != null ? extDir.getAbsolutePath() : getFilesDir().getAbsolutePath()) + "/xash";
-			} else {
-				rootPath = android.os.Environment.getExternalStorageDirectory().getAbsolutePath() + "/xash";
 			}
 			nativeSetenv("XASH3D_BASEDIR", rootPath);
 		}
