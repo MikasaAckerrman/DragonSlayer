@@ -2099,7 +2099,11 @@ int IN_TouchEvent( touchEventType type, int fingerID, float x, float y, float dx
 			dy = temp;
 	}
 
-	// ensure touch config is loaded before processing events
+	// Ensure touch config is loaded before processing events.
+	// This is safe to call on every event because Touch_InitConfig() has an
+	// internal guard (early-returns if already loaded or config not yet executed),
+	// making repeated calls cheap (just 3 comparisons).  It is needed here
+	// because IN_TouchEvent can fire before Touch_Draw() runs the first frame.
 	Touch_InitConfig();
 
 //	Con_Printf("%f %f\n", TO_SCRN_X(x), TO_SCRN_Y(y));
