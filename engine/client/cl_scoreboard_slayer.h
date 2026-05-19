@@ -40,4 +40,8 @@ void Slayer_OnScoreInfo( const byte *pbuf, int iSize );
 //   iSize - payload length
 void Slayer_OnScoreAttrib( const byte *pbuf, int iSize );
 
+// Hook for health updates from cl_parse.c.
+// Stores HP for the local/spectated player row in the scoreboard.
+void Slayer_OnHealthUpdate( int hp );
+
 #endif // CL_SCOREBOARD_SLAYER_H

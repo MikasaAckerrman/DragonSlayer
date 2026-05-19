@@ -1171,9 +1171,8 @@ void CL_ParseClientData( sizebuf_t *msg, connprotocol_t proto )
 	cl.local.weapons = frame->clientdata.weapons;
 	cl.local.health = frame->clientdata.health;
 
-	// Slayer3D: health-edge fallback DISABLED — it only detects own death,
-	// not kills by the local player. Kept as comment for reference.
-	// Slayer_OnHealthUpdate( cl.local.health );
+	// Slayer3D: feed health to scoreboard for HP bar display
+	Slayer_OnHealthUpdate( cl.local.health );
 }
 
 /*
