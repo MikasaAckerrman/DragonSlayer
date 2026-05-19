@@ -33,6 +33,8 @@ static CVAR_DEFINE_AUTO( slayer_cam_yaw,     "0",   FCVAR_ARCHIVE, "Slayer3D fre
 // ===========================================================================
 
 CVAR_DEFINE_AUTO( slayer_chat_color, "", FCVAR_ARCHIVE, "Slayer3D: chat message body color R G B (empty = disabled)" );
+CVAR_DEFINE_AUTO( slayer_chat_color_t, "", FCVAR_ARCHIVE, "Slayer3D: Terrorist name color R G B (empty = default)" );
+CVAR_DEFINE_AUTO( slayer_chat_color_ct, "", FCVAR_ARCHIVE, "Slayer3D: CT name color R G B (empty = default)" );
 
 // ===========================================================================
 // Cvars - Kill-sound
@@ -105,6 +107,8 @@ void V_InitSlayerCvars( void )
 
 	// Chat color
 	Cvar_RegisterVariable( &slayer_chat_color );
+	Cvar_RegisterVariable( &slayer_chat_color_t );
+	Cvar_RegisterVariable( &slayer_chat_color_ct );
 	Cvar_RegisterVariable( &slayer_killsound_headshot );
 	Cvar_RegisterVariable( &slayer_killsound_teamkill );
 	Cvar_RegisterVariable( &slayer_killsound_volume );
