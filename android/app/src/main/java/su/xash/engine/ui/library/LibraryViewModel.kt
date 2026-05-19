@@ -39,7 +39,8 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 			withContext(Dispatchers.IO) {
 				val rootPath = appPreferences.getString("game_path", null)
 					?: if (BuildConfig.USE_SCOPED_STORAGE) {
-						getApplication<Application>().getExternalFilesDir(null)?.absolutePath + "/xash"
+						(getApplication<Application>().getExternalFilesDir(null)?.absolutePath
+							?: getApplication<Application>().filesDir.absolutePath) + "/xash"
 					} else {
 						Environment.getExternalStorageDirectory().absolutePath + "/xash"
 					}
