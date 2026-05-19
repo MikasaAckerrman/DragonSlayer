@@ -21,6 +21,7 @@ extensions.configure<ApplicationExtension> {
 		targetSdk = 35
 
 		buildConfigField("String", "GIT_HASH", "\"${getGitHash()}\"")
+		buildConfigField("boolean", "USE_SCOPED_STORAGE", "true")
 
 		externalNativeBuild {
 			val engineRoot = projectDir.parentFile.parent
@@ -128,19 +129,6 @@ extensions.configure<ApplicationExtension> {
 			applicationIdSuffix = ".test"
 			buildConfigField("boolean", "ENABLE_AUTO_UPDATE", "true")
 			signingConfig = signingConfigs.getByName("androidDebugKey")
-		}
-	}
-
-	flavorDimensions += "storage"
-	productFlavors {
-		create("scoped") {
-			dimension = "storage"
-			buildConfigField("boolean", "USE_SCOPED_STORAGE", "true")
-		}
-		create("legacy") {
-			dimension = "storage"
-			buildConfigField("boolean", "USE_SCOPED_STORAGE", "false")
-			applicationIdSuffix = ".legacy"
 		}
 	}
 }
