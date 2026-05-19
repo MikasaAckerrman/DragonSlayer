@@ -1807,6 +1807,7 @@ static qboolean Touch_ButtonPress( touchbuttonlist_t *list, touchEventType type,
 					touch.precision = true;
 
 				result = true;
+				break; // topmost button handled, prevent passthrough to buttons underneath
 			}
 			else if( button->type == touch_wheel )
 			{
@@ -1834,6 +1835,7 @@ static qboolean Touch_ButtonPress( touchbuttonlist_t *list, touchEventType type,
 					touch.precision = true;
 
 				result = true;
+				break; // topmost button handled, prevent passthrough to buttons underneath
 			}
 			// initialize motion when player touched motion zone
 			else if( button->type == touch_move || button->type == touch_joy || button->type == touch_dpad )
@@ -2097,6 +2099,8 @@ int IN_TouchEvent( touchEventType type, int fingerID, float x, float y, float dx
 			dy = temp;
 	}
 
+	// ensure touch config is loaded before processing events
+	Touch_InitConfig();
 
 //	Con_Printf("%f %f\n", TO_SCRN_X(x), TO_SCRN_Y(y));
 	// simulate menu mouse click
