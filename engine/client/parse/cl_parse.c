@@ -2350,6 +2350,8 @@ void CL_ParseUserMessage( sizebuf_t *msg, int svc_num, connprotocol_t proto )
 		Slayer_OnScoreInfo( pbuf, iSize );
 	else if( !Q_strcmp( clgame.msg[i].name, "ScoreAttrib" ))
 		Slayer_OnScoreAttrib( pbuf, iSize );
+	else if( !Q_strcmp( clgame.msg[i].name, "HealthInfo" ))
+		Slayer_OnHealthInfo( pbuf, iSize );
 
 	if( cl_trace_messages.value )
 	{

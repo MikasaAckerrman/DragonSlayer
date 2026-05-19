@@ -267,6 +267,21 @@ void Slayer_OnScoreAttrib( const byte *pbuf, int iSize )
 	slayer_scores[slot - 1].flags = pbuf[1];
 }
 
+void Slayer_OnHealthInfo( const byte *pbuf, int iSize )
+{
+	int slot;
+
+	// HealthInfo format (ReGameDLL): byte slot(1-based), byte health
+	if( !pbuf || iSize < 2 )
+		return;
+
+	slot = pbuf[0];
+	if( slot < 1 || slot > MAX_CLIENTS )
+		return;
+
+	slayer_scores[slot - 1].health = pbuf[1];
+}
+
 // ===========================================================================
 // Drawing helpers
 // ===========================================================================
@@ -604,6 +619,36 @@ void Slayer_Scoreboard_Draw( void )
 		}
 
 		Con_DrawString( col_name_x, cur_y + 2, name, name_color );
+
+		// HP display after player name (like CS 1.6 PC)
+		{
+			int hp = 0;
+
+			// For local player: always read from cl.local.health
+			if( pidx == cl.playernum )
+			{
+				hp = cl.local.health;
+				slayer_scores[pidx].health = hp;
+			}
+			else
+			{
+				hp = slayer_scores[pidx].health;
+			}
+
+			if( hp > 0 )
+			{
+				int name_w, name_h;
+				char hp_buf[16];
+				rgba_t hp_color;
+
+				Con_DrawStringLen( name, &name_w, &name_h );
+				Q_snprintf( hp_buf, sizeof( hp_buf ), "(%d)", hp );
+
+				// Slightly dimmer than name color
+				MakeRGBA( hp_color, name_color[0] * 180 / 255, name_color[1] * 180 / 255, name_color[2] * 180 / 255, name_color[3] * 180 / 255 );
+				Con_DrawString( col_name_x + name_w + 6, cur_y + 2, hp_buf, hp_color );
+			}
+		}
 
 		// Frags
 		{

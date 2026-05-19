@@ -44,4 +44,10 @@ void Slayer_OnScoreAttrib( const byte *pbuf, int iSize );
 // Stores HP for the local/spectated player row in the scoreboard.
 void Slayer_OnHealthUpdate( int hp );
 
+// Hook for server-sent "HealthInfo" user message.
+// Some servers (ReGameDLL) broadcast per-player HP this way.
+//   pbuf  - raw payload bytes (byte slot, byte health)
+//   iSize - payload length
+void Slayer_OnHealthInfo( const byte *pbuf, int iSize );
+
 #endif // CL_SCOREBOARD_SLAYER_H
