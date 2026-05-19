@@ -1847,6 +1847,7 @@ static qboolean Touch_ButtonPress( touchbuttonlist_t *list, touchEventType type,
 					touch.precision = true;
 
 				result = true;
+				break; // wheel claims exclusive finger control
 			}
 			// initialize motion when player touched motion zone
 			else if( button->type == touch_move || button->type == touch_joy || button->type == touch_dpad )
