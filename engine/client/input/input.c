@@ -622,6 +622,9 @@ void IN_EngineAppendMove( float frametime, usercmd_t *cmd, qboolean active )
 				VectorCopy( cmd->viewangles, cl.viewangles );
 			}
 		}
+
+		// Slayer3D: check for RMB snap when free-look camera is active
+		V_SlayerCamSnapCheck( cmd );
 	}
 }
 

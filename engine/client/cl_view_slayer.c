@@ -27,6 +27,8 @@ static CVAR_DEFINE_AUTO( slayer_cam_clip,    "1",   FCVAR_ARCHIVE, "Slayer3D thi
 static CVAR_DEFINE_AUTO( slayer_cam_free,    "0",   FCVAR_ARCHIVE, "Slayer3D third-person free look" );
 static CVAR_DEFINE_AUTO( slayer_cam_pitch,   "0",   FCVAR_ARCHIVE, "Slayer3D free-look camera pitch" );
 static CVAR_DEFINE_AUTO( slayer_cam_yaw,     "0",   FCVAR_ARCHIVE, "Slayer3D free-look camera yaw" );
+static CVAR_DEFINE_AUTO( slayer_cam_snap,    "1",   FCVAR_ARCHIVE, "Slayer3D: snap player yaw to camera on RMB when cam_free is active" );
+static CVAR_DEFINE_AUTO( slayer_cam_snap_cd, "0.15", FCVAR_ARCHIVE, "Slayer3D: cooldown in seconds between cam snaps" );
 
 // ===========================================================================
 // Cvars - Chat color
@@ -101,6 +103,8 @@ void V_InitSlayerCvars( void )
 	Cvar_RegisterVariable( &slayer_cam_free );
 	Cvar_RegisterVariable( &slayer_cam_pitch );
 	Cvar_RegisterVariable( &slayer_cam_yaw );
+	Cvar_RegisterVariable( &slayer_cam_snap );
+	Cvar_RegisterVariable( &slayer_cam_snap_cd );
 
 	// Kill-sound
 	Cvar_RegisterVariable( &slayer_killsound );
@@ -148,6 +152,34 @@ void V_SlayerCamLook( float yaw_delta, float pitch_delta )
 	// Apply pitch (clamped to -89..89)
 	p = bound( -89.0f, slayer_cam_pitch.value + pitch_delta, 89.0f );
 	Cvar_SetValue( "slayer_cam_pitch", p );
+}
+
+void V_SlayerCamSnapCheck( usercmd_t *cmd )
+{
+	static double last_snap_time = 0.0;
+	double cd;
+
+	// Feature must be enabled and free-look must be active
+	if( slayer_cam_snap.value == 0.0f || !V_IsSlayerCamFree() )
+		return;
+
+	// Only snap when +attack2 (RMB) is held
+	if( !( cmd->buttons & IN_ATTACK2 ))
+		return;
+
+	// Enforce cooldown
+	cd = (double)slayer_cam_snap_cd.value;
+	if( cd < 0.0 ) cd = 0.0;
+	if( host.realtime - last_snap_time < cd )
+		return;
+
+	last_snap_time = host.realtime;
+
+	// Snap player yaw (and pitch) to match camera
+	cl.viewangles[YAW] = slayer_cam_yaw.value;
+	cl.viewangles[PITCH] = slayer_cam_pitch.value;
+	cmd->viewangles[YAW] = slayer_cam_yaw.value;
+	cmd->viewangles[PITCH] = slayer_cam_pitch.value;
 }
 
 void V_ApplySlayerThirdPerson( ref_viewpass_t *rvp )
