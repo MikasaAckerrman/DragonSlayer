@@ -27,7 +27,7 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_text_color, "255 255 255 255", FCVAR_
 static CVAR_DEFINE_AUTO( slayer_scoreboard_ct_color, "120 180 255", FCVAR_ARCHIVE, "Slayer3D: CT team RGB" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_t_color, "255 100 80", FCVAR_ARCHIVE, "Slayer3D: T team RGB" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_opacity, "220", FCVAR_ARCHIVE, "Slayer3D: overall scoreboard opacity (0-255)" );
-static CVAR_DEFINE_AUTO( slayer_steam_apikey, "", FCVAR_ARCHIVE | FCVAR_PROTECTED, "Slayer3D: Steam Web API key (for future avatar use)" );
+static CVAR_DEFINE_AUTO( slayer_steam_apikey, "", FCVAR_PROTECTED, "Slayer3D: Steam Web API key (for future avatar use)" );
 
 // ===========================================================================
 // Types
@@ -64,6 +64,16 @@ static slayer_score_t  slayer_scores[MAX_CLIENTS];
 static slayer_avatar_t slayer_avatars[SLAYER_MAX_AVATARS];
 static int             slayer_avatar_count = 0;
 static qboolean        slayer_scoreboard_active = false;
+
+// Cached parsed cvar colors (re-parsed only when cvar string changes)
+static char   cached_bg_str[64] = "";
+static char   cached_text_str[64] = "";
+static char   cached_ct_str[64] = "";
+static char   cached_t_str[64] = "";
+static rgba_t cached_color_bg;
+static rgba_t cached_color_text;
+static rgba_t cached_color_ct;
+static rgba_t cached_color_t;
 
 // ===========================================================================
 // Cvar color parsing helper
@@ -139,9 +149,17 @@ static int Slayer_LoadAvatarFromFile( const char *steamid )
 {
 	char path[MAX_QPATH];
 	int  texnum;
+	const char *p;
 
 	if( !steamid || steamid[0] == '\0' )
 		return 0;
+
+	// Validate steamid contains only alphanumeric characters to prevent path traversal
+	for( p = steamid; *p; p++ )
+	{
+		if( !( ( *p >= '0' && *p <= '9' ) || ( *p >= 'a' && *p <= 'z' ) || ( *p >= 'A' && *p <= 'Z' ) ) )
+			return 0;
+	}
 
 	// Check if already cached
 	texnum = Slayer_FindAvatarTexture( steamid );
@@ -189,6 +207,8 @@ void Slayer_Scoreboard_Init( void )
 void Slayer_Scoreboard_Reset( void )
 {
 	memset( slayer_scores, 0, sizeof( slayer_scores ) );
+	memset( slayer_avatars, 0, sizeof( slayer_avatars ) );
+	slayer_avatar_count = 0;
 	slayer_scoreboard_active = false;
 }
 
@@ -348,12 +368,33 @@ void Slayer_Scoreboard_Draw( void )
 
 	row_h = font->charHeight + 8;
 
-	// Parse cvar colors
-	Slayer_ParseColorString( slayer_scoreboard_bg_color.string, color_bg );
-	Slayer_ParseColorString( slayer_scoreboard_text_color.string, color_text );
-	Slayer_ParseColorString( slayer_scoreboard_ct_color.string, color_ct );
+	// Use cached cvar colors (re-parsed only when cvar string changes)
+	if( Q_strcmp( cached_bg_str, slayer_scoreboard_bg_color.string ) )
+	{
+		Q_strncpy( cached_bg_str, slayer_scoreboard_bg_color.string, sizeof( cached_bg_str ) );
+		Slayer_ParseColorString( cached_bg_str, cached_color_bg );
+	}
+	if( Q_strcmp( cached_text_str, slayer_scoreboard_text_color.string ) )
+	{
+		Q_strncpy( cached_text_str, slayer_scoreboard_text_color.string, sizeof( cached_text_str ) );
+		Slayer_ParseColorString( cached_text_str, cached_color_text );
+	}
+	if( Q_strcmp( cached_ct_str, slayer_scoreboard_ct_color.string ) )
+	{
+		Q_strncpy( cached_ct_str, slayer_scoreboard_ct_color.string, sizeof( cached_ct_str ) );
+		Slayer_ParseColorString( cached_ct_str, cached_color_ct );
+	}
+	if( Q_strcmp( cached_t_str, slayer_scoreboard_t_color.string ) )
+	{
+		Q_strncpy( cached_t_str, slayer_scoreboard_t_color.string, sizeof( cached_t_str ) );
+		Slayer_ParseColorString( cached_t_str, cached_color_t );
+	}
+
+	memcpy( color_bg, cached_color_bg, sizeof( rgba_t ) );
+	memcpy( color_text, cached_color_text, sizeof( rgba_t ) );
+	memcpy( color_ct, cached_color_ct, sizeof( rgba_t ) );
 	color_ct[3] = 255;
-	Slayer_ParseColorString( slayer_scoreboard_t_color.string, color_t );
+	memcpy( color_t, cached_color_t, sizeof( rgba_t ) );
 	color_t[3] = 255;
 	MakeRGBA( color_spec, 180, 180, 180, 255 );
 	MakeRGBA( color_header, color_text[0] * 200 / 255, color_text[1] * 200 / 255, color_text[2] * 200 / 255, 255 );
