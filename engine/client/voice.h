@@ -49,6 +49,7 @@ typedef struct OpusDecoder OpusDecoder;
 #define GS_MAX_DECOMPRESSED_SAMPLES 32768
 #define GS_DEFAULT_SAMPLE_RATE      24000
 #define GS_DEFAULT_FRAME_SIZE       480
+#define GS_SILK_SAMPLE_RATE         16000
 
 // VPC (Voice Packet Control) types
 enum gs_vpc_type
@@ -97,6 +98,9 @@ typedef struct voice_state_s
 
 	OpusEncoder *gs_encoder;
 	OpusDecoder *gs_decoders[MAX_CLIENTS];
+
+	// SILK decoder state (for GS_VPC_VDATA_SILK)
+	void *silk_decoders[MAX_CLIENTS];
 
 	// audio info
 	uint width;
