@@ -29,6 +29,12 @@ static CVAR_DEFINE_AUTO( slayer_cam_pitch,   "0",   FCVAR_ARCHIVE, "Slayer3D fre
 static CVAR_DEFINE_AUTO( slayer_cam_yaw,     "0",   FCVAR_ARCHIVE, "Slayer3D free-look camera yaw" );
 
 // ===========================================================================
+// Cvars - Chat color
+// ===========================================================================
+
+CVAR_DEFINE_AUTO( slayer_chat_color, "", FCVAR_ARCHIVE, "Slayer3D: chat message body color R G B (empty = disabled)" );
+
+// ===========================================================================
 // Cvars - Kill-sound
 // ===========================================================================
 
@@ -96,6 +102,9 @@ void V_InitSlayerCvars( void )
 
 	// Kill-sound
 	Cvar_RegisterVariable( &slayer_killsound );
+
+	// Chat color
+	Cvar_RegisterVariable( &slayer_chat_color );
 	Cvar_RegisterVariable( &slayer_killsound_headshot );
 	Cvar_RegisterVariable( &slayer_killsound_teamkill );
 	Cvar_RegisterVariable( &slayer_killsound_volume );
