@@ -154,31 +154,49 @@ void V_SlayerCamLook( float yaw_delta, float pitch_delta )
 	Cvar_SetValue( "slayer_cam_pitch", p );
 }
 
+// File-scope statics for snap state, reset in Slayer_ResetMatchState()
+static double    slayer_snap_last_time = 0.0;
+static qboolean  slayer_snap_last_attack2 = false;
+
 void V_SlayerCamSnapCheck( usercmd_t *cmd )
 {
-	static double last_snap_time = 0.0;
+	qboolean attack2_now;
 	double cd;
+	float yaw;
 
 	// Feature must be enabled and free-look must be active
 	if( slayer_cam_snap.value == 0.0f || !V_IsSlayerCamFree() )
+	{
+		slayer_snap_last_attack2 = ( cmd->buttons & IN_ATTACK2 ) != 0;
 		return;
+	}
 
-	// Only snap when +attack2 (RMB) is held
-	if( !( cmd->buttons & IN_ATTACK2 ))
+	attack2_now = ( cmd->buttons & IN_ATTACK2 ) != 0;
+
+	// Only snap on the rising edge (button-down transition)
+	if( !attack2_now || slayer_snap_last_attack2 )
+	{
+		slayer_snap_last_attack2 = attack2_now;
 		return;
+	}
 
-	// Enforce cooldown
+	slayer_snap_last_attack2 = attack2_now;
+
+	// Enforce cooldown as a safety net for rapid clicks
 	cd = (double)slayer_cam_snap_cd.value;
 	if( cd < 0.0 ) cd = 0.0;
-	if( host.realtime - last_snap_time < cd )
+	if( host.realtime - slayer_snap_last_time < cd )
 		return;
 
-	last_snap_time = host.realtime;
+	slayer_snap_last_time = host.realtime;
+
+	// Normalize yaw to 0..360 before writing into viewangles
+	yaw = anglemod( slayer_cam_yaw.value );
 
 	// Snap player yaw (and pitch) to match camera
-	cl.viewangles[YAW] = slayer_cam_yaw.value;
+	cl.viewangles[YAW] = yaw;
 	cl.viewangles[PITCH] = slayer_cam_pitch.value;
-	cmd->viewangles[YAW] = slayer_cam_yaw.value;
+	cmd->viewangles[YAW] = yaw;
 	cmd->viewangles[PITCH] = slayer_cam_pitch.value;
 }
 
@@ -276,6 +294,10 @@ static char slayer_player_team[MAX_CLIENTS + 1][SLAYER_TEAM_LEN];
 void Slayer_ResetMatchState( void )
 {
 	memset( slayer_player_team, 0, sizeof( slayer_player_team ));
+
+	// Reset snap state so stale timestamps/button state don't persist
+	slayer_snap_last_time = 0.0;
+	slayer_snap_last_attack2 = false;
 }
 
 // ===========================================================================
