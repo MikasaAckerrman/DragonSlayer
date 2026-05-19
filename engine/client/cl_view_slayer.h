@@ -24,6 +24,8 @@ GNU General Public License for more details.
 // ---------------------------------------------------------------------------
 
 extern convar_t slayer_chat_color;
+extern convar_t slayer_chat_color_t;
+extern convar_t slayer_chat_color_ct;
 
 // ---------------------------------------------------------------------------
 // Third-person camera

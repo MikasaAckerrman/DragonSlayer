@@ -1985,19 +1985,43 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 	Vector4Copy( clgame.ds.textColor, color );
 	Vector4Set( clgame.ds.textColor, 255, 255, 255, 255 );
 
-	// Slayer3D: apply chat_color to message body text.
-	// Game DLL calls this function separately for name and message.
-	// Name has team color (e.g. 255,63,63 for T-red, low green).
-	// Message body has default color (e.g. 255,178,0 - high green, low blue).
-	// Rule: override color when green > 100 and blue < 100 (orange/yellow body).
-	if( slayer_chat_color.string[0] != '\0'
-		&& sscanf( slayer_chat_color.string, "%i %i %i", &r, &g, &b ) == 3
-		&& color[1] > 100 && color[2] < 100 )
+	// Slayer3D: override chat colors based on context.
+	// Game DLL calls this separately for name (team color) and message (default color).
+	if( color[1] > 100 && color[2] < 100 )
 	{
-		color[0] = (byte)bound( 0, r, 255 );
-		color[1] = (byte)bound( 0, g, 255 );
-		color[2] = (byte)bound( 0, b, 255 );
-		color[3] = 255;
+		// Message body (orange/yellow default) - apply chat_color
+		if( slayer_chat_color.string[0] != '\0'
+			&& sscanf( slayer_chat_color.string, "%i %i %i", &r, &g, &b ) == 3 )
+		{
+			color[0] = (byte)bound( 0, r, 255 );
+			color[1] = (byte)bound( 0, g, 255 );
+			color[2] = (byte)bound( 0, b, 255 );
+			color[3] = 255;
+		}
+	}
+	else if( color[1] < 100 && color[2] < 100 )
+	{
+		// T name (reddish: high R, low G, low B) - apply chat_color_t
+		if( slayer_chat_color_t.string[0] != '\0'
+			&& sscanf( slayer_chat_color_t.string, "%i %i %i", &r, &g, &b ) == 3 )
+		{
+			color[0] = (byte)bound( 0, r, 255 );
+			color[1] = (byte)bound( 0, g, 255 );
+			color[2] = (byte)bound( 0, b, 255 );
+			color[3] = 255;
+		}
+	}
+	else if( color[2] > 100 )
+	{
+		// CT name (blueish: high B) - apply chat_color_ct
+		if( slayer_chat_color_ct.string[0] != '\0'
+			&& sscanf( slayer_chat_color_ct.string, "%i %i %i", &r, &g, &b ) == 3 )
+		{
+			color[0] = (byte)bound( 0, r, 255 );
+			color[1] = (byte)bound( 0, g, 255 );
+			color[2] = (byte)bound( 0, b, 255 );
+			color[3] = 255;
+		}
 	}
 
 	return x + CL_DrawString( x, y, string, color, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD | FONT_DRAW_FORCECOL );
