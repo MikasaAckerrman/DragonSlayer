@@ -10,6 +10,8 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import android.os.Environment
+import su.xash.engine.BuildConfig
 import su.xash.engine.model.Game
 import su.xash.engine.util.Nomedia
 import java.io.File
@@ -36,7 +38,11 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 		viewModelScope.launch {
 			withContext(Dispatchers.IO) {
 				val rootPath = appPreferences.getString("game_path", null)
-					?: (getApplication<Application>().getExternalFilesDir(null)?.absolutePath + "/xash")
+					?: if (BuildConfig.USE_SCOPED_STORAGE) {
+						getApplication<Application>().getExternalFilesDir(null)?.absolutePath + "/xash"
+					} else {
+						Environment.getExternalStorageDirectory().absolutePath + "/xash"
+					}
 				val root = File(rootPath)
 
 				Nomedia.ensureNomedia(root)

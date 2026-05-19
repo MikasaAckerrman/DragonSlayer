@@ -125,6 +125,19 @@ extensions.configure<ApplicationExtension> {
 			signingConfig = signingConfigs.getByName("androidDebugKey")
 		}
 	}
+
+	flavorDimensions += "storage"
+	productFlavors {
+		create("scoped") {
+			dimension = "storage"
+			buildConfigField("boolean", "USE_SCOPED_STORAGE", "true")
+		}
+		create("legacy") {
+			dimension = "storage"
+			buildConfigField("boolean", "USE_SCOPED_STORAGE", "false")
+			applicationIdSuffix = ".legacy"
+		}
+	}
 }
 
 dependencies {
