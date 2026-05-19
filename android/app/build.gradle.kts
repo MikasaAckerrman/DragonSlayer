@@ -21,7 +21,6 @@ extensions.configure<ApplicationExtension> {
 		targetSdk = 35
 
 		buildConfigField("String", "GIT_HASH", "\"${getGitHash()}\"")
-		buildConfigField("boolean", "USE_SCOPED_STORAGE", "true")
 
 		externalNativeBuild {
 			val engineRoot = projectDir.parentFile.parent
