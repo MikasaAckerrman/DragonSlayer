@@ -164,17 +164,6 @@ void V_SlayerCamSnapCheck( usercmd_t *cmd )
 	double cd;
 	float yaw;
 
-	// DEBUG: log buttons once per second
-	{
-		static double dbg_time = 0.0;
-		if( host.realtime - dbg_time > 1.0 )
-		{
-			dbg_time = host.realtime;
-			Con_Printf( "[snapdbg] buttons=0x%X cam_free=%i snap=%g\n",
-				cmd->buttons, (int)V_IsSlayerCamFree(), slayer_cam_snap.value );
-		}
-	}
-
 	// Feature must be enabled and free-look must be active
 	if( slayer_cam_snap.value == 0.0f || !V_IsSlayerCamFree() )
 	{
