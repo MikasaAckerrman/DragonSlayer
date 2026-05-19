@@ -95,6 +95,9 @@ void Slayer_OnScoreInfo( const byte *pbuf, int iSize )
 	if( !pbuf || iSize < 9 )
 		return;
 
+	if( iSize != 9 )
+		Con_DPrintf( S_WARN "Slayer_OnScoreInfo: unexpected iSize %d (expected 9)\n", iSize );
+
 	slot = pbuf[0];
 	if( slot < 1 || slot > MAX_CLIENTS )
 		return;
@@ -186,10 +189,10 @@ void Slayer_Scoreboard_Draw( void )
 	int          text_w, text_h;
 	int          cur_y;
 	int          ct_frags_sum = 0, t_frags_sum = 0;
-	int          drawn_ct_header = 0, drawn_t_header = 0;
+	int          drawn_ct_header = 0, drawn_t_header = 0, drawn_spec_header = 0;
 	const char  *hostname;
 	char         buf[128];
-	rgba_t       color_white, color_ct, color_t, color_header;
+	rgba_t       color_white, color_ct, color_t, color_spec, color_header;
 	cl_font_t   *font;
 
 	if( !slayer_scoreboard_active )
@@ -214,10 +217,13 @@ void Slayer_Scoreboard_Draw( void )
 
 	row_h = font->charHeight + 4;
 
-	// Count active players
+	// Count active players (must have a name and have received ScoreInfo)
 	for( i = 0; i < cl.maxclients && i < MAX_CLIENTS; i++ )
 	{
 		if( cl.players[i].name[0] == '\0' )
+			continue;
+
+		if( !slayer_scores[i].connected )
 			continue;
 
 		sorted[num_players].idx     = i;
@@ -280,6 +286,7 @@ void Slayer_Scoreboard_Draw( void )
 	MakeRGBA( color_white, 255, 255, 255, 255 );
 	MakeRGBA( color_ct, 120, 180, 255, 255 );
 	MakeRGBA( color_t, 255, 100, 80, 255 );
+	MakeRGBA( color_spec, 180, 180, 180, 255 );
 	MakeRGBA( color_header, 200, 200, 200, 255 );
 
 	header_h = row_h;
@@ -339,6 +346,15 @@ void Slayer_Scoreboard_Draw( void )
 				cur_y += 4;
 			Q_snprintf( buf, sizeof( buf ), "Terrorists  -  %d", t_frags_sum );
 			Con_DrawString( col_name_x, cur_y, buf, color_t );
+			cur_y += header_h;
+		}
+		else if( team != SLAYER_TEAM_CT && team != SLAYER_TEAM_T && !drawn_spec_header )
+		{
+			drawn_spec_header = 1;
+			// Add spacing before spectator section
+			if( drawn_ct_header || drawn_t_header )
+				cur_y += 4;
+			Con_DrawString( col_name_x, cur_y, "Spectators", color_spec );
 			cur_y += header_h;
 		}
 
