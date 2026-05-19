@@ -355,9 +355,9 @@ static int HTTP_FileSendRequest( httpfile_t *file )
 		if( file->bytes_sent >= file->query_length )
 		{
 			if( http_show_headers.value )
-				Con_Reportf( "HTTP: Request sent! (size %d data %s)\n", file->bytes_sent, file->buf );
+				Con_DPrintf( "HTTP: Request sent! (size %d data %s)\n", file->bytes_sent, file->buf );
 			else
-				Con_Reportf( "HTTP: Request sent!\n" );
+				Con_DPrintf( "HTTP: Request sent!\n" );
 			memset( file->buf, 0, sizeof( file->buf ));
 			file->pfn_process = HTTP_FileProcessStream;
 			return 1;
