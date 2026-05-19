@@ -16,6 +16,7 @@ GNU General Public License for more details.
 #include "common.h"
 #include "client.h"
 #include "cl_view_slayer.h"
+#include "cl_scoreboard_slayer.h"
 
 // ===========================================================================
 // Cvars - Third-person camera
@@ -163,6 +164,9 @@ void V_InitSlayerCvars( void )
 
 	// Initialize per-match state
 	Slayer_ResetMatchState();
+
+	// Scoreboard
+	Slayer_Scoreboard_Init();
 }
 
 // ===========================================================================
@@ -317,6 +321,9 @@ void Slayer_ResetMatchState( void )
 	slayer_prev_yaw = 0.0f;
 	slayer_prev_onground = 0;
 	slayer_yaw_initialized = 0;
+
+	// Clear scoreboard score data
+	Slayer_Scoreboard_Reset();
 }
 
 // ===========================================================================
