@@ -406,11 +406,25 @@ void Slayer_Scoreboard_Draw( void )
 	// Count active players (must have a name and have received ScoreInfo)
 	for( i = 0; i < cl.maxclients && i < MAX_CLIENTS; i++ )
 	{
+		// Clear stale connected flag when server has cleared the player name
 		if( cl.players[i].name[0] == '\0' )
+		{
+			slayer_scores[i].connected = 0;
 			continue;
+		}
 
 		if( !slayer_scores[i].connected )
-			continue;
+		{
+			// Force-include local player even without ScoreInfo
+			if( i == cl.playernum && cl.players[i].name[0] != '\0' )
+			{
+				slayer_scores[i].connected = 1;
+			}
+			else
+			{
+				continue;
+			}
+		}
 
 		sorted[num_players].idx     = i;
 		sorted[num_players].team_id = slayer_scores[i].team_id;
@@ -484,6 +498,8 @@ void Slayer_Scoreboard_Draw( void )
 	// Map name / round info line (below hostname)
 	{
 		const char *mapname = Info_ValueForKey( cl.serverinfo, "map" );
+		if( !mapname || mapname[0] == '\0' )
+			mapname = clgame.mapname;
 		if( mapname && mapname[0] != '\0' )
 		{
 			rgba_t color_map;
@@ -522,7 +538,6 @@ void Slayer_Scoreboard_Draw( void )
 		int     team = sorted[row].team_id;
 		rgba_t  name_color;
 		const char *name;
-		int     icon_size;
 		byte    row_alpha;
 
 		// Stop drawing if we exceed the board
@@ -578,35 +593,6 @@ void Slayer_Scoreboard_Draw( void )
 			Slayer_DrawRect( board_x + 2, cur_y, board_w - 4, row_h, 255, 255, 255, 35 );
 		}
 
-		// Avatar icon (colored square fallback or loaded texture)
-		icon_size = row_h - 4;
-		{
-			int avatar_tex = 0;
-			// player_info_t has no steamid field, so we cannot do file-based
-			// avatar loading yet. Draw colored team fallback icons.
-			(void)avatar_tex;
-
-			{
-				byte icon_r = 128, icon_g = 128, icon_b = 128;
-
-				if( team == SLAYER_TEAM_CT )
-				{
-					icon_r = color_ct[0];
-					icon_g = color_ct[1];
-					icon_b = color_ct[2];
-				}
-				else if( team == SLAYER_TEAM_T )
-				{
-					icon_r = color_t[0];
-					icon_g = color_t[1];
-					icon_b = color_t[2];
-				}
-
-				Slayer_DrawRect( col_name_x, cur_y + 2, icon_size, icon_size,
-					icon_r, icon_g, icon_b, 200 );
-			}
-		}
-
 		// Player name
 		name = cl.players[pidx].name;
 
@@ -627,7 +613,7 @@ void Slayer_Scoreboard_Draw( void )
 			row_alpha = 128;
 		}
 
-		Con_DrawString( col_name_x + icon_size + 4, cur_y + 2, name, name_color );
+		Con_DrawString( col_name_x, cur_y + 2, name, name_color );
 
 		// Frags
 		{
@@ -646,9 +632,9 @@ void Slayer_Scoreboard_Draw( void )
 		}
 
 		// HP bar for local/spectated player
-		if( pidx == cl.playernum && slayer_scores[pidx].health > 0 )
+		if( pidx == cl.playernum && cl.local.health > 0 )
 		{
-			int hp = slayer_scores[pidx].health;
+			int hp = cl.local.health;
 			int bar_max_w = (int)( board_w * 0.30f );
 			int bar_w, bar_h, bar_x, bar_y;
 			byte hp_r, hp_g, hp_b;
@@ -656,7 +642,7 @@ void Slayer_Scoreboard_Draw( void )
 			if( hp > 100 ) hp = 100;
 			bar_w = bar_max_w * hp / 100;
 			bar_h = 3;
-			bar_x = col_name_x + icon_size + 4;
+			bar_x = col_name_x;
 			bar_y = cur_y + row_h - bar_h - 1;
 
 			// Color: green (>60), yellow (30-60), red (<30)
