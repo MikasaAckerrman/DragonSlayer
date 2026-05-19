@@ -7,7 +7,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.navigation.fragment.findNavController
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
-import su.xash.engine.BuildConfig
 import su.xash.engine.R
 import java.io.File
 
@@ -68,12 +67,8 @@ class AppSettingsPreferenceFragment() : PreferenceFragmentCompat() {
 	}
 
 	private fun getDefaultGamePath(): String {
-		return if (BuildConfig.USE_SCOPED_STORAGE) {
-			val extDir = requireContext().getExternalFilesDir(null)
-			(extDir?.absolutePath ?: requireContext().filesDir.absolutePath) + "/xash"
-		} else {
-			android.os.Environment.getExternalStorageDirectory().absolutePath + "/xash"
-		}
+		val extDir = requireContext().getExternalFilesDir(null)
+		return (extDir?.absolutePath ?: requireContext().filesDir.absolutePath) + "/xash"
 	}
 
 	private fun convertTreeUriToPath(uri: Uri): String? {
