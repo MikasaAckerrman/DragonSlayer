@@ -50,6 +50,10 @@ qboolean V_IsSlayerCamFree( void );
 // rotating the player). Called from IN_EngineAppendMove when cam_free is on.
 void V_SlayerCamLook( float yaw_delta, float pitch_delta );
 
+// Check if RMB is pressed during free-look and snap player angles
+// to match the camera orientation. Called from IN_EngineAppendMove.
+void V_SlayerCamSnapCheck( struct usercmd_s *cmd );
+
 // ---------------------------------------------------------------------------
 // Kill-sound
 // ---------------------------------------------------------------------------
