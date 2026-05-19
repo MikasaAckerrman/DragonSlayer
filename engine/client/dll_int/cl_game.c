@@ -2018,7 +2018,7 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 		string[name_len] = saved;
 
 		Vector4Set( chat_clr, (byte)r, (byte)g, (byte)b, 255 );
-		msg_width = CL_DrawString( x + name_width, y, string + name_len, chat_clr, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD );
+		msg_width = CL_DrawString( x + name_width, y, string + name_len, chat_clr, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD | FONT_DRAW_FORCECOL );
 
 		return x + name_width + msg_width;
 	}
