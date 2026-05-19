@@ -39,6 +39,14 @@ CVAR_DEFINE_AUTO( slayer_chat_color_t, "", FCVAR_ARCHIVE, "Slayer3D: Terrorist n
 CVAR_DEFINE_AUTO( slayer_chat_color_ct, "", FCVAR_ARCHIVE, "Slayer3D: CT name color R G B (empty = default)" );
 
 // ===========================================================================
+// Cvars - Movement tweaks
+// ===========================================================================
+
+static CVAR_DEFINE_AUTO( slayer_ducktap,    "0", FCVAR_ARCHIVE, "Slayer3D: enable ducktap (rapid duck toggling for duckrun speed)" );
+static CVAR_DEFINE_AUTO( slayer_autostrafe, "0", FCVAR_ARCHIVE, "Slayer3D: enable automatic air-strafing based on yaw delta" );
+static CVAR_DEFINE_AUTO( slayer_autojump,   "0", FCVAR_ARCHIVE, "Slayer3D: enable auto-bhop with ladder safety and anti-bhop bypass" );
+
+// ===========================================================================
 // Cvars - Kill-sound
 // ===========================================================================
 
@@ -56,6 +64,22 @@ static CVAR_DEFINE_AUTO( slayer_killsound_volume,   "1.0",                  FCVA
 #define SLAYER_CAM_MAX_OFS  256.0f
 // Distance kept from a contact surface so the camera does not z-fight.
 #define SLAYER_CAM_PADDING  4.0f
+
+// ===========================================================================
+// +ducktap / -ducktap command pair
+// ===========================================================================
+
+static int slayer_ducktap_active = 0;
+
+static void Cmd_DucktapDown_f( void )
+{
+	slayer_ducktap_active = 1;
+}
+
+static void Cmd_DucktapUp_f( void )
+{
+	slayer_ducktap_active = 0;
+}
 
 // ===========================================================================
 // Console commands for binding camera rotation keys
@@ -122,6 +146,15 @@ void V_InitSlayerCvars( void )
 		"rotate Slayer3D free-look camera by N degrees on yaw axis" );
 	Cmd_AddCommand( "slayer_campitch", Cmd_SlayerCamPitch_f,
 		"tilt Slayer3D free-look camera by N degrees on pitch axis" );
+
+	// Movement tweaks
+	Cvar_RegisterVariable( &slayer_ducktap );
+	Cvar_RegisterVariable( &slayer_autostrafe );
+	Cvar_RegisterVariable( &slayer_autojump );
+	Cmd_AddCommand( "+ducktap", Cmd_DucktapDown_f,
+		"begin rapid duck toggling (ducktap)" );
+	Cmd_AddCommand( "-ducktap", Cmd_DucktapUp_f,
+		"stop rapid duck toggling (ducktap)" );
 
 	// Initialize per-match state
 	Slayer_ResetMatchState();
@@ -411,4 +444,81 @@ qboolean Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 	// is fine to call without precache for a local UI-style sound).
 	S_StartLocalSound( snd, vol, false );
 	return true;
+}
+
+// ===========================================================================
+// Movement tweaks - ducktap, autostrafe, autojump
+// ===========================================================================
+
+void V_SlayerMovementTweaks( usercmd_t *cmd )
+{
+	static float prev_yaw = 0.0f;
+	static int   prev_onground = 0;
+	static int   yaw_initialized = 0;
+
+	// --- Ducktap ---
+	if( slayer_ducktap.value != 0.0f && slayer_ducktap_active )
+	{
+		if( host.framecount & 1 )
+			cmd->buttons &= ~IN_DUCK;
+		else
+			cmd->buttons |= IN_DUCK;
+	}
+
+	// --- Autostrafe ---
+	if( slayer_autostrafe.value != 0.0f && cl.local.onground == -1 )
+	{
+		float delta;
+
+		if( !yaw_initialized )
+		{
+			prev_yaw = cmd->viewangles[YAW];
+			yaw_initialized = 1;
+		}
+
+		delta = cmd->viewangles[YAW] - prev_yaw;
+
+		// Normalize to -180..180
+		if( delta > 180.0f )
+			delta -= 360.0f;
+		if( delta < -180.0f )
+			delta += 360.0f;
+
+		if( delta < -0.1f )
+		{
+			cmd->sidemove = -400.0f;
+			cmd->buttons |= IN_MOVELEFT;
+		}
+		else if( delta > 0.1f )
+		{
+			cmd->sidemove = 400.0f;
+			cmd->buttons |= IN_MOVERIGHT;
+		}
+	}
+
+	// Always update prev_yaw so delta is frame-to-frame
+	prev_yaw = cmd->viewangles[YAW];
+	yaw_initialized = 1;
+
+	// --- Autojump ---
+	if( slayer_autojump.value != 0.0f && ( cmd->buttons & IN_JUMP ))
+	{
+		// Ladder safety: do not auto-bhop on ladders (MOVETYPE_FLY)
+		if( clgame.pmove != NULL && clgame.pmove->movetype == MOVETYPE_FLY )
+		{
+			prev_onground = cl.local.onground;
+			return;
+		}
+
+		if( cl.local.onground >= 0 )
+		{
+			// Just landed: release IN_JUMP for one frame (anti-bhop bypass)
+			if( prev_onground == -1 )
+				cmd->buttons &= ~IN_JUMP;
+			else
+				cmd->buttons |= IN_JUMP;
+		}
+	}
+
+	prev_onground = cl.local.onground;
 }

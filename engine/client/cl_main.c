@@ -704,6 +704,9 @@ static void CL_CreateCmd( void )
 	// Slayer3D: check RMB snap after all input is processed
 	V_SlayerCamSnapCheck( cmd );
 
+	// Slayer3D: apply movement tweaks (ducktap, autostrafe, autojump)
+	V_SlayerMovementTweaks( cmd );
+
 	CL_PopPMStates();
 
 	if( !cls.demoplayback )
