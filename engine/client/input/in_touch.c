@@ -1769,6 +1769,17 @@ static void Touch_Motion( int fingerID, float x, float y, float dx, float dy )
 	}
 }
 
+static qboolean Touch_IsSlotMenuCommand( const char *cmd )
+{
+	// Detect "slot1" through "slot10"
+	if( !Q_strncmp( cmd, "slot", 4 ) && cmd[4] >= '0' && cmd[4] <= '9' )
+		return true;
+	// Detect "menuselect" commands
+	if( !Q_strncmp( cmd, "menuselect", 10 ) )
+		return true;
+	return false;
+}
+
 static qboolean Touch_ButtonPress( touchbuttonlist_t *list, touchEventType type, int fingerID, float x, float y )
 {
 	touch_button_t *button;
@@ -1807,7 +1818,8 @@ static qboolean Touch_ButtonPress( touchbuttonlist_t *list, touchEventType type,
 					touch.precision = true;
 
 				result = true;
-				break; // topmost button handled, prevent passthrough to buttons underneath
+				if( Touch_IsSlotMenuCommand( button->command ) )
+					break; // slot/menu button handled, prevent passthrough
 			}
 			else if( button->type == touch_wheel )
 			{
@@ -1835,7 +1847,6 @@ static qboolean Touch_ButtonPress( touchbuttonlist_t *list, touchEventType type,
 					touch.precision = true;
 
 				result = true;
-				break; // topmost button handled, prevent passthrough to buttons underneath
 			}
 			// initialize motion when player touched motion zone
 			else if( button->type == touch_move || button->type == touch_joy || button->type == touch_dpad )
