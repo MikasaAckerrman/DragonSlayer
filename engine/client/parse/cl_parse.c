@@ -15,6 +15,7 @@ GNU General Public License for more details.
 
 #include "common.h"
 #include "client.h"
+#include "cl_scoreboard_slayer.h"
 #include "mod_local.h"
 #include "net_encode.h"
 #include "cl_tent.h"
@@ -2346,6 +2347,10 @@ void CL_ParseUserMessage( sizebuf_t *msg, int svc_num, connprotocol_t proto )
 		Slayer_OnDeathMsg( pbuf, iSize );
 	else if( !Q_strcmp( clgame.msg[i].name, "TeamInfo" ))
 		Slayer_OnTeamInfo( pbuf, iSize );
+	else if( !Q_strcmp( clgame.msg[i].name, "ScoreInfo" ))
+		Slayer_OnScoreInfo( pbuf, iSize );
+	else if( !Q_strcmp( clgame.msg[i].name, "ScoreAttrib" ))
+		Slayer_OnScoreAttrib( pbuf, iSize );
 
 	if( cl_trace_messages.value )
 	{
