@@ -51,7 +51,7 @@ qboolean V_IsSlayerCamFree( void );
 void V_SlayerCamLook( float yaw_delta, float pitch_delta );
 
 // Check if RMB is pressed during free-look and snap player angles
-// to match the camera orientation. Called from IN_EngineAppendMove.
+// to match the camera orientation. Called from CL_CreateCmd.
 void V_SlayerCamSnapCheck( struct usercmd_s *cmd );
 
 // ---------------------------------------------------------------------------
