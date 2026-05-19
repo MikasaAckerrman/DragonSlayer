@@ -25,7 +25,12 @@ extensions.configure<ApplicationExtension> {
 		externalNativeBuild {
 			val engineRoot = projectDir.parentFile.parent
 
-			experimentalProperties["ninja.abiFilters"] = setOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+			val abiFilter = findProperty("slayer.abiFilter") as? String
+			if (abiFilter != null && abiFilter.isNotEmpty()) {
+				experimentalProperties["ninja.abiFilters"] = setOf(abiFilter)
+			} else {
+				experimentalProperties["ninja.abiFilters"] = setOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+			}
 			experimentalProperties["ninja.path"] = File(engineRoot, "wscript").path
 			experimentalProperties["ninja.configure"] = "run-python"
 			experimentalProperties["ninja.arguments"] = setOf(
