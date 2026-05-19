@@ -1981,60 +1981,26 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 	cl_font_t *font = Con_GetFont( con_fontsize.value );
 	rgba_t color;
 	int r, g, b;
-	const char *sep;
 
 	Vector4Copy( clgame.ds.textColor, color );
 	Vector4Set( clgame.ds.textColor, 255, 255, 255, 255 );
 
-	// DEBUG: dump hex of first bytes and color
+	// Slayer3D: apply chat_color to message body text.
+	// Game DLL calls this function separately for name and message.
+	// Name has team color (e.g. 255,63,63 for T-red, low green).
+	// Message body has default color (e.g. 255,178,0 - high green, low blue).
+	// Rule: override color when green > 100 and blue < 100 (orange/yellow body).
+	if( slayer_chat_color.string[0] != '\0'
+		&& sscanf( slayer_chat_color.string, "%i %i %i", &r, &g, &b ) == 3
+		&& color[1] > 100 && color[2] < 100 )
 	{
-		char hexbuf[128];
-		int i, len = Q_strlen( string );
-		if( len > 40 ) len = 40;
-		for( i = 0; i < len && i < 42; i++ )
-			Q_snprintf( hexbuf + i * 3, sizeof(hexbuf) - i * 3, "%02X ", (unsigned char)string[i] );
-		hexbuf[len * 3] = '\0';
-		Con_Printf( "[chatdbg] c=(%i,%i,%i) hex=[%s] str=\"%s\"\n", color[0], color[1], color[2], hexbuf, string );
+		color[0] = (byte)bound( 0, r, 255 );
+		color[1] = (byte)bound( 0, g, 255 );
+		color[2] = (byte)bound( 0, b, 255 );
+		color[3] = 255;
 	}
 
-	// Slayer3D: if chat_color is disabled, draw normally
-	if( slayer_chat_color.string[0] == '\0'
-		|| sscanf( slayer_chat_color.string, "%i %i %i", &r, &g, &b ) != 3 )
-	{
-		return x + CL_DrawString( x, y, string, color, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD );
-	}
-
-	r = bound( 0, r, 255 );
-	g = bound( 0, g, 255 );
-	b = bound( 0, b, 255 );
-
-	// Look for chat separator ": "
-	sep = Q_strstr( string, ": " );
-	if( !sep )
-	{
-		// Not a chat message, draw normally (preserve inline color codes)
-		return x + CL_DrawString( x, y, string, color, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD );
-	}
-
-	// Split: draw name with original colors, message body with chat_color
-	{
-		int name_len = (int)( sep - string ) + 2; // include ": "
-		int name_width, msg_width;
-		rgba_t chat_clr;
-		char saved;
-
-		// Draw name portion WITHOUT FORCECOL so inline color codes work
-		saved = string[name_len];
-		string[name_len] = '\0';
-		name_width = CL_DrawString( x, y, string, color, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD );
-		string[name_len] = saved;
-
-		// Draw message body WITH FORCECOL so chat_color is not overridden
-		Vector4Set( chat_clr, (byte)r, (byte)g, (byte)b, 255 );
-		msg_width = CL_DrawString( x + name_width, y, string + name_len, chat_clr, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD | FONT_DRAW_FORCECOL );
-
-		return x + name_width + msg_width;
-	}
+	return x + CL_DrawString( x, y, string, color, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD | FONT_DRAW_FORCECOL );
 }
 
 /*
