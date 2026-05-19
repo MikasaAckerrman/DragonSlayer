@@ -1985,6 +1985,9 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 	Vector4Copy( clgame.ds.textColor, color );
 	Vector4Set( clgame.ds.textColor, 255, 255, 255, 255 );
 
+	// DEBUG: log what game DLL passes to us
+	Con_Printf( "[chatdbg] color=(%i,%i,%i) str=\"%s\"\n", color[0], color[1], color[2], string );
+
 	// Slayer3D: apply chat_color to message body text only.
 	// The game DLL sets a team color for player names and a default
 	// (white/yellow) color for message body. We override only the latter.
