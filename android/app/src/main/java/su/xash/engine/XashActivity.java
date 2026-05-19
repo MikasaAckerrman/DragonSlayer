@@ -13,6 +13,7 @@ import android.view.WindowManager;
 
 import org.libsdl.app.SDLActivity;
 
+import su.xash.engine.BuildConfig;
 import su.xash.engine.util.AndroidBug5497Workaround;
 import su.xash.engine.util.CrashReports;
 
@@ -192,8 +193,13 @@ public class XashActivity extends SDLActivity {
 		if (basedir != null) {
 			nativeSetenv("XASH3D_BASEDIR", basedir);
 		} else {
-			File extDir = getExternalFilesDir(null);
-			String rootPath = (extDir != null ? extDir.getAbsolutePath() : getFilesDir().getAbsolutePath()) + "/xash";
+			String rootPath;
+			if (BuildConfig.USE_SCOPED_STORAGE) {
+				File extDir = getExternalFilesDir(null);
+				rootPath = (extDir != null ? extDir.getAbsolutePath() : getFilesDir().getAbsolutePath()) + "/xash";
+			} else {
+				rootPath = android.os.Environment.getExternalStorageDirectory().getAbsolutePath() + "/xash";
+			}
 			nativeSetenv("XASH3D_BASEDIR", rootPath);
 		}
 
