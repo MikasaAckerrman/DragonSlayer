@@ -1981,41 +1981,49 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 	cl_font_t *font = Con_GetFont( con_fontsize.value );
 	rgba_t color;
 	int r, g, b;
+	const char *sep;
 
 	Vector4Copy( clgame.ds.textColor, color );
 	Vector4Set( clgame.ds.textColor, 255, 255, 255, 255 );
 
-	// Slayer3D: apply chat_color to message body text only.
-	// Team colors for player names are "pure" single-channel dominant
-	// (red for T, blue for CT). Message body is orange/yellow/white.
-	// We preserve pure team colors and override everything else.
-	if( slayer_chat_color.string[0] != '\0'
-		&& sscanf( slayer_chat_color.string, "%i %i %i", &r, &g, &b ) == 3 )
+	// Slayer3D: if chat_color is disabled, draw normally
+	if( slayer_chat_color.string[0] == '\0'
+		|| sscanf( slayer_chat_color.string, "%i %i %i", &r, &g, &b ) != 3 )
 	{
-		qboolean is_team_color = false;
-
-		r = bound( 0, r, 255 );
-		g = bound( 0, g, 255 );
-		b = bound( 0, b, 255 );
-
-		// Detect pure team colors (one channel dominant, others near zero)
-		if( color[1] < 50 && color[2] < 50 && color[0] > 150 )
-			is_team_color = true; // pure red (Terrorist)
-		else if( color[0] < 50 && color[1] < 50 && color[2] > 150 )
-			is_team_color = true; // pure blue (CT)
-		else if( color[0] < 50 && color[2] < 50 && color[1] > 150 )
-			is_team_color = true; // pure green
-
-		if( !is_team_color )
-		{
-			color[0] = (byte)r;
-			color[1] = (byte)g;
-			color[2] = (byte)b;
-			color[3] = 255;
-		}
+		return x + CL_DrawString( x, y, string, color, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD );
 	}
 
-	return x + CL_DrawString( x, y, string, color, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD | FONT_DRAW_FORCECOL );
+	r = bound( 0, r, 255 );
+	g = bound( 0, g, 255 );
+	b = bound( 0, b, 255 );
+
+	// Look for chat separator ": "
+	sep = Q_strstr( string, ": " );
+	if( !sep )
+	{
+		// Not a chat message, draw normally (preserve inline color codes)
+		return x + CL_DrawString( x, y, string, color, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD );
+	}
+
+	// Split: draw name with original colors, message body with chat_color
+	{
+		int name_len = (int)( sep - string ) + 2; // include ": "
+		int name_width, msg_width;
+		rgba_t chat_clr;
+		char saved;
+
+		// Draw name portion WITHOUT FORCECOL so inline ^1/^2 color codes work
+		saved = string[name_len];
+		string[name_len] = '\0';
+		name_width = CL_DrawString( x, y, string, color, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD );
+		string[name_len] = saved;
+
+		// Draw message body WITH FORCECOL so chat_color is not overridden
+		Vector4Set( chat_clr, (byte)r, (byte)g, (byte)b, 255 );
+		msg_width = CL_DrawString( x + name_width, y, string + name_len, chat_clr, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD | FONT_DRAW_FORCECOL );
+
+		return x + name_width + msg_width;
+	}
 }
 
 /*
