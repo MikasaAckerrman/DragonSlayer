@@ -338,10 +338,11 @@ void Slayer_Scoreboard_Draw( void )
 	int          text_w, text_h;
 	int          cur_y;
 	int          ct_frags_sum = 0, t_frags_sum = 0;
+	int          ct_player_count = 0, t_player_count = 0;
 	int          drawn_ct_header = 0, drawn_t_header = 0, drawn_spec_header = 0;
 	const char  *hostname;
 	char         buf[128];
-	rgba_t       color_text, color_ct, color_t, color_spec, color_header;
+	rgba_t       color_text, color_ct, color_t, color_spec;
 	rgba_t       color_bg;
 	int          global_opacity;
 	cl_font_t   *font;
@@ -366,7 +367,7 @@ void Slayer_Scoreboard_Draw( void )
 	if( !font )
 		return;
 
-	row_h = font->charHeight + 8;
+	row_h = font->charHeight + 4;
 
 	// Use cached cvar colors (re-parsed only when cvar string changes)
 	if( Q_strcmp( cached_bg_str, slayer_scoreboard_bg_color.string ) )
@@ -397,7 +398,6 @@ void Slayer_Scoreboard_Draw( void )
 	memcpy( color_t, cached_color_t, sizeof( rgba_t ) );
 	color_t[3] = 255;
 	MakeRGBA( color_spec, 180, 180, 180, 255 );
-	MakeRGBA( color_header, color_text[0] * 200 / 255, color_text[1] * 200 / 255, color_text[2] * 200 / 255, 255 );
 
 	global_opacity = (int)slayer_scoreboard_opacity.value;
 	if( global_opacity < 0 ) global_opacity = 0;
@@ -442,9 +442,15 @@ void Slayer_Scoreboard_Draw( void )
 	for( i = 0; i < num_players; i++ )
 	{
 		if( sorted[i].team_id == SLAYER_TEAM_CT )
+		{
 			ct_frags_sum += sorted[i].frags;
+			ct_player_count++;
+		}
 		else if( sorted[i].team_id == SLAYER_TEAM_T )
+		{
 			t_frags_sum += sorted[i].frags;
+			t_player_count++;
+		}
 	}
 
 	// Fixed board width: 60% of screen_w
@@ -452,7 +458,7 @@ void Slayer_Scoreboard_Draw( void )
 
 	// Height adapts to content: header + column headers + team headers + rows + padding
 	{
-		int content_rows = num_players + 4; // +4 for header, column header, 2 team headers
+		int content_rows = num_players + 3; // +3 for header, 2 team headers
 		int min_h = row_h * content_rows + 40;
 		int max_h = (int)( screen_h * 0.85f );
 
@@ -484,11 +490,13 @@ void Slayer_Scoreboard_Draw( void )
 	// Draw server name (centered in header)
 	hostname = Info_ValueForKey( cl.serverinfo, "hostname" );
 	if( !hostname || hostname[0] == '\0' )
+		hostname = Info_ValueForKey( cl.serverinfo, "name" );
+	if( !hostname || hostname[0] == '\0' )
 		hostname = Cvar_VariableString( "hostname" );
 	if( !hostname || hostname[0] == '\0' )
-		hostname = cls.servername;
+		hostname = Cvar_VariableString( "sv_hostname" );
 	if( !hostname || hostname[0] == '\0' )
-		hostname = "Unknown Server";
+		hostname = cls.servername;
 
 	cur_y += 6;
 	Con_DrawStringLen( hostname, &text_w, &text_h );
@@ -520,17 +528,6 @@ void Slayer_Scoreboard_Draw( void )
 	col_deaths_x = board_x + (int)( board_w * 0.72f );
 	col_ping_x   = board_x + (int)( board_w * 0.86f );
 
-	// Draw column headers
-	Con_DrawString( col_name_x, cur_y, "Name", color_header );
-	Con_DrawString( col_frags_x, cur_y, "Kills", color_header );
-	Con_DrawString( col_deaths_x, cur_y, "Deaths", color_header );
-	Con_DrawString( col_ping_x, cur_y, "Ping", color_header );
-	cur_y += row_h;
-
-	// Draw separator line below column headers
-	Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, 80, 80, 80, (byte)global_opacity );
-	cur_y += 4;
-
 	// Draw player rows
 	for( row = 0; row < num_players; row++ )
 	{
@@ -551,7 +548,7 @@ void Slayer_Scoreboard_Draw( void )
 			// Thin separator before CT section
 			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, color_ct[0], color_ct[1], color_ct[2], 100 );
 			cur_y += 3;
-			Q_snprintf( buf, sizeof( buf ), "Counter-Terrorists  -  %d", ct_frags_sum );
+			Q_snprintf( buf, sizeof( buf ), "Counter-Terrorists  -  %d", ct_player_count );
 			Con_DrawString( col_name_x, cur_y, buf, color_ct );
 			cur_y += row_h;
 		}
@@ -562,7 +559,7 @@ void Slayer_Scoreboard_Draw( void )
 			cur_y += 4;
 			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, color_t[0], color_t[1], color_t[2], 100 );
 			cur_y += 3;
-			Q_snprintf( buf, sizeof( buf ), "Terrorists  -  %d", t_frags_sum );
+			Q_snprintf( buf, sizeof( buf ), "Terrorists  -  %d", t_player_count );
 			Con_DrawString( col_name_x, cur_y, buf, color_t );
 			cur_y += row_h;
 		}
@@ -629,40 +626,6 @@ void Slayer_Scoreboard_Draw( void )
 			// Ping
 			Q_snprintf( buf, sizeof( buf ), "%d", cl.players[pidx].ping );
 			Con_DrawString( col_ping_x, cur_y + 2, buf, stat_color );
-		}
-
-		// HP bar for local/spectated player
-		if( pidx == cl.playernum && cl.local.health > 0 )
-		{
-			int hp = cl.local.health;
-			int bar_max_w = (int)( board_w * 0.30f );
-			int bar_w, bar_h, bar_x, bar_y;
-			byte hp_r, hp_g, hp_b;
-
-			if( hp > 100 ) hp = 100;
-			bar_w = bar_max_w * hp / 100;
-			bar_h = 3;
-			bar_x = col_name_x;
-			bar_y = cur_y + row_h - bar_h - 1;
-
-			// Color: green (>60), yellow (30-60), red (<30)
-			if( hp > 60 )
-			{
-				hp_r = 60; hp_g = 200; hp_b = 60;
-			}
-			else if( hp > 30 )
-			{
-				hp_r = 220; hp_g = 200; hp_b = 40;
-			}
-			else
-			{
-				hp_r = 220; hp_g = 40; hp_b = 40;
-			}
-
-			// Background track
-			Slayer_DrawRect( bar_x, bar_y, bar_max_w, bar_h, 40, 40, 40, 120 );
-			// HP fill
-			Slayer_DrawRect( bar_x, bar_y, bar_w, bar_h, hp_r, hp_g, hp_b, 200 );
 		}
 
 		cur_y += row_h;
