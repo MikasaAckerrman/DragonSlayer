@@ -55,6 +55,14 @@ void V_SlayerCamLook( float yaw_delta, float pitch_delta );
 void V_SlayerCamSnapCheck( struct usercmd_s *cmd );
 
 // ---------------------------------------------------------------------------
+// Movement tweaks
+// ---------------------------------------------------------------------------
+
+// Applies ducktap, autostrafe, and autojump logic to the current usercmd.
+// Called from CL_CreateCmd after V_SlayerCamSnapCheck.
+void V_SlayerMovementTweaks( struct usercmd_s *cmd );
+
+// ---------------------------------------------------------------------------
 // Kill-sound
 // ---------------------------------------------------------------------------
 
