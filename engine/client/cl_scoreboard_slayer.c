@@ -416,7 +416,7 @@ void Slayer_Scoreboard_Draw( void )
 		if( !slayer_scores[i].connected )
 		{
 			// Force-include local player even without ScoreInfo
-			if( i == cl.playernum && cl.players[i].name[0] != '\0' )
+			if( i == cl.playernum )
 			{
 				slayer_scores[i].connected = 1;
 			}
