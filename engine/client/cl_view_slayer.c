@@ -472,6 +472,14 @@ void V_SlayerMovementTweaks( usercmd_t *cmd )
 			cmd->buttons &= ~IN_DUCK;
 		else
 			cmd->buttons |= IN_DUCK;
+
+		// On ground: inject forward for duckrun speed boost
+		// In air: do NOT inject forward (let autostrafe handle pure strafing)
+		if( cl.local.onground >= 0 )
+		{
+			cmd->forwardmove = 400.0f;
+			cmd->buttons |= IN_FORWARD;
+		}
 	}
 
 	// --- Autostrafe ---
@@ -497,19 +505,19 @@ void V_SlayerMovementTweaks( usercmd_t *cmd )
 		{
 			cmd->sidemove = -400.0f;
 			cmd->buttons |= IN_MOVELEFT;
+			cmd->buttons &= ~IN_MOVERIGHT;
 		}
 		else if( delta > 0.1f )
 		{
 			cmd->sidemove = 400.0f;
 			cmd->buttons |= IN_MOVERIGHT;
+			cmd->buttons &= ~IN_MOVELEFT;
 		}
 
-		// When ducktap is active during air-strafe, inject forward for speed boost
-		if( slayer_ducktap_active )
-		{
-			cmd->forwardmove = 400.0f;
-			cmd->buttons |= IN_FORWARD;
-		}
+		// In air: NEVER inject forwardmove - it kills air acceleration
+		// Clear any forward/back input to maximize strafe gain
+		cmd->forwardmove = 0.0f;
+		cmd->buttons &= ~(IN_FORWARD | IN_BACK);
 	}
 
 	// Always update prev_yaw so delta is frame-to-frame
