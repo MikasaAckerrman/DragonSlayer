@@ -596,7 +596,10 @@ void V_SlayerSmoothZoom( ref_viewpass_t *rvp )
 	}
 
 	speed = slayer_smooth_zoom_speed.value;
-	smooth_fov += diff * speed * host.frametime;
+	{
+		float t = bound( 0.0f, speed * host.frametime, 1.0f );
+		smooth_fov += diff * t;
+	}
 
 	rvp->fov_x = smooth_fov;
 	rvp->fov_y = V_CalcFov( &rvp->fov_x, clgame.viewport[2], clgame.viewport[3] );
