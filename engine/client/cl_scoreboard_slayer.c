@@ -291,18 +291,6 @@ static void Slayer_DrawRect( int x, int y, int w, int h, byte r, byte g, byte b,
 	ref.dllFuncs.FillRGBA( kRenderTransTexture, x, y, w, h, r, g, b, a );
 }
 
-static void Slayer_DrawBorder( int x, int y, int w, int h, byte r, byte g, byte b, byte a, int thickness )
-{
-	// Top
-	Slayer_DrawRect( x, y, w, thickness, r, g, b, a );
-	// Bottom
-	Slayer_DrawRect( x, y + h - thickness, w, thickness, r, g, b, a );
-	// Left
-	Slayer_DrawRect( x, y, thickness, h, r, g, b, a );
-	// Right
-	Slayer_DrawRect( x + w - thickness, y, thickness, h, r, g, b, a );
-}
-
 // ===========================================================================
 // Sorting
 // ===========================================================================
@@ -481,12 +469,16 @@ void Slayer_Scoreboard_Draw( void )
 	board_x = ( screen_w - board_w ) / 2;
 	board_y = ( screen_h - board_h ) / 2;
 
-	// Draw main background
-	Slayer_DrawRect( board_x, board_y, board_w, board_h,
+	// Simulated rounded corners: draw 3 overlapping rectangles
+	// Main body (full width, inset 4px from top/bottom)
+	Slayer_DrawRect( board_x, board_y + 4, board_w, board_h - 8,
 		color_bg[0], color_bg[1], color_bg[2], (byte)( color_bg[3] * global_opacity / 255 ) );
-
-	// Draw thin border (2px)
-	Slayer_DrawBorder( board_x, board_y, board_w, board_h, 100, 100, 100, (byte)global_opacity, 1 );
+	// Top strip (4px shorter on each side)
+	Slayer_DrawRect( board_x + 4, board_y, board_w - 8, 4,
+		color_bg[0], color_bg[1], color_bg[2], (byte)( color_bg[3] * global_opacity / 255 ) );
+	// Bottom strip (4px shorter on each side)
+	Slayer_DrawRect( board_x + 4, board_y + board_h - 4, board_w - 8, 4,
+		color_bg[0], color_bg[1], color_bg[2], (byte)( color_bg[3] * global_opacity / 255 ) );
 
 	cur_y = board_y;
 
@@ -631,14 +623,34 @@ void Slayer_Scoreboard_Draw( void )
 			row_alpha = 128;
 		}
 
-		Con_DrawString( col_name_x, cur_y + 2, name, name_color );
+		// Avatar placeholder (small team-colored square)
+		{
+			int icon_size = row_h - 4;
+			byte icon_r = 128, icon_g = 128, icon_b = 128;
+			if( team == SLAYER_TEAM_CT )
+			{
+				icon_r = color_ct[0]; icon_g = color_ct[1]; icon_b = color_ct[2];
+			}
+			else if( team == SLAYER_TEAM_T )
+			{
+				icon_r = color_t[0]; icon_g = color_t[1]; icon_b = color_t[2];
+			}
+			Slayer_DrawRect( col_name_x, cur_y + 2, icon_size, icon_size, icon_r, icon_g, icon_b, 180 );
+		}
+
+		Con_DrawString( col_name_x + (row_h - 4) + 4, cur_y + 2, name, name_color );
 
 		// Frags
 		{
 			rgba_t stat_color;
 			int hp = 0;
 
-			MakeRGBA( stat_color, color_text[0], color_text[1], color_text[2], row_alpha );
+			if( team == SLAYER_TEAM_CT )
+				MakeRGBA( stat_color, color_ct[0], color_ct[1], color_ct[2], row_alpha );
+			else if( team == SLAYER_TEAM_T )
+				MakeRGBA( stat_color, color_t[0], color_t[1], color_t[2], row_alpha );
+			else
+				MakeRGBA( stat_color, color_text[0], color_text[1], color_text[2], row_alpha );
 			Q_snprintf( buf, sizeof( buf ), "%d", slayer_scores[pidx].frags );
 			Con_DrawString( col_frags_x, cur_y + 2, buf, stat_color );
 
@@ -647,10 +659,7 @@ void Slayer_Scoreboard_Draw( void )
 			Con_DrawString( col_deaths_x, cur_y + 2, buf, stat_color );
 
 			// Ping
-			if( cl.players[pidx].ping > 0 )
-				Q_snprintf( buf, sizeof( buf ), "%d", cl.players[pidx].ping );
-			else
-				Q_snprintf( buf, sizeof( buf ), "-" );
+			Q_snprintf( buf, sizeof( buf ), "%d", cl.players[pidx].ping );
 			Con_DrawString( col_ping_x, cur_y + 2, buf, stat_color );
 
 			// Health column
