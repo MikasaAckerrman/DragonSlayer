@@ -451,8 +451,8 @@ void Slayer_Scoreboard_Draw( void )
 			spec_player_count++;
 	}
 
-	// Fixed board width: 60% of screen_w
-	board_w = (int)( screen_w * 0.60f );
+	// Fixed board width: 65% of screen_w
+	board_w = (int)( screen_w * 0.65f );
 
 	// Height adapts to content: header + column headers + team headers + rows + padding
 	{
@@ -488,15 +488,19 @@ void Slayer_Scoreboard_Draw( void )
 	cur_y = board_y;
 
 	// Column layout (percentage of board width)
-	col_name_x   = board_x + (int)( board_w * 0.05f );
-	col_frags_x  = board_x + (int)( board_w * 0.50f );
-	col_deaths_x = board_x + (int)( board_w * 0.62f );
-	col_ping_x   = board_x + (int)( board_w * 0.75f );
-	col_health_x = board_x + (int)( board_w * 0.87f );
+	col_name_x   = board_x + (int)( board_w * 0.04f );
+	col_frags_x  = board_x + (int)( board_w * 0.55f );
+	col_deaths_x = board_x + (int)( board_w * 0.66f );
+	col_ping_x   = board_x + (int)( board_w * 0.77f );
+	col_health_x = board_x + (int)( board_w * 0.88f );
 
-	// Draw dark header bar (covers only hostname/mapname row)
-	Slayer_DrawRect( board_x, cur_y, board_w, row_h + 6,
-		10, 10, 10, (byte)( global_opacity * 240 / 255 ) );
+	// Draw dark header bar with rounded top corners
+	{
+		byte hdr_a = (byte)( global_opacity * 240 / 255 );
+		Slayer_DrawRect( board_x, cur_y + 8, board_w, row_h + 6 - 8, 10, 10, 10, hdr_a );
+		Slayer_DrawRect( board_x + 2, cur_y + 4, board_w - 4, 4, 10, 10, 10, hdr_a );
+		Slayer_DrawRect( board_x + 6, cur_y, board_w - 12, 4, 10, 10, 10, hdr_a );
+	}
 
 	// Draw server name (left-aligned)
 	hostname = Info_ValueForKey( cl.serverinfo, "hostname" );
@@ -666,25 +670,8 @@ void Slayer_Scoreboard_Draw( void )
 
 			if( hp > 0 && hp <= 100 )
 			{
-				rgba_t hp_color;
-				byte hp_r, hp_g, hp_b;
-
-				if( hp > 60 )
-				{
-					hp_r = 60; hp_g = 200; hp_b = 60;
-				}
-				else if( hp > 30 )
-				{
-					hp_r = 220; hp_g = 200; hp_b = 40;
-				}
-				else
-				{
-					hp_r = 220; hp_g = 40; hp_b = 40;
-				}
-
-				MakeRGBA( hp_color, hp_r, hp_g, hp_b, row_alpha );
 				Q_snprintf( buf, sizeof( buf ), "%d", hp );
-				Con_DrawString( col_health_x, cur_y + 2, buf, hp_color );
+				Con_DrawString( col_health_x, cur_y + 2, buf, stat_color );
 			}
 		}
 
