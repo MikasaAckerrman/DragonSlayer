@@ -247,7 +247,7 @@ static void V_RefApplyOverview( ref_viewpass_t *rvp )
 V_CalcFov
 ====================
 */
-static float V_CalcFov( float *fov_x, float width, float height )
+float V_CalcFov( float *fov_x, float width, float height )
 {
 	float	x, half_fov_y;
 
@@ -422,6 +422,7 @@ void V_RenderView( void )
 	{
 		clgame.dllFuncs.pfnCalcRefdef( &rp );
 		V_GetRefParams( &rp, &rvp );
+		V_SlayerSmoothZoom( &rvp ); // Slayer3D: smooth FOV zoom animation
 		V_RefApplyOverview( &rvp );
 		V_ApplyRefUnderwater( &rvp );
 		V_ApplySlayerThirdPerson( &rvp ); // Slayer3D: orbit camera around the player
