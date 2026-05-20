@@ -355,7 +355,7 @@ void Slayer_Scoreboard_Init( void )
 
 	Slayer_AvatarDownload_Init();
 
-	Con_Reportf( S_NOTE "Slayer3D: scoreboard initialized\n" );
+	Con_Printf( "Slayer3D: scoreboard initialized\n" );
 }
 
 void Slayer_Scoreboard_Reset( void )
