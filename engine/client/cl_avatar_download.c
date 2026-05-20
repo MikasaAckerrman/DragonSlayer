@@ -78,6 +78,7 @@ static void *AVD_WorkerThread( void *arg )
 	char steamid_str[21];  // max uint64 is 20 digits
 	char save_path[512];
 	const char *basedir;
+	const char *gamedir;
 	jstring j_steamid, j_path;
 
 	// Attach this thread to JVM
@@ -97,8 +98,12 @@ static void *AVD_WorkerThread( void *arg )
 	if( !basedir || basedir[0] == '\0' )
 		basedir = ".";
 
-	Q_snprintf( save_path, sizeof( save_path ), "%s/avatars/%" PRIu64 ".png",
-		basedir, work->steamid64 );
+	gamedir = getenv( "XASH3D_GAME" );
+	if( !gamedir || gamedir[0] == '\0' )
+		gamedir = "valve";
+
+	Q_snprintf( save_path, sizeof( save_path ), "%s/%s/avatars/%" PRIu64 ".png",
+		basedir, gamedir, work->steamid64 );
 
 	j_steamid = (*env)->NewStringUTF( env, steamid_str );
 	j_path = (*env)->NewStringUTF( env, save_path );
