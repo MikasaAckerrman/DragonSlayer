@@ -29,6 +29,7 @@ Other platforms: Uses non-blocking HTTP sockets (port 80, no TLS).
 #include <jni.h>
 #include <SDL.h>
 #include <stdlib.h>
+#include <android/log.h>
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -81,7 +82,7 @@ static void *AVD_WorkerThread( void *arg )
 	const char *gamedir;
 	jstring j_steamid, j_path;
 
-	Con_DPrintf( "AvatarDL: worker thread starting for slot=%d\n", work->slot );
+	__android_log_print( ANDROID_LOG_DEBUG, "Xash", "AvatarDL: worker thread starting for slot=%d", work->slot );
 
 	// Attach this thread to JVM
 	if( (*avd_jvm)->AttachCurrentThread( avd_jvm, &env, NULL ) != JNI_OK )
@@ -107,7 +108,7 @@ static void *AVD_WorkerThread( void *arg )
 	Q_snprintf( save_path, sizeof( save_path ), "%s/%s/avatars/%" PRIu64 ".png",
 		basedir, gamedir, work->steamid64 );
 
-	Con_DPrintf( "AvatarDL: worker slot=%d steamid=%" PRIu64 " path=%s\n",
+	__android_log_print( ANDROID_LOG_DEBUG, "Xash", "AvatarDL: worker slot=%d steamid=%" PRIu64 " path=%s",
 		work->slot, work->steamid64, save_path );
 
 	j_steamid = (*env)->NewStringUTF( env, steamid_str );
@@ -147,10 +148,12 @@ static void *AVD_WorkerThread( void *arg )
 	// Write result with memory barrier
 	// Note: if Reset/Shutdown zeroed the slot array, this write is benign -
 	// Frame() will just process it as a new completion next tick.
-	Con_DPrintf( "AvatarDL: worker slot=%d result=%d\n", work->slot, result );
 	__sync_synchronize();
 	if( avd_download_method != NULL )
+	{
+		__android_log_print( ANDROID_LOG_DEBUG, "Xash", "AvatarDL: worker slot=%d result=%d", work->slot, result );
 		avd_slot_result[work->slot] = ( result == 0 ) ? AVD_RESULT_SUCCESS : AVD_RESULT_FAIL;
+	}
 	__sync_synchronize();
 
 	free( work );
@@ -180,14 +183,14 @@ void Slayer_AvatarDownload_Init( void )
 	env = (JNIEnv *)SDL_AndroidGetJNIEnv();
 	if( !env )
 	{
-		Con_Reportf( S_WARN "AvatarDL: failed to get JNIEnv\n" );
+		Con_Printf( S_WARN "AvatarDL: failed to get JNIEnv\n" );
 		return;
 	}
 
 	// Cache JavaVM for worker threads
 	if( (*env)->GetJavaVM( env, &avd_jvm ) != 0 )
 	{
-		Con_Reportf( S_WARN "AvatarDL: failed to get JavaVM\n" );
+		Con_Printf( S_WARN "AvatarDL: failed to get JavaVM\n" );
 		return;
 	}
 
@@ -195,7 +198,7 @@ void Slayer_AvatarDownload_Init( void )
 	activity = (jobject)SDL_AndroidGetActivity();
 	if( !activity )
 	{
-		Con_Reportf( S_WARN "AvatarDL: failed to get activity\n" );
+		Con_Printf( S_WARN "AvatarDL: failed to get activity\n" );
 		return;
 	}
 
@@ -210,7 +213,7 @@ void Slayer_AvatarDownload_Init( void )
 		if( cls ) (*env)->DeleteLocalRef( env, cls );
 		(*env)->DeleteLocalRef( env, activity );
 		avd_activity_class = NULL;
-		Con_Reportf( S_WARN "AvatarDL: GetObjectClass threw exception\n" );
+		Con_Printf( S_WARN "AvatarDL: GetObjectClass threw exception\n" );
 		return;
 	}
 
@@ -223,13 +226,16 @@ void Slayer_AvatarDownload_Init( void )
 	{
 		if( (*env)->ExceptionCheck( env ) )
 			(*env)->ExceptionClear( env );
-		Con_Reportf( S_WARN "AvatarDL: NewGlobalRef returned NULL\n" );
+		Con_Printf( S_WARN "AvatarDL: NewGlobalRef returned NULL\n" );
 		return;
 	}
 
 	// Clear any stale pending exception before the next JNI call.
 	if( (*env)->ExceptionCheck( env ) )
+	{
+		(*env)->ExceptionDescribe( env );
 		(*env)->ExceptionClear( env );
+	}
 
 	// Get downloadAvatar method: static int downloadAvatar(String, String)
 	avd_download_method = (*env)->GetStaticMethodID( env, avd_activity_class,
@@ -244,13 +250,13 @@ void Slayer_AvatarDownload_Init( void )
 			(*env)->ExceptionDescribe( env );
 			(*env)->ExceptionClear( env );
 		}
-		Con_Reportf( S_WARN "AvatarDL: failed to find downloadAvatar method\n" );
+		Con_Printf( S_WARN "AvatarDL: failed to find downloadAvatar method\n" );
 		(*env)->DeleteGlobalRef( env, avd_activity_class );
 		avd_activity_class = NULL;
 		return;
 	}
 
-	Con_Reportf( S_NOTE "Slayer3D: avatar JNI init OK (slot count %d)\n", MAX_CLIENTS );
+	Con_Printf( "Slayer3D: avatar JNI init OK (slot count %d)\n", MAX_CLIENTS );
 }
 
 void Slayer_AvatarDownload_Shutdown( void )
@@ -1133,7 +1139,7 @@ void Slayer_AvatarDownload_Init( void )
 	memset( avd_slot_state, 0, sizeof( avd_slot_state ) );
 	memset( avd_slot_id, 0, sizeof( avd_slot_id ) );
 	memset( avd_slot_fail_time, 0, sizeof( avd_slot_fail_time ) );
-	Con_Reportf( S_NOTE "Slayer3D: avatar HTTP downloader initialized\n" );
+	Con_Printf( "Slayer3D: avatar HTTP downloader initialized\n" );
 }
 
 void Slayer_AvatarDownload_Shutdown( void )
