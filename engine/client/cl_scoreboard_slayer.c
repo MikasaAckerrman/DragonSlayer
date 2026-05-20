@@ -380,7 +380,7 @@ void Slayer_Scoreboard_Draw( void )
 			ct_player_count++;
 		else if( sorted[i].team_id == SLAYER_TEAM_T )
 			t_player_count++;
-		else if( sorted[i].team_id == SLAYER_TEAM_SPECTATOR )
+		else
 			spec_player_count++;
 	}
 
@@ -552,19 +552,19 @@ void Slayer_Scoreboard_Draw( void )
 		else
 			MakeRGBA( name_color, 200, 200, 200, 255 );
 
-		// Dead players: halved alpha (dimmed)
+		// Dead players: dimmed (70% brightness)
 		row_alpha = 255;
-		if( slayer_scores[pidx].flags & 1 )
+		if( (slayer_scores[pidx].flags & 1) && (team == SLAYER_TEAM_CT || team == SLAYER_TEAM_T) )
 		{
 			rgba_t dead_color;
-			name_color[0] = name_color[0] / 2;
-			name_color[1] = name_color[1] / 2;
-			name_color[2] = name_color[2] / 2;
+			name_color[0] = name_color[0] * 7 / 10;
+			name_color[1] = name_color[1] * 7 / 10;
+			name_color[2] = name_color[2] * 7 / 10;
 			row_alpha = 128;
 
 			// Draw "DEAD" label between name and kills columns
 			MakeRGBA( dead_color, 180, 60, 60, 200 );
-			Con_DrawString( col_frags_x - 55, cur_y + 2, "DEAD", dead_color );
+			Con_DrawString( board_x + (int)(board_w * 0.42f), cur_y + 2, "DEAD", dead_color );
 		}
 
 		Con_DrawString( col_name_x, cur_y + 2, name, name_color );
