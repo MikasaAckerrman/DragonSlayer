@@ -2024,6 +2024,35 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 		}
 	}
 
+	// Slayer3D: echo chat strings to console (with dedup ring buffer)
+	{
+		static char ring_buf[4][33];
+		static int ring_idx = 0;
+		int slen = Q_strlen( string );
+
+		if( slen > 2 && ( Q_strchr( string, '\n' ) != NULL || slen > 20 ) )
+		{
+			int k, dup = 0;
+			int cmplen = ( slen < 32 ) ? slen : 32;
+
+			for( k = 0; k < 4; k++ )
+			{
+				if( !Q_strncmp( ring_buf[k], string, cmplen ) )
+				{
+					dup = 1;
+					break;
+				}
+			}
+
+			if( !dup )
+			{
+				Q_strncpy( ring_buf[ring_idx], string, 33 );
+				ring_idx = ( ring_idx + 1 ) & 3;
+				Con_Printf( "%s", string );
+			}
+		}
+	}
+
 	return x + CL_DrawString( x, y, string, color, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD | FONT_DRAW_FORCECOL );
 }
 

@@ -537,6 +537,11 @@ void Slayer_Scoreboard_Draw( void )
 			{
 				slayer_scores[i].connected = 1;
 			}
+			else if( slayer_scores[i].team_id == SLAYER_TEAM_UNASSIGNED )
+			{
+				// Player has a name but no ScoreInfo and no team - treat as spectator
+				slayer_scores[i].team_id = SLAYER_TEAM_SPECTATOR;
+			}
 			else
 			{
 				continue;
@@ -678,34 +683,36 @@ void Slayer_Scoreboard_Draw( void )
 		if( team == SLAYER_TEAM_CT && !drawn_ct_header )
 		{
 			drawn_ct_header = 1;
-			// Thin separator before CT section
-			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, color_ct[0], color_ct[1], color_ct[2], 100 );
-			cur_y += 3;
 			Q_snprintf( buf, sizeof( buf ), "Counter-Terrorists  -  %d", ct_player_count );
 			Con_DrawString( col_name_x, cur_y, buf, color_ct );
 			cur_y += row_h;
+			// Thin separator below CT header
+			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, color_ct[0], color_ct[1], color_ct[2], 100 );
+			cur_y += 3;
 		}
 		else if( team == SLAYER_TEAM_T && !drawn_t_header )
 		{
 			drawn_t_header = 1;
-			// Spacing + separator between teams
+			// Spacing between teams
 			cur_y += 4;
-			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, color_t[0], color_t[1], color_t[2], 100 );
-			cur_y += 3;
 			Q_snprintf( buf, sizeof( buf ), "Terrorists  -  %d", t_player_count );
 			Con_DrawString( col_name_x, cur_y, buf, color_t );
 			cur_y += row_h;
+			// Thin separator below T header
+			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, color_t[0], color_t[1], color_t[2], 100 );
+			cur_y += 3;
 		}
 		else if( team != SLAYER_TEAM_CT && team != SLAYER_TEAM_T && !drawn_spec_header )
 		{
 			drawn_spec_header = 1;
 			// Spacing before spectator section
 			cur_y += 4;
-			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, 100, 100, 100, 80 );
-			cur_y += 3;
 			Q_snprintf( buf, sizeof( buf ), "Spectators  -  %d", spec_player_count );
 			Con_DrawString( col_name_x, cur_y, buf, color_spec );
 			cur_y += row_h;
+			// Thin separator below Spectator header
+			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, 100, 100, 100, 80 );
+			cur_y += 3;
 		}
 
 		// Stop drawing if we exceed the board after team header
@@ -734,14 +741,14 @@ void Slayer_Scoreboard_Draw( void )
 		else
 			MakeRGBA( name_color, 200, 200, 200, 255 );
 
-		// Dead players: dimmed (70% brightness)
+		// Dead players: dimmed (85% brightness)
 		row_alpha = 255;
 		if( (slayer_scores[pidx].flags & 1) && (team == SLAYER_TEAM_CT || team == SLAYER_TEAM_T) )
 		{
 			rgba_t dead_color;
-			name_color[0] = name_color[0] * 7 / 10;
-			name_color[1] = name_color[1] * 7 / 10;
-			name_color[2] = name_color[2] * 7 / 10;
+			name_color[0] = name_color[0] * 85 / 100;
+			name_color[1] = name_color[1] * 85 / 100;
+			name_color[2] = name_color[2] * 85 / 100;
 			row_alpha = 128;
 
 			// Draw "DEAD" label between name and kills columns
@@ -783,7 +790,10 @@ void Slayer_Scoreboard_Draw( void )
 			Con_DrawString( col_deaths_x, cur_y + 2, buf, stat_color );
 
 			// Ping
-			Q_snprintf( buf, sizeof( buf ), "%d", cl.players[pidx].ping );
+			if( cl.players[pidx].ping == 0 )
+				Q_snprintf( buf, sizeof( buf ), "-" );
+			else
+				Q_snprintf( buf, sizeof( buf ), "%d", cl.players[pidx].ping );
 			Con_DrawString( col_ping_x, cur_y + 2, buf, stat_color );
 
 			// Health column
