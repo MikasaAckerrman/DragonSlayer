@@ -50,4 +50,8 @@ void Slayer_OnHealthUpdate( int hp );
 //   iSize - payload length
 void Slayer_OnHealthInfo( const byte *pbuf, int iSize );
 
+// Parse a status response line to extract SteamID for avatar loading.
+// Called from cl_parse.c on each svc_print message.
+void Slayer_ParseStatusLine( const char *line );
+
 #endif // CL_SCOREBOARD_SLAYER_H
