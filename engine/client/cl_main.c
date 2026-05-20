@@ -21,6 +21,7 @@ GNU General Public License for more details.
 #include "vgui_draw.h"
 #include "library.h"
 #include "cl_view_slayer.h"
+#include "cl_scoreboard_slayer.h"
 #include "vid_common.h"
 #include "pm_local.h"
 #include "multi_emulator.h"
@@ -706,6 +707,10 @@ static void CL_CreateCmd( void )
 
 	// Slayer3D: apply movement tweaks (ducktap, autostrafe, autojump)
 	V_SlayerMovementTweaks( cmd );
+
+	// Slayer3D: while +slayer_scoreboard is held, OR IN_SCORE so the
+	// server emits svc_pings every snapshot (drives per-player ping column).
+	Slayer_Scoreboard_PatchUsercmd( cmd );
 
 	CL_PopPMStates();
 

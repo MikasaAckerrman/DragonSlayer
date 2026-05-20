@@ -54,4 +54,13 @@ void Slayer_OnHealthInfo( const byte *pbuf, int iSize );
 // Called from cl_parse.c on each svc_print message.
 void Slayer_ParseStatusLine( const char *line );
 
+// Forward decl to avoid pulling cdll headers into this header.
+struct usercmd_s;
+
+// While the Slayer scoreboard is active, OR IN_SCORE into cmd->buttons
+// so the server emits svc_pings every snapshot (matches vanilla GoldSrc
+// +showscores behavior). Called from CL_CreateCmd in cl_main.c.
+// No-op when scoreboard is inactive or cmd is NULL.
+void Slayer_Scoreboard_PatchUsercmd( struct usercmd_s *cmd );
+
 #endif // CL_SCOREBOARD_SLAYER_H
