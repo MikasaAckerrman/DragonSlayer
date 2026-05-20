@@ -276,6 +276,34 @@ static void Slayer_LoadAvatarTexture( int slot )
 }
 
 // ===========================================================================
+// Console commands
+// ===========================================================================
+
+static void Cmd_AvatarUrls_f( void )
+{
+	int i, count = 0;
+
+	Con_Printf( "=== Steam Avatar URLs ===\n" );
+
+	for( i = 0; i < MAX_CLIENTS; i++ )
+	{
+		if( slayer_steamid64[i] == 0 )
+			continue;
+		if( cl.players[i].name[0] == '\0' )
+			continue;
+
+		Con_Printf( "%s: https://steamcommunity.com/profiles/%llu\n",
+			cl.players[i].name, (unsigned long long)slayer_steamid64[i] );
+		count++;
+	}
+
+	if( count == 0 )
+		Con_Printf( "No SteamIDs found. Open scoreboard first to fetch player info.\n" );
+	else
+		Con_Printf( "Place avatar images at: avatars/<steamid64>.png\n" );
+}
+
+// ===========================================================================
 // +slayer_scoreboard / -slayer_scoreboard commands
 // ===========================================================================
 
@@ -314,6 +342,8 @@ void Slayer_Scoreboard_Init( void )
 		"show Slayer3D custom scoreboard" );
 	Cmd_AddCommand( "-slayer_scoreboard", Cmd_ScoreboardUp_f,
 		"hide Slayer3D custom scoreboard" );
+	Cmd_AddCommand( "slayer_avatar_urls", Cmd_AvatarUrls_f,
+		"print Steam avatar download URLs for all players" );
 }
 
 void Slayer_Scoreboard_Reset( void )
