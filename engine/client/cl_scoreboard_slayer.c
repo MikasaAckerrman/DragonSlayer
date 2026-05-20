@@ -486,7 +486,7 @@ void Slayer_Scoreboard_Draw( void )
 		color_bg[0], color_bg[1], color_bg[2], (byte)( color_bg[3] * global_opacity / 255 ) );
 
 	// Draw thin border (2px)
-	Slayer_DrawBorder( board_x, board_y, board_w, board_h, 80, 80, 80, (byte)global_opacity, 2 );
+	Slayer_DrawBorder( board_x, board_y, board_w, board_h, 100, 100, 100, (byte)global_opacity, 1 );
 
 	cur_y = board_y;
 
@@ -647,7 +647,10 @@ void Slayer_Scoreboard_Draw( void )
 			Con_DrawString( col_deaths_x, cur_y + 2, buf, stat_color );
 
 			// Ping
-			Q_snprintf( buf, sizeof( buf ), "%d", cl.players[pidx].ping );
+			if( cl.players[pidx].ping > 0 )
+				Q_snprintf( buf, sizeof( buf ), "%d", cl.players[pidx].ping );
+			else
+				Q_snprintf( buf, sizeof( buf ), "-" );
 			Con_DrawString( col_ping_x, cur_y + 2, buf, stat_color );
 
 			// Health column
@@ -661,7 +664,7 @@ void Slayer_Scoreboard_Draw( void )
 				hp = slayer_scores[pidx].health;
 			}
 
-			if( hp > 0 )
+			if( hp > 0 && hp <= 100 )
 			{
 				rgba_t hp_color;
 				byte hp_r, hp_g, hp_b;
