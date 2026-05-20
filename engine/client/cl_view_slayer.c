@@ -574,7 +574,7 @@ void V_SlayerScopeSmooth( usercmd_t *cmd )
 {
 	static float prev_pitch = 0, prev_yaw = 0;
 	static qboolean was_zoomed = false;
-	float factor;
+	float factor, effective, delta_yaw;
 
 	if( slayer_scope_smooth.value == 0.0f )
 		return;
@@ -595,8 +595,19 @@ void V_SlayerScopeSmooth( usercmd_t *cmd )
 		return;
 	}
 
-	cl.viewangles[PITCH] = prev_pitch + (cl.viewangles[PITCH] - prev_pitch) * (1.0f - factor);
-	cl.viewangles[YAW] = prev_yaw + (cl.viewangles[YAW] - prev_yaw) * (1.0f - factor);
+	// Normalize smoothing to 60fps equivalence so behavior is consistent
+	// regardless of actual frame rate
+	effective = 1.0f - powf( factor, host.frametime * 60.0f );
+
+	// Pitch: simple linear interpolation (no wraparound issue)
+	cl.viewangles[PITCH] = prev_pitch + (cl.viewangles[PITCH] - prev_pitch) * effective;
+
+	// Yaw: normalize delta to shortest arc to avoid +-180 wraparound snap
+	delta_yaw = cl.viewangles[YAW] - prev_yaw;
+	if( delta_yaw > 180.0f ) delta_yaw -= 360.0f;
+	if( delta_yaw < -180.0f ) delta_yaw += 360.0f;
+	cl.viewangles[YAW] = prev_yaw + delta_yaw * effective;
+
 	cmd->viewangles[PITCH] = cl.viewangles[PITCH];
 	cmd->viewangles[YAW] = cl.viewangles[YAW];
 
