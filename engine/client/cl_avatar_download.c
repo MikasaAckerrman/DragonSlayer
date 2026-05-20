@@ -103,6 +103,18 @@ static void *AVD_WorkerThread( void *arg )
 	j_steamid = (*env)->NewStringUTF( env, steamid_str );
 	j_path = (*env)->NewStringUTF( env, save_path );
 
+	if( !j_steamid || !j_path )
+	{
+		if( j_steamid ) (*env)->DeleteLocalRef( env, j_steamid );
+		if( j_path ) (*env)->DeleteLocalRef( env, j_path );
+		(*avd_jvm)->DetachCurrentThread( avd_jvm );
+		__sync_synchronize();
+		avd_slot_result[work->slot] = AVD_RESULT_FAIL;
+		__sync_synchronize();
+		free( work );
+		return NULL;
+	}
+
 	// Call Java method
 	result = (*env)->CallStaticIntMethod( env, avd_activity_class,
 		avd_download_method, j_steamid, j_path );
