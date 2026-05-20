@@ -81,6 +81,8 @@ static void *AVD_WorkerThread( void *arg )
 	const char *gamedir;
 	jstring j_steamid, j_path;
 
+	Con_DPrintf( "AvatarDL: worker thread starting for slot=%d\n", work->slot );
+
 	// Attach this thread to JVM
 	if( (*avd_jvm)->AttachCurrentThread( avd_jvm, &env, NULL ) != JNI_OK )
 	{
@@ -105,6 +107,9 @@ static void *AVD_WorkerThread( void *arg )
 	Q_snprintf( save_path, sizeof( save_path ), "%s/%s/avatars/%" PRIu64 ".png",
 		basedir, gamedir, work->steamid64 );
 
+	Con_DPrintf( "AvatarDL: worker slot=%d steamid=%" PRIu64 " path=%s\n",
+		work->slot, work->steamid64, save_path );
+
 	j_steamid = (*env)->NewStringUTF( env, steamid_str );
 	j_path = (*env)->NewStringUTF( env, save_path );
 
@@ -124,6 +129,14 @@ static void *AVD_WorkerThread( void *arg )
 	result = (*env)->CallStaticIntMethod( env, avd_activity_class,
 		avd_download_method, j_steamid, j_path );
 
+	// Clear any pending JNI exception thrown by the Java method
+	if( (*env)->ExceptionCheck( env ) )
+	{
+		(*env)->ExceptionDescribe( env );
+		(*env)->ExceptionClear( env );
+		result = -1;  // force failure
+	}
+
 	// Cleanup JNI local refs
 	(*env)->DeleteLocalRef( env, j_steamid );
 	(*env)->DeleteLocalRef( env, j_path );
@@ -134,6 +147,7 @@ static void *AVD_WorkerThread( void *arg )
 	// Write result with memory barrier
 	// Note: if Reset/Shutdown zeroed the slot array, this write is benign -
 	// Frame() will just process it as a new completion next tick.
+	Con_DPrintf( "AvatarDL: worker slot=%d result=%d\n", work->slot, result );
 	__sync_synchronize();
 	if( avd_download_method != NULL )
 		avd_slot_result[work->slot] = ( result == 0 ) ? AVD_RESULT_SUCCESS : AVD_RESULT_FAIL;
@@ -166,14 +180,14 @@ void Slayer_AvatarDownload_Init( void )
 	env = (JNIEnv *)SDL_AndroidGetJNIEnv();
 	if( !env )
 	{
-		Con_DPrintf( "AvatarDL: failed to get JNIEnv\n" );
+		Con_Reportf( S_WARN "AvatarDL: failed to get JNIEnv\n" );
 		return;
 	}
 
 	// Cache JavaVM for worker threads
 	if( (*env)->GetJavaVM( env, &avd_jvm ) != 0 )
 	{
-		Con_DPrintf( "AvatarDL: failed to get JavaVM\n" );
+		Con_Reportf( S_WARN "AvatarDL: failed to get JavaVM\n" );
 		return;
 	}
 
@@ -181,14 +195,41 @@ void Slayer_AvatarDownload_Init( void )
 	activity = (jobject)SDL_AndroidGetActivity();
 	if( !activity )
 	{
-		Con_DPrintf( "AvatarDL: failed to get activity\n" );
+		Con_Reportf( S_WARN "AvatarDL: failed to get activity\n" );
 		return;
 	}
 
 	cls = (*env)->GetObjectClass( env, activity );
+
+	// Defensive: GetObjectClass should not throw, but if it did on some quirky
+	// Android build, surface the exception and bail rather than carry it forward.
+	if( (*env)->ExceptionCheck( env ) )
+	{
+		(*env)->ExceptionDescribe( env );
+		(*env)->ExceptionClear( env );
+		if( cls ) (*env)->DeleteLocalRef( env, cls );
+		(*env)->DeleteLocalRef( env, activity );
+		avd_activity_class = NULL;
+		Con_Reportf( S_WARN "AvatarDL: GetObjectClass threw exception\n" );
+		return;
+	}
+
 	avd_activity_class = (*env)->NewGlobalRef( env, cls );
 	(*env)->DeleteLocalRef( env, cls );
 	(*env)->DeleteLocalRef( env, activity );
+
+	// NewGlobalRef returns NULL if the JVM is out of memory or the local ref was NULL.
+	if( !avd_activity_class )
+	{
+		if( (*env)->ExceptionCheck( env ) )
+			(*env)->ExceptionClear( env );
+		Con_Reportf( S_WARN "AvatarDL: NewGlobalRef returned NULL\n" );
+		return;
+	}
+
+	// Clear any stale pending exception before the next JNI call.
+	if( (*env)->ExceptionCheck( env ) )
+		(*env)->ExceptionClear( env );
 
 	// Get downloadAvatar method: static int downloadAvatar(String, String)
 	avd_download_method = (*env)->GetStaticMethodID( env, avd_activity_class,
@@ -196,14 +237,20 @@ void Slayer_AvatarDownload_Init( void )
 
 	if( !avd_download_method )
 	{
-		Con_DPrintf( "AvatarDL: failed to find downloadAvatar method\n" );
+		// On older or stripped builds the method may be missing - log,
+		// clear the pending NoSuchMethodError, drop the global ref and bail.
+		if( (*env)->ExceptionCheck( env ) )
+		{
+			(*env)->ExceptionDescribe( env );
+			(*env)->ExceptionClear( env );
+		}
+		Con_Reportf( S_WARN "AvatarDL: failed to find downloadAvatar method\n" );
 		(*env)->DeleteGlobalRef( env, avd_activity_class );
 		avd_activity_class = NULL;
+		return;
 	}
-	else
-	{
-		Con_DPrintf( "AvatarDL: JNI initialized successfully\n" );
-	}
+
+	Con_Reportf( S_NOTE "Slayer3D: avatar JNI init OK (slot count %d)\n", MAX_CLIENTS );
 }
 
 void Slayer_AvatarDownload_Shutdown( void )
@@ -1086,6 +1133,7 @@ void Slayer_AvatarDownload_Init( void )
 	memset( avd_slot_state, 0, sizeof( avd_slot_state ) );
 	memset( avd_slot_id, 0, sizeof( avd_slot_id ) );
 	memset( avd_slot_fail_time, 0, sizeof( avd_slot_fail_time ) );
+	Con_Reportf( S_NOTE "Slayer3D: avatar HTTP downloader initialized\n" );
 }
 
 void Slayer_AvatarDownload_Shutdown( void )

@@ -354,6 +354,8 @@ void Slayer_Scoreboard_Init( void )
 		"print Steam avatar download URLs for all players" );
 
 	Slayer_AvatarDownload_Init();
+
+	Con_Reportf( S_NOTE "Slayer3D: scoreboard initialized\n" );
 }
 
 void Slayer_Scoreboard_Reset( void )

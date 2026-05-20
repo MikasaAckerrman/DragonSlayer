@@ -178,6 +178,8 @@ void V_InitSlayerCvars( void )
 
 	// Scoreboard
 	Slayer_Scoreboard_Init();
+
+	Con_Reportf( S_NOTE "Slayer3D: cvars initialized\n" );
 }
 
 // ===========================================================================

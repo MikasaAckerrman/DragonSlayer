@@ -1982,6 +1982,9 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 	rgba_t color;
 	int r, g, b;
 
+	if( !string )
+		return x;
+
 	Vector4Copy( clgame.ds.textColor, color );
 	Vector4Set( clgame.ds.textColor, 255, 255, 255, 255 );
 
