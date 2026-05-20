@@ -349,7 +349,7 @@ void Slayer_Scoreboard_Draw( void )
 	int          i, row;
 	int          screen_w, screen_h;
 	int          board_x, board_y, board_w, board_h;
-	int          row_h, col_name_x, col_frags_x, col_deaths_x, col_ping_x;
+	int          row_h, col_name_x, col_frags_x, col_deaths_x, col_ping_x, col_health_x;
 	int          text_w, text_h;
 	int          cur_y;
 	int          ct_player_count = 0, t_player_count = 0;
@@ -492,9 +492,10 @@ void Slayer_Scoreboard_Draw( void )
 
 	// Column layout (percentage of board width)
 	col_name_x   = board_x + (int)( board_w * 0.05f );
-	col_frags_x  = board_x + (int)( board_w * 0.58f );
-	col_deaths_x = board_x + (int)( board_w * 0.72f );
-	col_ping_x   = board_x + (int)( board_w * 0.86f );
+	col_frags_x  = board_x + (int)( board_w * 0.50f );
+	col_deaths_x = board_x + (int)( board_w * 0.62f );
+	col_ping_x   = board_x + (int)( board_w * 0.75f );
+	col_health_x = board_x + (int)( board_w * 0.87f );
 
 	// Draw dark header bar (covers only hostname/mapname row)
 	Slayer_DrawRect( board_x, cur_y, board_w, row_h + 6,
@@ -533,14 +534,14 @@ void Slayer_Scoreboard_Draw( void )
 	Slayer_DrawRect( board_x + 2, cur_y, board_w - 4, 1, 60, 60, 60, (byte)global_opacity );
 	cur_y += 4;
 
-	// Column headers row (slightly dimmer text)
+	// Column headers row (slightly dimmer text, no "Name" label)
 	{
 		rgba_t color_hdr;
 		MakeRGBA( color_hdr, color_text[0] * 200 / 255, color_text[1] * 200 / 255, color_text[2] * 200 / 255, color_text[3] );
-		Con_DrawString( col_name_x, cur_y, "Name", color_hdr );
 		Con_DrawString( col_frags_x, cur_y, "Kills", color_hdr );
 		Con_DrawString( col_deaths_x, cur_y, "Deaths", color_hdr );
 		Con_DrawString( col_ping_x, cur_y, "Ping", color_hdr );
+		Con_DrawString( col_health_x, cur_y, "Health", color_hdr );
 	}
 	cur_y += row_h;
 
@@ -632,11 +633,24 @@ void Slayer_Scoreboard_Draw( void )
 
 		Con_DrawString( col_name_x, cur_y + 2, name, name_color );
 
-		// HP display after player name (like CS 1.6 PC)
+		// Frags
 		{
+			rgba_t stat_color;
 			int hp = 0;
 
-			// For local player: always read from cl.local.health
+			MakeRGBA( stat_color, color_text[0], color_text[1], color_text[2], row_alpha );
+			Q_snprintf( buf, sizeof( buf ), "%d", slayer_scores[pidx].frags );
+			Con_DrawString( col_frags_x, cur_y + 2, buf, stat_color );
+
+			// Deaths
+			Q_snprintf( buf, sizeof( buf ), "%d", slayer_scores[pidx].deaths );
+			Con_DrawString( col_deaths_x, cur_y + 2, buf, stat_color );
+
+			// Ping
+			Q_snprintf( buf, sizeof( buf ), "%d", cl.players[pidx].ping );
+			Con_DrawString( col_ping_x, cur_y + 2, buf, stat_color );
+
+			// Health column
 			if( pidx == cl.playernum )
 			{
 				hp = cl.local.health;
@@ -649,33 +663,26 @@ void Slayer_Scoreboard_Draw( void )
 
 			if( hp > 0 )
 			{
-				int name_w, name_h;
-				char hp_buf[16];
 				rgba_t hp_color;
+				byte hp_r, hp_g, hp_b;
 
-				Con_DrawStringLen( name, &name_w, &name_h );
-				Q_snprintf( hp_buf, sizeof( hp_buf ), "(%d)", hp );
+				if( hp > 60 )
+				{
+					hp_r = 60; hp_g = 200; hp_b = 60;
+				}
+				else if( hp > 30 )
+				{
+					hp_r = 220; hp_g = 200; hp_b = 40;
+				}
+				else
+				{
+					hp_r = 220; hp_g = 40; hp_b = 40;
+				}
 
-				// Slightly dimmer than name color
-				MakeRGBA( hp_color, name_color[0] * 180 / 255, name_color[1] * 180 / 255, name_color[2] * 180 / 255, name_color[3] * 180 / 255 );
-				Con_DrawString( col_name_x + name_w + 6, cur_y + 2, hp_buf, hp_color );
+				MakeRGBA( hp_color, hp_r, hp_g, hp_b, row_alpha );
+				Q_snprintf( buf, sizeof( buf ), "%d", hp );
+				Con_DrawString( col_health_x, cur_y + 2, buf, hp_color );
 			}
-		}
-
-		// Frags
-		{
-			rgba_t stat_color;
-			MakeRGBA( stat_color, color_text[0], color_text[1], color_text[2], row_alpha );
-			Q_snprintf( buf, sizeof( buf ), "%d", slayer_scores[pidx].frags );
-			Con_DrawString( col_frags_x, cur_y + 2, buf, stat_color );
-
-			// Deaths
-			Q_snprintf( buf, sizeof( buf ), "%d", slayer_scores[pidx].deaths );
-			Con_DrawString( col_deaths_x, cur_y + 2, buf, stat_color );
-
-			// Ping
-			Q_snprintf( buf, sizeof( buf ), "%d", cl.players[pidx].ping );
-			Con_DrawString( col_ping_x, cur_y + 2, buf, stat_color );
 		}
 
 		cur_y += row_h;
