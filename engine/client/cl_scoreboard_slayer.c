@@ -62,8 +62,9 @@ static qboolean        slayer_scoreboard_active = false;
 // Avatar state: SteamID64 per player slot and cached texture handles
 static uint64_t        slayer_steamid64[MAX_CLIENTS];
 static int             slayer_avatar_tex[MAX_CLIENTS]; // 0 = not tried, >0 = loaded, -1 = failed
-static double          slayer_status_next_time;
-static qboolean        slayer_status_pending; // true after sending "status", cleared when done
+static double          slayer_status_next_time;       // throttle: next allowed "status" send
+static double          slayer_status_deadline;        // until: parse # lines from svc_print
+static qboolean        slayer_status_pending;          // true while we expect status reply
 
 // Cached parsed cvar colors (re-parsed only when cvar string changes)
 static char   cached_bg_str[64] = "";
@@ -136,12 +137,21 @@ void Slayer_ParseStatusLine( const char *line )
 	if( !slayer_status_pending )
 		return;
 
-	if( !line || line[0] != '#' )
+	// Status reply is fast (~1s). Cap parse window so random svc_print
+	// messages later (chat, server logs) cannot accidentally match the
+	// strict #N "name" STEAM_X:Y:Z format.
+	if( host.realtime > slayer_status_deadline )
 	{
-		// A non-# line after we started receiving status means response is done
 		slayer_status_pending = false;
 		return;
 	}
+
+	// Skip non-# lines silently. The status reply begins with header
+	// lines (hostname:, version:, players:) which we don't care about,
+	// and they would otherwise abort parsing before any '#N' player
+	// entry was reached.
+	if( !line || line[0] != '#' )
+		return;
 
 	// Format: #<slot> "<name>" <userid> STEAM_X:Y:Z ...
 	p = line + 1;
@@ -320,6 +330,7 @@ static void Cmd_ScoreboardDown_f( void )
 		Cbuf_AddText( "status\n" );
 		slayer_status_next_time = host.realtime + 30.0;
 		slayer_status_pending = true;
+		slayer_status_deadline = host.realtime + 5.0; // 5s parse window
 	}
 }
 
@@ -358,6 +369,8 @@ void Slayer_Scoreboard_Reset( void )
 	memset( slayer_avatar_tex, 0, sizeof( slayer_avatar_tex ) );
 	slayer_scoreboard_active = false;
 	slayer_status_pending = false;
+	slayer_status_next_time = 0.0;   // allow immediate re-fetch on next connect
+	slayer_status_deadline = 0.0;
 
 	Slayer_AvatarDownload_Reset();
 }
@@ -379,11 +392,10 @@ void Slayer_OnScoreInfo( const byte *pbuf, int iSize )
 
 	// ScoreInfo format: byte slot(1-based), short frags, short deaths,
 	//                   short class_id, short team_id
+	// Some mods (ReGameDLL variants) send 10+ bytes with extra data;
+	// we only need the first 9 so accept anything >= 9 silently.
 	if( !pbuf || iSize < 9 )
 		return;
-
-	if( iSize != 9 )
-		Con_DPrintf( S_WARN "Slayer_OnScoreInfo: unexpected iSize %d (expected 9)\n", iSize );
 
 	slot = pbuf[0];
 	if( slot < 1 || slot > MAX_CLIENTS )

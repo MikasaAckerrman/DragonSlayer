@@ -332,6 +332,7 @@ void Slayer_ResetMatchState( void )
 	slayer_prev_yaw = 0.0f;
 	slayer_prev_onground = 0;
 	slayer_yaw_initialized = 0;
+	slayer_ducktap_active = 0; // clear sticky +ducktap on disconnect
 
 	// Clear scoreboard score data
 	Slayer_Scoreboard_Reset();
