@@ -291,16 +291,39 @@ static void Slayer_DrawRect( int x, int y, int w, int h, byte r, byte g, byte b,
 	ref.dllFuncs.FillRGBA( kRenderTransTexture, x, y, w, h, r, g, b, a );
 }
 
-static void Slayer_DrawBorder( int x, int y, int w, int h, byte r, byte g, byte b, byte a, int thickness )
+static void Slayer_DrawRoundedRect( int x, int y, int w, int h, byte r, byte g, byte b, byte a, int radius )
 {
-	// Top
-	Slayer_DrawRect( x, y, w, thickness, r, g, b, a );
-	// Bottom
-	Slayer_DrawRect( x, y + h - thickness, w, thickness, r, g, b, a );
-	// Left
-	Slayer_DrawRect( x, y, thickness, h, r, g, b, a );
-	// Right
-	Slayer_DrawRect( x + w - thickness, y, thickness, h, r, g, b, a );
+	int i;
+	if( radius <= 0 || radius > w/2 || radius > h/2 )
+	{
+		Slayer_DrawRect( x, y, w, h, r, g, b, a );
+		return;
+	}
+	// Main body (full width, excluding top/bottom radius strips)
+	Slayer_DrawRect( x, y + radius, w, h - 2 * radius, r, g, b, a );
+	// Top strip (between corners)
+	Slayer_DrawRect( x + radius, y, w - 2 * radius, radius, r, g, b, a );
+	// Bottom strip (between corners)
+	Slayer_DrawRect( x + radius, y + h - radius, w - 2 * radius, radius, r, g, b, a );
+	// Corner scanlines
+	for( i = 0; i < radius; i++ )
+	{
+		int dy = radius - i - 1;
+		int r2 = radius * radius;
+		int inner = r2 - (dy+1)*(dy+1);
+		int sq = 0;
+		int dx;
+		while( (sq+1)*(sq+1) <= inner ) sq++;
+		dx = radius - sq;
+		// Top-left
+		Slayer_DrawRect( x + dx, y + i, radius - dx, 1, r, g, b, a );
+		// Top-right
+		Slayer_DrawRect( x + w - radius, y + i, radius - dx, 1, r, g, b, a );
+		// Bottom-left
+		Slayer_DrawRect( x + dx, y + h - 1 - i, radius - dx, 1, r, g, b, a );
+		// Bottom-right
+		Slayer_DrawRect( x + w - radius, y + h - 1 - i, radius - dx, 1, r, g, b, a );
+	}
 }
 
 // ===========================================================================
@@ -481,12 +504,9 @@ void Slayer_Scoreboard_Draw( void )
 	board_x = ( screen_w - board_w ) / 2;
 	board_y = ( screen_h - board_h ) / 2;
 
-	// Draw main background
-	Slayer_DrawRect( board_x, board_y, board_w, board_h,
-		color_bg[0], color_bg[1], color_bg[2], (byte)( color_bg[3] * global_opacity / 255 ) );
-
-	// Draw thin border (2px)
-	Slayer_DrawBorder( board_x, board_y, board_w, board_h, 80, 80, 80, (byte)global_opacity, 2 );
+	// Draw main background with rounded corners
+	Slayer_DrawRoundedRect( board_x, board_y, board_w, board_h,
+		color_bg[0], color_bg[1], color_bg[2], (byte)( color_bg[3] * global_opacity / 255 ), 6 );
 
 	header_h = row_h + 4;
 	cur_y = board_y;
