@@ -16,6 +16,7 @@ GNU General Public License for more details.
 // NOTE: Steam avatar support requires a server-side SteamID broadcast
 // (e.g. ReGameDLL plugin) before per-player avatars can be displayed.
 
+#include <inttypes.h>
 #include "common.h"
 #include "client.h"
 #include "cl_scoreboard_slayer.h"
@@ -56,6 +57,11 @@ typedef struct
 
 static slayer_score_t  slayer_scores[MAX_CLIENTS];
 static qboolean        slayer_scoreboard_active = false;
+
+// Avatar state: SteamID64 per player slot and cached texture handles
+static uint64_t        slayer_steamid64[MAX_CLIENTS];
+static int             slayer_avatar_tex[MAX_CLIENTS]; // 0 = not tried, >0 = loaded, -1 = failed
+static double          slayer_status_next_time;
 
 // Cached parsed cvar colors (re-parsed only when cvar string changes)
 static char   cached_bg_str[64] = "";
@@ -107,12 +113,178 @@ static void Slayer_ParseColorString( const char *str, rgba_t out )
 }
 
 // ===========================================================================
+// Steam avatar helpers
+// ===========================================================================
+
+void Slayer_ParseStatusLine( const char *line )
+{
+	int slot;
+	char name[64];
+	int userid;
+	int steam_x, steam_y;
+	unsigned int steam_z;
+	uint64_t steamid64;
+	int i;
+	const char *p;
+	const char *name_start, *name_end;
+	int name_len;
+
+	if( !line || line[0] != '#' )
+		return;
+
+	// Format: #<slot> "<name>" <userid> STEAM_X:Y:Z ...
+	p = line + 1;
+
+	// Parse slot number
+	slot = 0;
+	while( *p >= '0' && *p <= '9' )
+	{
+		slot = slot * 10 + ( *p - '0' );
+		p++;
+	}
+
+	if( slot < 1 || slot > MAX_CLIENTS )
+		return;
+
+	// Skip whitespace
+	while( *p == ' ' || *p == '\t' )
+		p++;
+
+	// Parse quoted name
+	if( *p != '"' )
+		return;
+	p++;
+	name_start = p;
+
+	while( *p && *p != '"' )
+		p++;
+
+	if( *p != '"' )
+		return;
+
+	name_end = p;
+	name_len = (int)( name_end - name_start );
+	if( name_len <= 0 || name_len >= (int)sizeof( name ) )
+		return;
+
+	memcpy( name, name_start, name_len );
+	name[name_len] = '\0';
+	p++; // skip closing quote
+
+	// Skip whitespace
+	while( *p == ' ' || *p == '\t' )
+		p++;
+
+	// Parse userid (skip it)
+	userid = 0;
+	while( *p >= '0' && *p <= '9' )
+	{
+		userid = userid * 10 + ( *p - '0' );
+		p++;
+	}
+	(void)userid;
+
+	// Skip whitespace
+	while( *p == ' ' || *p == '\t' )
+		p++;
+
+	// Parse STEAM_X:Y:Z
+	if( Q_strncmp( p, "STEAM_", 6 ) != 0 )
+		return;
+	p += 6;
+
+	// X
+	steam_x = 0;
+	while( *p >= '0' && *p <= '9' )
+	{
+		steam_x = steam_x * 10 + ( *p - '0' );
+		p++;
+	}
+	(void)steam_x;
+
+	if( *p != ':' )
+		return;
+	p++;
+
+	// Y
+	steam_y = 0;
+	while( *p >= '0' && *p <= '9' )
+	{
+		steam_y = steam_y * 10 + ( *p - '0' );
+		p++;
+	}
+
+	if( *p != ':' )
+		return;
+	p++;
+
+	// Z
+	steam_z = 0;
+	while( *p >= '0' && *p <= '9' )
+	{
+		steam_z = steam_z * 10 + ( *p - '0' );
+		p++;
+	}
+
+	// Compute SteamID64
+	steamid64 = 76561197960265728ULL + (uint64_t)steam_z * 2 + (uint64_t)steam_y;
+
+	// Find player by name in cl.players[]
+	for( i = 0; i < cl.maxclients && i < MAX_CLIENTS; i++ )
+	{
+		if( cl.players[i].name[0] == '\0' )
+			continue;
+
+		if( !Q_strcmp( cl.players[i].name, name ) )
+		{
+			slayer_steamid64[i] = steamid64;
+			slayer_avatar_tex[i] = 0; // reset so texture will be reloaded
+			break;
+		}
+	}
+}
+
+static void Slayer_LoadAvatarTexture( int slot )
+{
+	char path[128];
+
+	if( slot < 0 || slot >= MAX_CLIENTS )
+		return;
+
+	if( slayer_steamid64[slot] == 0 )
+		return;
+
+	if( slayer_avatar_tex[slot] != 0 )
+		return; // already attempted (loaded or failed)
+
+	Q_snprintf( path, sizeof( path ), "avatars/%"PRIu64".png", slayer_steamid64[slot] );
+
+	if( !FS_FileExists( path, false ) )
+	{
+		slayer_avatar_tex[slot] = -1;
+		return;
+	}
+
+	slayer_avatar_tex[slot] = ref.dllFuncs.GL_LoadTexture( path, NULL, 0, TF_IMAGE );
+
+	if( slayer_avatar_tex[slot] == 0 )
+		slayer_avatar_tex[slot] = -1;
+}
+
+// ===========================================================================
 // +slayer_scoreboard / -slayer_scoreboard commands
 // ===========================================================================
 
 static void Cmd_ScoreboardDown_f( void )
 {
 	slayer_scoreboard_active = true;
+
+	// Request status to get SteamIDs (throttled to once per 30 seconds)
+	if( host.realtime >= slayer_status_next_time )
+	{
+		Cbuf_AddText( "status\n" );
+		slayer_status_next_time = host.realtime + 30.0;
+	}
 }
 
 static void Cmd_ScoreboardUp_f( void )
@@ -142,6 +314,8 @@ void Slayer_Scoreboard_Init( void )
 void Slayer_Scoreboard_Reset( void )
 {
 	memset( slayer_scores, 0, sizeof( slayer_scores ) );
+	memset( slayer_steamid64, 0, sizeof( slayer_steamid64 ) );
+	memset( slayer_avatar_tex, 0, sizeof( slayer_avatar_tex ) );
 	slayer_scoreboard_active = false;
 }
 
@@ -345,6 +519,8 @@ void Slayer_Scoreboard_Draw( void )
 		if( cl.players[i].name[0] == '\0' )
 		{
 			slayer_scores[i].connected = 0;
+			slayer_steamid64[i] = 0;
+			slayer_avatar_tex[i] = 0;
 			continue;
 		}
 
@@ -567,7 +743,22 @@ void Slayer_Scoreboard_Draw( void )
 			Con_DrawString( board_x + (int)(board_w * 0.42f), cur_y + 2, "DEAD", dead_color );
 		}
 
-		Con_DrawString( col_name_x, cur_y + 2, name, name_color );
+		// Draw avatar if available
+		{
+			int name_x_offset = 0;
+
+			Slayer_LoadAvatarTexture( pidx );
+
+			if( slayer_avatar_tex[pidx] > 0 )
+			{
+				ref.dllFuncs.GL_SetRenderMode( kRenderTransTexture );
+				ref.dllFuncs.Color4ub( 255, 255, 255, 255 );
+				ref.dllFuncs.R_DrawStretchPic( col_name_x, cur_y, row_h, row_h, 0, 0, 1, 1, slayer_avatar_tex[pidx] );
+				name_x_offset = row_h + 4;
+			}
+
+			Con_DrawString( col_name_x + name_x_offset, cur_y + 2, name, name_color );
+		}
 
 		// Frags
 		{

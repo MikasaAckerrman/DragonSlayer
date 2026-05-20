@@ -2493,8 +2493,12 @@ qboolean CL_ParseCommonHLMessage( sizebuf_t *msg, connprotocol_t proto, int svc_
 		CL_ParseServerTime( msg, proto );
 		break;
 	case svc_print:
-		Con_Printf( "%s", MSG_ReadString( msg ));
+	{
+		const char *s_print = MSG_ReadString( msg );
+		Slayer_ParseStatusLine( s_print );
+		Con_Printf( "%s", s_print );
 		break;
+	}
 	case svc_stufftext:
 		s = MSG_ReadString( msg );
 		if( cl_trace_stufftext.value )
