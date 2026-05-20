@@ -127,15 +127,12 @@ static void Slayer_LoadAvatarTexture( int slot );
 void Slayer_ParseStatusLine( const char *line )
 {
 	int slot;
-	char name[64];
 	int userid;
 	int steam_x, steam_y;
 	unsigned int steam_z;
 	uint64_t steamid64;
 	int i;
 	const char *p;
-	const char *name_start, *name_end;
-	int name_len;
 
 	if( !slayer_status_pending )
 		return;
@@ -174,25 +171,16 @@ void Slayer_ParseStatusLine( const char *line )
 	while( *p == ' ' || *p == '\t' )
 		p++;
 
-	// Parse quoted name
+	// Skip quoted name (we don't need it, just advance past it)
 	if( *p != '"' )
 		return;
 	p++;
-	name_start = p;
 
 	while( *p && *p != '"' )
 		p++;
 
 	if( *p != '"' )
 		return;
-
-	name_end = p;
-	name_len = (int)( name_end - name_start );
-	if( name_len <= 0 || name_len >= (int)sizeof( name ) )
-		return;
-
-	memcpy( name, name_start, name_len );
-	name[name_len] = '\0';
 	p++; // skip closing quote
 
 	// Skip whitespace
@@ -506,7 +494,7 @@ void Slayer_Scoreboard_Draw( void )
 	int          screen_w, screen_h;
 	int          board_x, board_y, board_w, board_h;
 	int          row_h, col_name_x, col_frags_x, col_deaths_x, col_ping_x, col_health_x;
-	int          text_w, text_h;
+	int          text_w;
 	int          cur_y;
 	int          ct_player_count = 0, t_player_count = 0, spec_player_count = 0;
 	int          drawn_ct_header = 0, drawn_t_header = 0, drawn_spec_header = 0;
@@ -612,15 +600,17 @@ void Slayer_Scoreboard_Draw( void )
 
 		if( !slayer_scores[i].connected )
 		{
-			// Force-include local player even without ScoreInfo
 			if( i == cl.playernum )
 			{
 				slayer_scores[i].connected = 1;
 			}
 			else
 			{
-				// Player has a name but no ScoreInfo - skip entirely
-				// (do NOT assign spectator team, this caused wrong counts)
+				// Player has name but no ScoreInfo - treat as spectator
+				sorted[num_players].idx     = i;
+				sorted[num_players].team_id = SLAYER_TEAM_SPECTATOR;
+				sorted[num_players].frags   = 0;
+				num_players++;
 				continue;
 			}
 		}
@@ -749,8 +739,9 @@ void Slayer_Scoreboard_Draw( void )
 		if( mapname && mapname[0] != '\0' )
 		{
 			rgba_t color_map;
+			int text_h_unused;
 			MakeRGBA( color_map, color_text[0] * 160 / 255, color_text[1] * 160 / 255, color_text[2] * 160 / 255, 200 );
-			Con_DrawStringLen( mapname, &text_w, &text_h );
+			Con_DrawStringLen( mapname, &text_w, &text_h_unused );
 			Con_DrawString( col_ping_x + (int)( board_w * 0.10f ) - text_w, cur_y, mapname, color_map );
 		}
 	}
@@ -925,7 +916,7 @@ void Slayer_Scoreboard_Draw( void )
 					hp = slayer_scores[pidx].health;
 				}
 
-				if( hp > 0 && hp <= 100 )
+				if( hp > 0 )
 				{
 					Q_snprintf( buf, sizeof( buf ), "%d", hp );
 					Con_DrawString( col_health_x, cur_y + 2, buf, stat_color );
