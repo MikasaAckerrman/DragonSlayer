@@ -80,6 +80,38 @@ static rgba_t cached_color_t;
 static rgba_t cached_color_border;
 
 // ===========================================================================
+// Border corner template (top-left quadrant, mirrored at draw time)
+// ===========================================================================
+//
+// Each entry = {x_off, y_off, w, h} relative to the corner's origin
+// (the top-left of the bounding board). The 10 entries trace the OUTERMOST
+// pixel of the staircase BG contour for one corner, with NO overlap at the
+// step elbows. Slayer_DrawBorderCorner() mirrors this set across X and/or Y
+// to produce all four corners. The four "stretchy" rects (top cap, bottom
+// cap, left/right body walls) are emitted directly in Slayer_Scoreboard_Draw.
+//
+// Total border draw calls: 4 corners * 10 + 4 stretchy = 44.
+
+typedef struct
+{
+	int x, y, w, h;
+} slayer_border_seg_t;
+
+static const slayer_border_seg_t slayer_border_corner_segs[10] =
+{
+	{ 16,  1, 1, 3 }, // strip 0 left wall, 3px tall (y=0 row is owned by top cap)
+	{ 12,  4, 4, 1 }, // strip 1 shoulder cap, 4px wide
+	{ 12,  5, 1, 3 }, // strip 1 left wall, 3px tall
+	{  8,  8, 4, 1 }, // strip 2 shoulder cap
+	{  8,  9, 1, 3 }, // strip 2 left wall
+	{  4, 12, 4, 1 }, // strip 3 shoulder cap
+	{  4, 13, 1, 3 }, // strip 3 left wall
+	{  2, 16, 2, 1 }, // strip 4 shoulder cap, 2px wide
+	{  2, 17, 1, 3 }, // strip 4 left wall
+	{  0, 20, 2, 1 }, // body-top shoulder, 2px wide (body wall takes y=21..h-22)
+};
+
+// ===========================================================================
 // Cvar color parsing helper
 // ===========================================================================
 
@@ -468,6 +500,24 @@ static void Slayer_DrawRect( int x, int y, int w, int h, byte r, byte g, byte b,
 	ref.dllFuncs.FillRGBA( kRenderTransTexture, x, y, w, h, r, g, b, a );
 }
 
+// Draw one rounded corner of the border by walking slayer_border_corner_segs[]
+// and reflecting each segment across X/Y as requested. The corner table
+// describes the top-left quadrant; all other quadrants are exact mirrors.
+static void Slayer_DrawBorderCorner( int bx, int by, int bw, int bh,
+	qboolean mirror_x, qboolean mirror_y, byte r, byte g, byte b, byte a )
+{
+	size_t i;
+
+	for( i = 0; i < sizeof( slayer_border_corner_segs ) / sizeof( slayer_border_corner_segs[0] ); i++ )
+	{
+		const slayer_border_seg_t *s = &slayer_border_corner_segs[i];
+		int x = mirror_x ? ( bx + bw - s->x - s->w ) : ( bx + s->x );
+		int y = mirror_y ? ( by + bh - s->y - s->h ) : ( by + s->y );
+
+		Slayer_DrawRect( x, y, s->w, s->h, r, g, b, a );
+	}
+}
+
 // ===========================================================================
 // Sorting
 // ===========================================================================
@@ -704,63 +754,23 @@ void Slayer_Scoreboard_Draw( void )
 		byte br_r = cached_color_border[0], br_g = cached_color_border[1];
 		byte br_b = cached_color_border[2], br_a = (byte)( cached_color_border[3] * global_opacity / 255 );
 
+		// Four staircase corners (table-driven, no overlap at the step elbows).
+		Slayer_DrawBorderCorner( board_x, board_y, board_w, board_h, false, false, br_r, br_g, br_b, br_a );
+		Slayer_DrawBorderCorner( board_x, board_y, board_w, board_h, true,  false, br_r, br_g, br_b, br_a );
+		Slayer_DrawBorderCorner( board_x, board_y, board_w, board_h, false, true,  br_r, br_g, br_b, br_a );
+		Slayer_DrawBorderCorner( board_x, board_y, board_w, board_h, true,  true,  br_r, br_g, br_b, br_a );
+
 		// Top horizontal cap
 		Slayer_DrawRect( board_x + 16, board_y, board_w - 32, 1, br_r, br_g, br_b, br_a );
-
-		// Top staircase - left side
-		Slayer_DrawRect( board_x + 16, board_y, 1, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 12, board_y + 4, 4, 1, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 12, board_y + 4, 1, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 8, board_y + 8, 4, 1, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 8, board_y + 8, 1, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 4, board_y + 12, 4, 1, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 4, board_y + 12, 1, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 2, board_y + 16, 2, 1, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 2, board_y + 16, 1, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x, board_y + 20, 2, 1, br_r, br_g, br_b, br_a );
-
-		// Top staircase - right side
-		Slayer_DrawRect( board_x + board_w - 17, board_y, 1, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 16, board_y + 4, 4, 1, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 13, board_y + 4, 1, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 12, board_y + 8, 4, 1, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 9, board_y + 8, 1, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 8, board_y + 12, 4, 1, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 5, board_y + 12, 1, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 4, board_y + 16, 2, 1, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 3, board_y + 16, 1, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 2, board_y + 20, 2, 1, br_r, br_g, br_b, br_a );
-
-		// Main body side walls (1px wide)
-		Slayer_DrawRect( board_x, board_y + 20, 1, board_h - 40, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 1, board_y + 20, 1, board_h - 40, br_r, br_g, br_b, br_a );
 
 		// Bottom horizontal cap
 		Slayer_DrawRect( board_x + 16, board_y + board_h - 1, board_w - 32, 1, br_r, br_g, br_b, br_a );
 
-		// Bottom staircase - left side (mirror of top)
-		Slayer_DrawRect( board_x + 16, board_y + board_h - 4, 1, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 12, board_y + board_h - 5, 4, 1, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 12, board_y + board_h - 8, 1, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 8, board_y + board_h - 9, 4, 1, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 8, board_y + board_h - 12, 1, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 4, board_y + board_h - 13, 4, 1, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 4, board_y + board_h - 16, 1, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 2, board_y + board_h - 17, 2, 1, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 2, board_y + board_h - 20, 1, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x, board_y + board_h - 21, 2, 1, br_r, br_g, br_b, br_a );
-
-		// Bottom staircase - right side (mirror of top)
-		Slayer_DrawRect( board_x + board_w - 17, board_y + board_h - 4, 1, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 16, board_y + board_h - 5, 4, 1, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 13, board_y + board_h - 8, 1, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 12, board_y + board_h - 9, 4, 1, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 9, board_y + board_h - 12, 1, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 8, board_y + board_h - 13, 4, 1, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 5, board_y + board_h - 16, 1, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 4, board_y + board_h - 17, 2, 1, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 3, board_y + board_h - 20, 1, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 2, board_y + board_h - 21, 2, 1, br_r, br_g, br_b, br_a );
+		// Body side walls. Height is board_h - 42 because the two body shoulder
+		// rows (y = board_y + 20 and y = board_y + board_h - 21) are now painted
+		// by the corner template's {0,20,2,1} entry under the y-mirror.
+		Slayer_DrawRect( board_x, board_y + 21, 1, board_h - 42, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + board_w - 1, board_y + 21, 1, board_h - 42, br_r, br_g, br_b, br_a );
 	}
 
 	cur_y = board_y;
