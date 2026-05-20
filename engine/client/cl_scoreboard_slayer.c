@@ -62,6 +62,7 @@ static qboolean        slayer_scoreboard_active = false;
 static uint64_t        slayer_steamid64[MAX_CLIENTS];
 static int             slayer_avatar_tex[MAX_CLIENTS]; // 0 = not tried, >0 = loaded, -1 = failed
 static double          slayer_status_next_time;
+static qboolean        slayer_status_pending; // true after sending "status", cleared when done
 
 // Cached parsed cvar colors (re-parsed only when cvar string changes)
 static char   cached_bg_str[64] = "";
@@ -116,6 +117,8 @@ static void Slayer_ParseColorString( const char *str, rgba_t out )
 // Steam avatar helpers
 // ===========================================================================
 
+static void Slayer_LoadAvatarTexture( int slot );
+
 void Slayer_ParseStatusLine( const char *line )
 {
 	int slot;
@@ -129,8 +132,15 @@ void Slayer_ParseStatusLine( const char *line )
 	const char *name_start, *name_end;
 	int name_len;
 
-	if( !line || line[0] != '#' )
+	if( !slayer_status_pending )
 		return;
+
+	if( !line || line[0] != '#' )
+	{
+		// A non-# line after we started receiving status means response is done
+		slayer_status_pending = false;
+		return;
+	}
 
 	// Format: #<slot> "<name>" <userid> STEAM_X:Y:Z ...
 	p = line + 1;
@@ -229,19 +239,13 @@ void Slayer_ParseStatusLine( const char *line )
 	// Compute SteamID64
 	steamid64 = 76561197960265728ULL + (uint64_t)steam_z * 2 + (uint64_t)steam_y;
 
-	// Find player by name in cl.players[]
-	for( i = 0; i < cl.maxclients && i < MAX_CLIENTS; i++ )
-	{
-		if( cl.players[i].name[0] == '\0' )
-			continue;
+	// Use the authoritative slot number directly (1-based -> 0-based)
+	i = slot - 1;
+	slayer_steamid64[i] = steamid64;
+	slayer_avatar_tex[i] = 0; // reset so texture will be reloaded
 
-		if( !Q_strcmp( cl.players[i].name, name ) )
-		{
-			slayer_steamid64[i] = steamid64;
-			slayer_avatar_tex[i] = 0; // reset so texture will be reloaded
-			break;
-		}
-	}
+	// Load texture immediately at parse time (outside render loop)
+	Slayer_LoadAvatarTexture( i );
 }
 
 static void Slayer_LoadAvatarTexture( int slot )
@@ -284,6 +288,7 @@ static void Cmd_ScoreboardDown_f( void )
 	{
 		Cbuf_AddText( "status\n" );
 		slayer_status_next_time = host.realtime + 30.0;
+		slayer_status_pending = true;
 	}
 }
 
@@ -317,6 +322,7 @@ void Slayer_Scoreboard_Reset( void )
 	memset( slayer_steamid64, 0, sizeof( slayer_steamid64 ) );
 	memset( slayer_avatar_tex, 0, sizeof( slayer_avatar_tex ) );
 	slayer_scoreboard_active = false;
+	slayer_status_pending = false;
 }
 
 void Slayer_OnHealthUpdate( int hp )
@@ -747,12 +753,10 @@ void Slayer_Scoreboard_Draw( void )
 		{
 			int name_x_offset = 0;
 
-			Slayer_LoadAvatarTexture( pidx );
-
 			if( slayer_avatar_tex[pidx] > 0 )
 			{
 				ref.dllFuncs.GL_SetRenderMode( kRenderTransTexture );
-				ref.dllFuncs.Color4ub( 255, 255, 255, 255 );
+				ref.dllFuncs.Color4ub( 255, 255, 255, row_alpha );
 				ref.dllFuncs.R_DrawStretchPic( col_name_x, cur_y, row_h, row_h, 0, 0, 1, 1, slayer_avatar_tex[pidx] );
 				name_x_offset = row_h + 4;
 			}
