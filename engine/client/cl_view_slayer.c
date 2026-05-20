@@ -39,8 +39,6 @@ CVAR_DEFINE_AUTO( slayer_chat_color, "", FCVAR_ARCHIVE, "Slayer3D: chat message 
 CVAR_DEFINE_AUTO( slayer_chat_color_t, "", FCVAR_ARCHIVE, "Slayer3D: Terrorist name color R G B (empty = default)" );
 CVAR_DEFINE_AUTO( slayer_chat_color_ct, "", FCVAR_ARCHIVE, "Slayer3D: CT name color R G B (empty = default)" );
 
-static CVAR_DEFINE_AUTO( slayer_steam_apikey, "", FCVAR_PROTECTED, "Steam Web API key for avatar downloads" );
-
 // ===========================================================================
 // Cvars - Movement tweaks
 // ===========================================================================
@@ -152,7 +150,6 @@ void V_InitSlayerCvars( void )
 	Cvar_RegisterVariable( &slayer_chat_color );
 	Cvar_RegisterVariable( &slayer_chat_color_t );
 	Cvar_RegisterVariable( &slayer_chat_color_ct );
-	Cvar_RegisterVariable( &slayer_steam_apikey );
 	Cvar_RegisterVariable( &slayer_killsound_headshot );
 	Cvar_RegisterVariable( &slayer_killsound_teamkill );
 	Cvar_RegisterVariable( &slayer_killsound_volume );
