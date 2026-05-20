@@ -1981,6 +1981,7 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 	cl_font_t *font = Con_GetFont( con_fontsize.value );
 	rgba_t color;
 	int r, g, b;
+	qboolean is_chat = false;
 
 	Vector4Copy( clgame.ds.textColor, color );
 	Vector4Set( clgame.ds.textColor, 255, 255, 255, 255 );
@@ -1990,6 +1991,7 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 	if( color[1] > 100 && color[2] < 100 )
 	{
 		// Message body (orange/yellow default) - apply chat_color
+		is_chat = true;
 		if( slayer_chat_color.string[0] != '\0'
 			&& sscanf( slayer_chat_color.string, "%i %i %i", &r, &g, &b ) == 3 )
 		{
@@ -2002,6 +2004,7 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 	else if( color[1] < 100 && color[2] < 100 )
 	{
 		// T name (reddish: high R, low G, low B) - apply chat_color_t
+		is_chat = true;
 		if( slayer_chat_color_t.string[0] != '\0'
 			&& sscanf( slayer_chat_color_t.string, "%i %i %i", &r, &g, &b ) == 3 )
 		{
@@ -2014,6 +2017,7 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 	else if( color[2] > 100 )
 	{
 		// CT name (blueish: high B) - apply chat_color_ct
+		is_chat = true;
 		if( slayer_chat_color_ct.string[0] != '\0'
 			&& sscanf( slayer_chat_color_ct.string, "%i %i %i", &r, &g, &b ) == 3 )
 		{
@@ -2023,6 +2027,10 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 			color[3] = 255;
 		}
 	}
+
+	// Slayer3D: echo chat to console
+	if( is_chat && string && string[0] != '\0' )
+		Con_Printf( "%s", string );
 
 	return x + CL_DrawString( x, y, string, color, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD | FONT_DRAW_FORCECOL );
 }
