@@ -994,6 +994,7 @@ void V_Shutdown( void );
 qboolean V_PreRender( void );
 void V_PostRender( void );
 void V_RenderView( void );
+float V_CalcFov( float *fov_x, float width, float height );
 
 //
 // cl_pmove.c

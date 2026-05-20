@@ -48,11 +48,11 @@ static CVAR_DEFINE_AUTO( slayer_autostrafe, "0", FCVAR_ARCHIVE, "Slayer3D: enabl
 static CVAR_DEFINE_AUTO( slayer_autojump,   "0", FCVAR_ARCHIVE, "Slayer3D: enable auto-bhop with ladder safety and anti-bhop bypass" );
 
 // ===========================================================================
-// Cvars - Scope smooth
+// Cvars - Smooth zoom
 // ===========================================================================
 
-static CVAR_DEFINE_AUTO( slayer_scope_smooth, "1", FCVAR_ARCHIVE, "Slayer3D: enable smooth scope aiming (0 = disabled)" );
-static CVAR_DEFINE_AUTO( slayer_scope_smooth_amount, "0.7", FCVAR_ARCHIVE, "Slayer3D: scope smoothing factor 0-1 (higher = more smooth)" );
+static CVAR_DEFINE_AUTO( slayer_smooth_zoom, "1", FCVAR_ARCHIVE, "Slayer3D: enable smooth FOV zoom animation" );
+static CVAR_DEFINE_AUTO( slayer_smooth_zoom_speed, "12.0", FCVAR_ARCHIVE, "Slayer3D: smooth zoom interpolation speed" );
 
 // ===========================================================================
 // Cvars - Kill-sound
@@ -169,9 +169,9 @@ void V_InitSlayerCvars( void )
 	Cmd_AddCommand( "-ducktap", Cmd_DucktapUp_f,
 		"stop rapid duck toggling (ducktap)" );
 
-	// Scope smooth
-	Cvar_RegisterVariable( &slayer_scope_smooth );
-	Cvar_RegisterVariable( &slayer_scope_smooth_amount );
+	// Smooth zoom
+	Cvar_RegisterVariable( &slayer_smooth_zoom );
+	Cvar_RegisterVariable( &slayer_smooth_zoom_speed );
 
 	// Initialize per-match state
 	Slayer_ResetMatchState();
@@ -567,50 +567,37 @@ void V_SlayerMovementTweaks( usercmd_t *cmd )
 }
 
 // ===========================================================================
-// Scope smooth - smooth sniper scope aiming (CS:GO style)
+// Smooth zoom - smooth FOV zoom animation
 // ===========================================================================
 
-void V_SlayerScopeSmooth( usercmd_t *cmd )
+void V_SlayerSmoothZoom( ref_viewpass_t *rvp )
 {
-	static float prev_pitch = 0, prev_yaw = 0;
-	static qboolean was_zoomed = false;
-	float factor, effective, delta_yaw;
+	static float smooth_fov = 90.0f;
+	float target, speed, diff;
 
-	if( slayer_scope_smooth.value == 0.0f )
-		return;
+	target = rvp->fov_x;
 
-	if( cl.local.scr_fov >= 90 || cl.local.scr_fov <= 0 )
+	// If disabled, pass through without smoothing
+	if( slayer_smooth_zoom.value == 0.0f )
 	{
-		was_zoomed = false;
+		smooth_fov = target;
 		return;
 	}
 
-	factor = bound( 0.0f, slayer_scope_smooth_amount.value, 0.95f );
+	diff = target - smooth_fov;
 
-	if( !was_zoomed )
+	// Avoid permanent drift: snap when difference is negligible
+	if( fabs( diff ) < 0.01f )
 	{
-		prev_pitch = cl.viewangles[PITCH];
-		prev_yaw = cl.viewangles[YAW];
-		was_zoomed = true;
+		smooth_fov = target;
+		rvp->fov_x = smooth_fov;
+		rvp->fov_y = V_CalcFov( &rvp->fov_x, clgame.viewport[2], clgame.viewport[3] );
 		return;
 	}
 
-	// Normalize smoothing to 60fps equivalence so behavior is consistent
-	// regardless of actual frame rate
-	effective = 1.0f - powf( factor, host.frametime * 60.0f );
+	speed = slayer_smooth_zoom_speed.value;
+	smooth_fov += diff * speed * host.frametime;
 
-	// Pitch: simple linear interpolation (no wraparound issue)
-	cl.viewangles[PITCH] = prev_pitch + (cl.viewangles[PITCH] - prev_pitch) * effective;
-
-	// Yaw: normalize delta to shortest arc to avoid +-180 wraparound snap
-	delta_yaw = cl.viewangles[YAW] - prev_yaw;
-	if( delta_yaw > 180.0f ) delta_yaw -= 360.0f;
-	if( delta_yaw < -180.0f ) delta_yaw += 360.0f;
-	cl.viewangles[YAW] = prev_yaw + delta_yaw * effective;
-
-	cmd->viewangles[PITCH] = cl.viewangles[PITCH];
-	cmd->viewangles[YAW] = cl.viewangles[YAW];
-
-	prev_pitch = cl.viewangles[PITCH];
-	prev_yaw = cl.viewangles[YAW];
+	rvp->fov_x = smooth_fov;
+	rvp->fov_y = V_CalcFov( &rvp->fov_x, clgame.viewport[2], clgame.viewport[3] );
 }
