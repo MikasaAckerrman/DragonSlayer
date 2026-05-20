@@ -447,7 +447,7 @@ void Slayer_Scoreboard_Draw( void )
 			ct_player_count++;
 		else if( sorted[i].team_id == SLAYER_TEAM_T )
 			t_player_count++;
-		else
+		else if( sorted[i].team_id == SLAYER_TEAM_SPECTATOR )
 			spec_player_count++;
 	}
 
