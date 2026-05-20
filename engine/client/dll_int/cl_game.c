@@ -2028,9 +2028,20 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 		}
 	}
 
-	// Slayer3D: echo chat to console
+	// Slayer3D: echo NEW chat messages to console (deduplicate per-frame redraws)
 	if( is_chat && string && string[0] != '\0' )
-		Con_Printf( "%s", string );
+	{
+		static char last_chat[256] = "";
+		static double last_chat_time = 0.0;
+
+		// Only print if it's a new message (different text or >2s since last identical)
+		if( Q_strcmp( last_chat, string ) || ( host.realtime - last_chat_time ) > 2.0 )
+		{
+			Con_Printf( "%s", string );
+			Q_strncpy( last_chat, string, sizeof( last_chat ) );
+			last_chat_time = host.realtime;
+		}
+	}
 
 	return x + CL_DrawString( x, y, string, color, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD | FONT_DRAW_FORCECOL );
 }

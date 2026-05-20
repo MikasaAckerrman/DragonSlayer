@@ -471,18 +471,20 @@ void Slayer_Scoreboard_Draw( void )
 	board_x = ( screen_w - board_w ) / 2;
 	board_y = ( screen_h - board_h ) / 2;
 
-	// Simulated rounded corners (8px radius, multiple strips)
+	// Simulated rounded corners (12px radius, 3 strips per side)
 	{
 		byte bg_r = color_bg[0], bg_g = color_bg[1], bg_b = color_bg[2];
 		byte bg_a = (byte)( color_bg[3] * global_opacity / 255 );
-		// Main body
-		Slayer_DrawRect( board_x, board_y + 8, board_w, board_h - 16, bg_r, bg_g, bg_b, bg_a );
-		// Top rounding (2 strips getting narrower)
-		Slayer_DrawRect( board_x + 2, board_y + 4, board_w - 4, 4, bg_r, bg_g, bg_b, bg_a );
-		Slayer_DrawRect( board_x + 6, board_y, board_w - 12, 4, bg_r, bg_g, bg_b, bg_a );
-		// Bottom rounding (2 strips getting narrower)
-		Slayer_DrawRect( board_x + 2, board_y + board_h - 8, board_w - 4, 4, bg_r, bg_g, bg_b, bg_a );
-		Slayer_DrawRect( board_x + 6, board_y + board_h - 4, board_w - 12, 4, bg_r, bg_g, bg_b, bg_a );
+		// Main body (inset 12px top/bottom)
+		Slayer_DrawRect( board_x, board_y + 12, board_w, board_h - 24, bg_r, bg_g, bg_b, bg_a );
+		// Top rounding (3 strips, progressively narrower)
+		Slayer_DrawRect( board_x + 2, board_y + 8, board_w - 4, 4, bg_r, bg_g, bg_b, bg_a );
+		Slayer_DrawRect( board_x + 4, board_y + 4, board_w - 8, 4, bg_r, bg_g, bg_b, bg_a );
+		Slayer_DrawRect( board_x + 8, board_y, board_w - 16, 4, bg_r, bg_g, bg_b, bg_a );
+		// Bottom rounding (3 strips, progressively narrower)
+		Slayer_DrawRect( board_x + 2, board_y + board_h - 12, board_w - 4, 4, bg_r, bg_g, bg_b, bg_a );
+		Slayer_DrawRect( board_x + 4, board_y + board_h - 8, board_w - 8, 4, bg_r, bg_g, bg_b, bg_a );
+		Slayer_DrawRect( board_x + 8, board_y + board_h - 4, board_w - 16, 4, bg_r, bg_g, bg_b, bg_a );
 	}
 
 	cur_y = board_y;
@@ -497,9 +499,10 @@ void Slayer_Scoreboard_Draw( void )
 	// Draw dark header bar with rounded top corners
 	{
 		byte hdr_a = (byte)( global_opacity * 240 / 255 );
-		Slayer_DrawRect( board_x, cur_y + 8, board_w, row_h + 6 - 8, 10, 10, 10, hdr_a );
-		Slayer_DrawRect( board_x + 2, cur_y + 4, board_w - 4, 4, 10, 10, 10, hdr_a );
-		Slayer_DrawRect( board_x + 6, cur_y, board_w - 12, 4, 10, 10, 10, hdr_a );
+		Slayer_DrawRect( board_x, cur_y + 12, board_w, row_h + 6 - 12, 10, 10, 10, hdr_a );
+		Slayer_DrawRect( board_x + 2, cur_y + 8, board_w - 4, 4, 10, 10, 10, hdr_a );
+		Slayer_DrawRect( board_x + 4, cur_y + 4, board_w - 8, 4, 10, 10, 10, hdr_a );
+		Slayer_DrawRect( board_x + 8, cur_y, board_w - 16, 4, 10, 10, 10, hdr_a );
 	}
 
 	// Draw server name (left-aligned)
