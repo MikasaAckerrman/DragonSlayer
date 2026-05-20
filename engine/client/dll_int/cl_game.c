@@ -1981,7 +1981,6 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 	cl_font_t *font = Con_GetFont( con_fontsize.value );
 	rgba_t color;
 	int r, g, b;
-	qboolean is_chat = false;
 
 	Vector4Copy( clgame.ds.textColor, color );
 	Vector4Set( clgame.ds.textColor, 255, 255, 255, 255 );
@@ -1991,7 +1990,6 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 	if( color[1] > 100 && color[2] < 100 )
 	{
 		// Message body (orange/yellow default) - apply chat_color
-		is_chat = true;
 		if( slayer_chat_color.string[0] != '\0'
 			&& sscanf( slayer_chat_color.string, "%i %i %i", &r, &g, &b ) == 3 )
 		{
@@ -2004,7 +2002,6 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 	else if( color[1] < 100 && color[2] < 100 )
 	{
 		// T name (reddish: high R, low G, low B) - apply chat_color_t
-		is_chat = true;
 		if( slayer_chat_color_t.string[0] != '\0'
 			&& sscanf( slayer_chat_color_t.string, "%i %i %i", &r, &g, &b ) == 3 )
 		{
@@ -2017,7 +2014,6 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 	else if( color[2] > 100 )
 	{
 		// CT name (blueish: high B) - apply chat_color_ct
-		is_chat = true;
 		if( slayer_chat_color_ct.string[0] != '\0'
 			&& sscanf( slayer_chat_color_ct.string, "%i %i %i", &r, &g, &b ) == 3 )
 		{
@@ -2025,36 +2021,6 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 			color[1] = (byte)bound( 0, g, 255 );
 			color[2] = (byte)bound( 0, b, 255 );
 			color[3] = 255;
-		}
-	}
-
-	// Slayer3D: echo chat to console (deduplicate per-frame redraws)
-	if( is_chat && string && string[0] != '\0' )
-	{
-		static char last_chat[8][256];
-		static int  last_chat_idx = 0;
-		static double last_print_time = 0;
-		int j;
-		qboolean duplicate = false;
-
-		for( j = 0; j < 8; j++ )
-		{
-			if( !Q_strncmp( last_chat[j], string, 64 ) )
-			{
-				duplicate = true;
-				break;
-			}
-		}
-
-		if( !duplicate )
-		{
-			if( host.realtime - last_print_time >= 0.3 )
-			{
-				Con_Printf( "%s", string );
-				last_print_time = host.realtime;
-			}
-			Q_strncpy( last_chat[last_chat_idx], string, sizeof( last_chat[0] ) );
-			last_chat_idx = ( last_chat_idx + 1 ) % 8;
 		}
 	}
 

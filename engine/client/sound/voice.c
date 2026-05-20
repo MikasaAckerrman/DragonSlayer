@@ -749,10 +749,7 @@ static int Voice_ProcessGSData( int ent, const uint8_t *data, uint32_t size )
 	offset += sizeof( uint16_t );
 
 	if( offset + data_len > size - sizeof( uint32_t ))
-	{
-		Con_DPrintf( S_WARN "Voice data length exceeds packet size\n" );
 		return 0;
-	}
 
 	if( vpc_type == GS_VPC_VDATA_OPUS_PLC )
 	{
