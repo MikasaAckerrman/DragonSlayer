@@ -17,7 +17,13 @@ import su.xash.engine.BuildConfig;
 import su.xash.engine.util.AndroidBug5497Workaround;
 import su.xash.engine.util.CrashReports;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.Arrays;
 import java.util.List;
 
@@ -218,5 +224,119 @@ public class XashActivity extends SDLActivity {
 		if (argv == null) argv = "-console -log";
 
 		return argv.split(" ");
+	}
+
+	/**
+	 * Downloads a Steam avatar image to disk.
+	 * Called from native C pthread via JNI - runs synchronously.
+	 *
+	 * @param steamid64 The Steam64 ID of the player
+	 * @param savePath  Absolute path to save the avatar image
+	 * @return 0=success, 1=network error, 2=profile private/not found, 3=parse error
+	 */
+	public static int downloadAvatar( String steamid64, String savePath )
+	{
+		try
+		{
+			Log.d( TAG, "downloadAvatar: fetching profile XML for " + steamid64 );
+
+			// Phase 1 - Fetch Steam profile XML
+			URL profileUrl = new URL( "https://steamcommunity.com/profiles/" + steamid64 + "/?xml=1" );
+			HttpURLConnection conn = (HttpURLConnection) profileUrl.openConnection();
+			conn.setConnectTimeout( 15000 );
+			conn.setReadTimeout( 15000 );
+			conn.setRequestProperty( "User-Agent", "Mozilla/5.0" );
+			conn.setInstanceFollowRedirects( true );
+
+			InputStream is = conn.getInputStream();
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			byte[] buf = new byte[4096];
+			int n;
+			while( ( n = is.read( buf ) ) != -1 )
+				baos.write( buf, 0, n );
+			is.close();
+			conn.disconnect();
+
+			String xml = baos.toString( "UTF-8" );
+
+			// Check for private profile
+			if( xml.indexOf( "<privacyState>private</privacyState>" ) != -1 )
+			{
+				Log.d( TAG, "downloadAvatar: profile is private" );
+				return 2;
+			}
+
+			// Phase 2 - Parse XML for avatar URL
+			String avatarUrl = extractTagContent( xml, "avatarMedium" );
+			if( avatarUrl == null )
+				avatarUrl = extractTagContent( xml, "avatarFull" );
+
+			if( avatarUrl == null || avatarUrl.isEmpty() )
+			{
+				Log.d( TAG, "downloadAvatar: no avatar URL found" );
+				return 2;
+			}
+
+			Log.d( TAG, "downloadAvatar: downloading image from " + avatarUrl );
+
+			// Phase 2 - Download the avatar image
+			URL imageUrl = new URL( avatarUrl );
+			HttpURLConnection imgConn = (HttpURLConnection) imageUrl.openConnection();
+			imgConn.setConnectTimeout( 15000 );
+			imgConn.setReadTimeout( 15000 );
+
+			InputStream imgIs = imgConn.getInputStream();
+			ByteArrayOutputStream imgBaos = new ByteArrayOutputStream();
+			while( ( n = imgIs.read( buf ) ) != -1 )
+				imgBaos.write( buf, 0, n );
+			imgIs.close();
+			imgConn.disconnect();
+
+			byte[] imageData = imgBaos.toByteArray();
+
+			// Phase 3 - Save to disk
+			File outFile = new File( savePath );
+			File parentDir = outFile.getParentFile();
+			if( parentDir != null )
+				parentDir.mkdirs();
+
+			FileOutputStream fos = new FileOutputStream( outFile );
+			fos.write( imageData );
+			fos.close();
+
+			Log.d( TAG, "downloadAvatar: saved to " + savePath );
+			return 0;
+		}
+		catch( IOException e )
+		{
+			Log.d( TAG, "downloadAvatar: network error: " + e.getMessage() );
+			return 1;
+		}
+		catch( Exception e )
+		{
+			Log.d( TAG, "downloadAvatar: parse error: " + e.getMessage() );
+			return 3;
+		}
+	}
+
+	private static String extractTagContent( String xml, String tagName )
+	{
+		String openTag = "<" + tagName + ">";
+		String closeTag = "</" + tagName + ">";
+		int start = xml.indexOf( openTag );
+		if( start == -1 )
+			return null;
+		start += openTag.length();
+		int end = xml.indexOf( closeTag, start );
+		if( end == -1 )
+			return null;
+
+		String content = xml.substring( start, end ).trim();
+
+		// Strip CDATA if present
+		if( content.startsWith( "<![CDATA[" ) && content.endsWith( "]]>" ) )
+			content = content.substring( 9, content.length() - 3 ).trim();
+
+		return content;
 	}
 }
