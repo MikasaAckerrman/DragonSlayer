@@ -340,7 +340,7 @@ void Slayer_Scoreboard_Draw( void )
 	int          row_h, col_name_x, col_frags_x, col_deaths_x, col_ping_x, col_health_x;
 	int          text_w, text_h;
 	int          cur_y;
-	int          ct_player_count = 0, t_player_count = 0;
+	int          ct_player_count = 0, t_player_count = 0, spec_player_count = 0;
 	int          drawn_ct_header = 0, drawn_t_header = 0, drawn_spec_header = 0;
 	const char  *hostname;
 	char         buf[128];
@@ -447,6 +447,8 @@ void Slayer_Scoreboard_Draw( void )
 			ct_player_count++;
 		else if( sorted[i].team_id == SLAYER_TEAM_T )
 			t_player_count++;
+		else
+			spec_player_count++;
 	}
 
 	// Fixed board width: 60% of screen_w
@@ -469,16 +471,19 @@ void Slayer_Scoreboard_Draw( void )
 	board_x = ( screen_w - board_w ) / 2;
 	board_y = ( screen_h - board_h ) / 2;
 
-	// Simulated rounded corners: draw 3 overlapping rectangles
-	// Main body (full width, inset 4px from top/bottom)
-	Slayer_DrawRect( board_x, board_y + 4, board_w, board_h - 8,
-		color_bg[0], color_bg[1], color_bg[2], (byte)( color_bg[3] * global_opacity / 255 ) );
-	// Top strip (4px shorter on each side)
-	Slayer_DrawRect( board_x + 4, board_y, board_w - 8, 4,
-		color_bg[0], color_bg[1], color_bg[2], (byte)( color_bg[3] * global_opacity / 255 ) );
-	// Bottom strip (4px shorter on each side)
-	Slayer_DrawRect( board_x + 4, board_y + board_h - 4, board_w - 8, 4,
-		color_bg[0], color_bg[1], color_bg[2], (byte)( color_bg[3] * global_opacity / 255 ) );
+	// Simulated rounded corners (8px radius, multiple strips)
+	{
+		byte bg_r = color_bg[0], bg_g = color_bg[1], bg_b = color_bg[2];
+		byte bg_a = (byte)( color_bg[3] * global_opacity / 255 );
+		// Main body
+		Slayer_DrawRect( board_x, board_y + 8, board_w, board_h - 16, bg_r, bg_g, bg_b, bg_a );
+		// Top rounding (2 strips getting narrower)
+		Slayer_DrawRect( board_x + 2, board_y + 4, board_w - 4, 4, bg_r, bg_g, bg_b, bg_a );
+		Slayer_DrawRect( board_x + 6, board_y, board_w - 12, 4, bg_r, bg_g, bg_b, bg_a );
+		// Bottom rounding (2 strips getting narrower)
+		Slayer_DrawRect( board_x + 2, board_y + board_h - 8, board_w - 4, 4, bg_r, bg_g, bg_b, bg_a );
+		Slayer_DrawRect( board_x + 6, board_y + board_h - 4, board_w - 12, 4, bg_r, bg_g, bg_b, bg_a );
+	}
 
 	cur_y = board_y;
 
@@ -583,7 +588,8 @@ void Slayer_Scoreboard_Draw( void )
 			cur_y += 4;
 			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, 100, 100, 100, 80 );
 			cur_y += 3;
-			Con_DrawString( col_name_x, cur_y, "Spectators", color_spec );
+			Q_snprintf( buf, sizeof( buf ), "Spectators  -  %d", spec_player_count );
+			Con_DrawString( col_name_x, cur_y, buf, color_spec );
 			cur_y += row_h;
 		}
 
@@ -623,22 +629,7 @@ void Slayer_Scoreboard_Draw( void )
 			row_alpha = 128;
 		}
 
-		// Avatar placeholder (small team-colored square)
-		{
-			int icon_size = row_h - 4;
-			byte icon_r = 128, icon_g = 128, icon_b = 128;
-			if( team == SLAYER_TEAM_CT )
-			{
-				icon_r = color_ct[0]; icon_g = color_ct[1]; icon_b = color_ct[2];
-			}
-			else if( team == SLAYER_TEAM_T )
-			{
-				icon_r = color_t[0]; icon_g = color_t[1]; icon_b = color_t[2];
-			}
-			Slayer_DrawRect( col_name_x, cur_y + 2, icon_size, icon_size, icon_r, icon_g, icon_b, 180 );
-		}
-
-		Con_DrawString( col_name_x + (row_h - 4) + 4, cur_y + 2, name, name_color );
+		Con_DrawString( col_name_x, cur_y + 2, name, name_color );
 
 		// Frags
 		{
