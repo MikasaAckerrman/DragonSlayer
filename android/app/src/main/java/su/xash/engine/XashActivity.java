@@ -236,6 +236,9 @@ public class XashActivity extends SDLActivity {
 	 */
 	public static int downloadAvatar( String steamid64, String savePath )
 	{
+		final int MAX_XML_SIZE = 262144;   // 256 KB limit for profile XML
+		final int MAX_IMAGE_SIZE = 524288; // 512 KB limit for avatar image
+
 		try
 		{
 			Log.d( TAG, "downloadAvatar: fetching profile XML for " + steamid64 );
@@ -248,16 +251,33 @@ public class XashActivity extends SDLActivity {
 			conn.setRequestProperty( "User-Agent", "Mozilla/5.0" );
 			conn.setInstanceFollowRedirects( true );
 
-			InputStream is = conn.getInputStream();
-			ByteArrayOutputStream baos = new ByteArrayOutputStream();
-			byte[] buf = new byte[4096];
-			int n;
-			while( ( n = is.read( buf ) ) != -1 )
-				baos.write( buf, 0, n );
-			is.close();
-			conn.disconnect();
-
-			String xml = baos.toString( "UTF-8" );
+			String xml;
+			InputStream is = null;
+			try
+			{
+				is = conn.getInputStream();
+				ByteArrayOutputStream baos = new ByteArrayOutputStream();
+				byte[] buf = new byte[4096];
+				int n;
+				int totalRead = 0;
+				while( ( n = is.read( buf ) ) != -1 )
+				{
+					totalRead += n;
+					if( totalRead > MAX_XML_SIZE )
+					{
+						Log.d( TAG, "downloadAvatar: XML response too large, aborting" );
+						return 1;
+					}
+					baos.write( buf, 0, n );
+				}
+				xml = baos.toString( "UTF-8" );
+			}
+			finally
+			{
+				if( is != null )
+					is.close();
+				conn.disconnect();
+			}
 
 			// Check for private profile
 			if( xml.indexOf( "<privacyState>private</privacyState>" ) != -1 )
@@ -279,30 +299,55 @@ public class XashActivity extends SDLActivity {
 
 			Log.d( TAG, "downloadAvatar: downloading image from " + avatarUrl );
 
-			// Phase 2 - Download the avatar image
+			// Phase 3 - Download the avatar image
 			URL imageUrl = new URL( avatarUrl );
 			HttpURLConnection imgConn = (HttpURLConnection) imageUrl.openConnection();
 			imgConn.setConnectTimeout( 15000 );
 			imgConn.setReadTimeout( 15000 );
 
-			InputStream imgIs = imgConn.getInputStream();
-			ByteArrayOutputStream imgBaos = new ByteArrayOutputStream();
-			while( ( n = imgIs.read( buf ) ) != -1 )
-				imgBaos.write( buf, 0, n );
-			imgIs.close();
-			imgConn.disconnect();
+			byte[] imageData;
+			InputStream imgIs = null;
+			try
+			{
+				imgIs = imgConn.getInputStream();
+				ByteArrayOutputStream imgBaos = new ByteArrayOutputStream();
+				byte[] buf = new byte[4096];
+				int n;
+				int totalRead = 0;
+				while( ( n = imgIs.read( buf ) ) != -1 )
+				{
+					totalRead += n;
+					if( totalRead > MAX_IMAGE_SIZE )
+					{
+						Log.d( TAG, "downloadAvatar: image too large, aborting" );
+						return 1;
+					}
+					imgBaos.write( buf, 0, n );
+				}
+				imageData = imgBaos.toByteArray();
+			}
+			finally
+			{
+				if( imgIs != null )
+					imgIs.close();
+				imgConn.disconnect();
+			}
 
-			byte[] imageData = imgBaos.toByteArray();
-
-			// Phase 3 - Save to disk
+			// Phase 4 - Save to disk
 			File outFile = new File( savePath );
 			File parentDir = outFile.getParentFile();
 			if( parentDir != null )
 				parentDir.mkdirs();
 
 			FileOutputStream fos = new FileOutputStream( outFile );
-			fos.write( imageData );
-			fos.close();
+			try
+			{
+				fos.write( imageData );
+			}
+			finally
+			{
+				fos.close();
+			}
 
 			Log.d( TAG, "downloadAvatar: saved to " + savePath );
 			return 0;
