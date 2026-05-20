@@ -20,6 +20,7 @@ GNU General Public License for more details.
 #include "common.h"
 #include "client.h"
 #include "cl_scoreboard_slayer.h"
+#include "cl_avatar_download.h"
 
 // ===========================================================================
 // Cvars
@@ -265,6 +266,8 @@ static void Slayer_LoadAvatarTexture( int slot )
 
 	if( !FS_FileExists( path, false ) )
 	{
+		// Request automatic download
+		Slayer_AvatarDownload_Request( slayer_steamid64[slot], slot );
 		slayer_avatar_tex[slot] = -1;
 		return;
 	}
@@ -344,6 +347,8 @@ void Slayer_Scoreboard_Init( void )
 		"hide Slayer3D custom scoreboard" );
 	Cmd_AddCommand( "slayer_avatar_urls", Cmd_AvatarUrls_f,
 		"print Steam avatar download URLs for all players" );
+
+	Slayer_AvatarDownload_Init();
 }
 
 void Slayer_Scoreboard_Reset( void )
@@ -353,6 +358,8 @@ void Slayer_Scoreboard_Reset( void )
 	memset( slayer_avatar_tex, 0, sizeof( slayer_avatar_tex ) );
 	slayer_scoreboard_active = false;
 	slayer_status_pending = false;
+
+	Slayer_AvatarDownload_Reset();
 }
 
 void Slayer_OnHealthUpdate( int hp )
@@ -491,6 +498,26 @@ void Slayer_Scoreboard_Draw( void )
 	rgba_t       color_bg;
 	int          global_opacity;
 	cl_font_t   *font;
+
+	// Pump avatar downloads every frame (even when scoreboard hidden)
+	if( Slayer_AvatarDownload_Frame() )
+	{
+		// A download completed - try to reload textures for slots that were pending
+		for( i = 0; i < MAX_CLIENTS; i++ )
+		{
+			if( slayer_avatar_tex[i] == -1 && slayer_steamid64[i] != 0 )
+			{
+				char avpath[128];
+				Q_snprintf( avpath, sizeof( avpath ), "avatars/%" PRIu64 ".png", slayer_steamid64[i] );
+				if( FS_FileExists( avpath, false ) )
+				{
+					slayer_avatar_tex[i] = ref.dllFuncs.GL_LoadTexture( avpath, NULL, 0, TF_IMAGE );
+					if( slayer_avatar_tex[i] == 0 )
+						slayer_avatar_tex[i] = -1;
+				}
+			}
+		}
+	}
 
 	if( !slayer_scoreboard_active )
 		return;
