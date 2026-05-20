@@ -707,6 +707,9 @@ static void CL_CreateCmd( void )
 	// Slayer3D: apply movement tweaks (ducktap, autostrafe, autojump)
 	V_SlayerMovementTweaks( cmd );
 
+	// Slayer3D: smooth sniper scope aiming (CS:GO style)
+	V_SlayerScopeSmooth( cmd );
+
 	CL_PopPMStates();
 
 	if( !cls.demoplayback )

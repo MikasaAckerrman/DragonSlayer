@@ -48,6 +48,13 @@ static CVAR_DEFINE_AUTO( slayer_autostrafe, "0", FCVAR_ARCHIVE, "Slayer3D: enabl
 static CVAR_DEFINE_AUTO( slayer_autojump,   "0", FCVAR_ARCHIVE, "Slayer3D: enable auto-bhop with ladder safety and anti-bhop bypass" );
 
 // ===========================================================================
+// Cvars - Scope smooth
+// ===========================================================================
+
+static CVAR_DEFINE_AUTO( slayer_scope_smooth, "1", FCVAR_ARCHIVE, "Slayer3D: enable smooth scope aiming (0 = disabled)" );
+static CVAR_DEFINE_AUTO( slayer_scope_smooth_amount, "0.7", FCVAR_ARCHIVE, "Slayer3D: scope smoothing factor 0-1 (higher = more smooth)" );
+
+// ===========================================================================
 // Cvars - Kill-sound
 // ===========================================================================
 
@@ -161,6 +168,10 @@ void V_InitSlayerCvars( void )
 		"begin rapid duck toggling (ducktap)" );
 	Cmd_AddCommand( "-ducktap", Cmd_DucktapUp_f,
 		"stop rapid duck toggling (ducktap)" );
+
+	// Scope smooth
+	Cvar_RegisterVariable( &slayer_scope_smooth );
+	Cvar_RegisterVariable( &slayer_scope_smooth_amount );
 
 	// Initialize per-match state
 	Slayer_ResetMatchState();
@@ -553,4 +564,42 @@ void V_SlayerMovementTweaks( usercmd_t *cmd )
 	}
 
 	slayer_prev_onground = cl.local.onground;
+}
+
+// ===========================================================================
+// Scope smooth - smooth sniper scope aiming (CS:GO style)
+// ===========================================================================
+
+void V_SlayerScopeSmooth( usercmd_t *cmd )
+{
+	static float prev_pitch = 0, prev_yaw = 0;
+	static qboolean was_zoomed = false;
+	float factor;
+
+	if( slayer_scope_smooth.value == 0.0f )
+		return;
+
+	if( cl.local.scr_fov >= 90 || cl.local.scr_fov <= 0 )
+	{
+		was_zoomed = false;
+		return;
+	}
+
+	factor = bound( 0.0f, slayer_scope_smooth_amount.value, 0.95f );
+
+	if( !was_zoomed )
+	{
+		prev_pitch = cl.viewangles[PITCH];
+		prev_yaw = cl.viewangles[YAW];
+		was_zoomed = true;
+		return;
+	}
+
+	cl.viewangles[PITCH] = prev_pitch + (cl.viewangles[PITCH] - prev_pitch) * (1.0f - factor);
+	cl.viewangles[YAW] = prev_yaw + (cl.viewangles[YAW] - prev_yaw) * (1.0f - factor);
+	cmd->viewangles[PITCH] = cl.viewangles[PITCH];
+	cmd->viewangles[YAW] = cl.viewangles[YAW];
+
+	prev_pitch = cl.viewangles[PITCH];
+	prev_yaw = cl.viewangles[YAW];
 }
