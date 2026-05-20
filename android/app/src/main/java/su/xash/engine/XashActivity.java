@@ -241,6 +241,10 @@ public class XashActivity extends SDLActivity {
 		final int MAX_XML_SIZE = 262144;   // 256 KB limit for profile XML
 		final int MAX_IMAGE_SIZE = 524288; // 512 KB limit for avatar image
 
+		// Hoisted so catch blocks can clean up a partial/corrupt file if
+		// fos.flush()/fos.close() throws after a successful bitmap.compress.
+		File outFile = null;
+
 		try
 		{
 			Log.d( TAG, "downloadAvatar: fetching profile XML for " + steamid64 );
@@ -351,7 +355,7 @@ public class XashActivity extends SDLActivity {
 
 			Log.d( TAG, "downloadAvatar: decoded image " + bitmap.getWidth() + "x" + bitmap.getHeight() );
 
-			File outFile = new File( savePath );
+			outFile = new File( savePath );
 			File parentDir = outFile.getParentFile();
 			if( parentDir != null )
 				parentDir.mkdirs();
@@ -388,11 +392,15 @@ public class XashActivity extends SDLActivity {
 		catch( IOException e )
 		{
 			Log.d( TAG, "downloadAvatar: network error: " + e.getMessage() );
+			if( outFile != null && outFile.exists() )
+				outFile.delete();
 			return 1;
 		}
 		catch( Exception e )
 		{
 			Log.d( TAG, "downloadAvatar: parse error: " + e.getMessage() );
+			if( outFile != null && outFile.exists() )
+				outFile.delete();
 			return 3;
 		}
 	}
