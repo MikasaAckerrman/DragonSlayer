@@ -63,6 +63,14 @@ void V_SlayerCamSnapCheck( struct usercmd_s *cmd );
 void V_SlayerMovementTweaks( struct usercmd_s *cmd );
 
 // ---------------------------------------------------------------------------
+// Scope smooth
+// ---------------------------------------------------------------------------
+
+// Applies smooth interpolation to view angles when zoomed in with a sniper scope.
+// Called from CL_CreateCmd after V_SlayerMovementTweaks.
+void V_SlayerScopeSmooth( struct usercmd_s *cmd );
+
+// ---------------------------------------------------------------------------
 // Kill-sound
 // ---------------------------------------------------------------------------
 

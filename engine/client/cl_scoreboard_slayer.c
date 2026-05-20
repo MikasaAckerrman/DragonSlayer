@@ -13,6 +13,9 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
 
+// NOTE: Steam avatar support requires a server-side SteamID broadcast
+// (e.g. ReGameDLL plugin) before per-player avatars can be displayed.
+
 #include "common.h"
 #include "client.h"
 #include "cl_scoreboard_slayer.h"
@@ -27,7 +30,6 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_text_color, "255 255 255 255", FCVAR_
 static CVAR_DEFINE_AUTO( slayer_scoreboard_ct_color, "120 180 255", FCVAR_ARCHIVE, "Slayer3D: CT team RGB" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_t_color, "255 100 80", FCVAR_ARCHIVE, "Slayer3D: T team RGB" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_opacity, "220", FCVAR_ARCHIVE, "Slayer3D: overall scoreboard opacity (0-255)" );
-static CVAR_DEFINE_AUTO( slayer_steam_apikey, "", FCVAR_PROTECTED, "Slayer3D: Steam Web API key (for future avatar use)" );
 
 // ===========================================================================
 // Types
@@ -37,8 +39,6 @@ static CVAR_DEFINE_AUTO( slayer_steam_apikey, "", FCVAR_PROTECTED, "Slayer3D: St
 #define SLAYER_TEAM_T           1
 #define SLAYER_TEAM_CT          2
 #define SLAYER_TEAM_SPECTATOR   3
-
-#define SLAYER_MAX_AVATARS      64
 
 typedef struct
 {
@@ -50,19 +50,11 @@ typedef struct
 	byte connected;  // set when ScoreInfo received for this slot
 } slayer_score_t;
 
-typedef struct
-{
-	char   steamid[32];   // SteamID64 string
-	int    texnum;        // GL texture number, 0 = not loaded
-} slayer_avatar_t;
-
 // ===========================================================================
 // Static state
 // ===========================================================================
 
 static slayer_score_t  slayer_scores[MAX_CLIENTS];
-static slayer_avatar_t slayer_avatars[SLAYER_MAX_AVATARS];
-static int             slayer_avatar_count = 0;
 static qboolean        slayer_scoreboard_active = false;
 
 // Cached parsed cvar colors (re-parsed only when cvar string changes)
@@ -129,62 +121,6 @@ static void Cmd_ScoreboardUp_f( void )
 }
 
 // ===========================================================================
-// Avatar support (local file cache)
-// ===========================================================================
-
-static int Slayer_FindAvatarTexture( const char *steamid )
-{
-	int i;
-
-	for( i = 0; i < slayer_avatar_count; i++ )
-	{
-		if( !Q_strcmp( slayer_avatars[i].steamid, steamid ) )
-			return slayer_avatars[i].texnum;
-	}
-
-	return 0;
-}
-
-static int Slayer_LoadAvatarFromFile( const char *steamid )
-{
-	char path[MAX_QPATH];
-	int  texnum;
-	const char *p;
-
-	if( !steamid || steamid[0] == '\0' )
-		return 0;
-
-	// Validate steamid contains only alphanumeric characters to prevent path traversal
-	for( p = steamid; *p; p++ )
-	{
-		if( !( ( *p >= '0' && *p <= '9' ) || ( *p >= 'a' && *p <= 'z' ) || ( *p >= 'A' && *p <= 'Z' ) ) )
-			return 0;
-	}
-
-	// Check if already cached
-	texnum = Slayer_FindAvatarTexture( steamid );
-	if( texnum > 0 )
-		return texnum;
-
-	// Try to load from avatars/<steamid64>.png
-	Q_snprintf( path, sizeof( path ), "avatars/%s.png", steamid );
-
-	texnum = ref.dllFuncs.GL_LoadTexture( path, NULL, 0, TF_IMAGE );
-	if( texnum <= 0 )
-		return 0;
-
-	// Cache it
-	if( slayer_avatar_count < SLAYER_MAX_AVATARS )
-	{
-		Q_strncpy( slayer_avatars[slayer_avatar_count].steamid, steamid, sizeof( slayer_avatars[0].steamid ) );
-		slayer_avatars[slayer_avatar_count].texnum = texnum;
-		slayer_avatar_count++;
-	}
-
-	return texnum;
-}
-
-// ===========================================================================
 // Public API - Init / Reset / Health
 // ===========================================================================
 
@@ -196,7 +132,6 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_scoreboard_ct_color );
 	Cvar_RegisterVariable( &slayer_scoreboard_t_color );
 	Cvar_RegisterVariable( &slayer_scoreboard_opacity );
-	Cvar_RegisterVariable( &slayer_steam_apikey );
 
 	Cmd_AddCommand( "+slayer_scoreboard", Cmd_ScoreboardDown_f,
 		"show Slayer3D custom scoreboard" );
@@ -207,8 +142,6 @@ void Slayer_Scoreboard_Init( void )
 void Slayer_Scoreboard_Reset( void )
 {
 	memset( slayer_scores, 0, sizeof( slayer_scores ) );
-	memset( slayer_avatars, 0, sizeof( slayer_avatars ) );
-	slayer_avatar_count = 0;
 	slayer_scoreboard_active = false;
 }
 
@@ -507,13 +440,11 @@ void Slayer_Scoreboard_Draw( void )
 
 	// Draw server name (left-aligned)
 	hostname = Info_ValueForKey( cl.serverinfo, "hostname" );
-	if( !hostname || hostname[0] == '\0' )
+	if( !hostname || hostname[0] == '\0' || !Q_stricmp( hostname, "empty" ) )
 		hostname = Info_ValueForKey( cl.serverinfo, "name" );
-	if( !hostname || hostname[0] == '\0' )
+	if( !hostname || hostname[0] == '\0' || !Q_stricmp( hostname, "empty" ) )
 		hostname = Cvar_VariableString( "hostname" );
-	if( !hostname || hostname[0] == '\0' )
-		hostname = Cvar_VariableString( "sv_hostname" );
-	if( !hostname || hostname[0] == '\0' )
+	if( !hostname || hostname[0] == '\0' || !Q_stricmp( hostname, "empty" ) )
 		hostname = cls.servername;
 
 	cur_y += 4;
@@ -661,7 +592,7 @@ void Slayer_Scoreboard_Draw( void )
 			Con_DrawString( col_ping_x, cur_y + 2, buf, stat_color );
 
 			// Health column
-			if( pidx == cl.playernum )
+			if( pidx == cl.playernum && !( slayer_scores[pidx].flags & 1 ) )
 			{
 				hp = cl.local.health;
 				slayer_scores[pidx].health = hp;
