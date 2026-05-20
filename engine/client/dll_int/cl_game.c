@@ -2031,14 +2031,15 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 	// Slayer3D: echo chat to console (deduplicate per-frame redraws)
 	if( is_chat && string && string[0] != '\0' )
 	{
-		static char last_chat[4][256];
+		static char last_chat[8][256];
 		static int  last_chat_idx = 0;
+		static double last_print_time = 0;
 		int j;
 		qboolean duplicate = false;
 
-		for( j = 0; j < 4; j++ )
+		for( j = 0; j < 8; j++ )
 		{
-			if( !Q_strcmp( last_chat[j], string ) )
+			if( !Q_strncmp( last_chat[j], string, 64 ) )
 			{
 				duplicate = true;
 				break;
@@ -2047,9 +2048,13 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 
 		if( !duplicate )
 		{
-			Con_Printf( "%s", string );
+			if( host.realtime - last_print_time >= 0.3 )
+			{
+				Con_Printf( "%s", string );
+				last_print_time = host.realtime;
+			}
 			Q_strncpy( last_chat[last_chat_idx], string, sizeof( last_chat[0] ) );
-			last_chat_idx = ( last_chat_idx + 1 ) % 4;
+			last_chat_idx = ( last_chat_idx + 1 ) % 8;
 		}
 	}
 
