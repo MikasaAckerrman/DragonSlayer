@@ -333,6 +333,25 @@ static void Cmd_ScoreboardUp_f( void )
 }
 
 // ===========================================================================
+// Public API - usercmd patching (drives svc_pings)
+// ===========================================================================
+
+// Vanilla GoldSrc emits svc_pings every snapshot only when the client's
+// last usercmd has IN_SCORE set (see SV_ShouldUpdatePing in sv_client.c).
+// The Slayer scoreboard is bound to +slayer_scoreboard, which never goes
+// through the game DLL +showscores path, so we OR the bit in here.
+void Slayer_Scoreboard_PatchUsercmd( struct usercmd_s *cmd )
+{
+	if( !cmd )
+		return;
+
+	if( !slayer_scoreboard_active )
+		return;
+
+	cmd->buttons |= IN_SCORE;
+}
+
+// ===========================================================================
 // Public API - Init / Reset / Health
 // ===========================================================================
 
@@ -680,36 +699,68 @@ void Slayer_Scoreboard_Draw( void )
 		Slayer_DrawRect( board_x + 16, board_y + board_h - 4, board_w - 32, 4, bg_r, bg_g, bg_b, bg_a );
 	}
 
-	// Rounded border (2px thick, follows same contour as background)
+	// Rounded border (1px thick, follows same contour as background)
 	{
 		byte br_r = cached_color_border[0], br_g = cached_color_border[1];
 		byte br_b = cached_color_border[2], br_a = (byte)( cached_color_border[3] * global_opacity / 255 );
 
-		// Top edge strips (2px thick, matching rounded insets)
-		Slayer_DrawRect( board_x + 16, board_y, board_w - 32, 2, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 12, board_y + 4, 4, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 16, board_y + 4, 4, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 8, board_y + 8, 4, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 12, board_y + 8, 4, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 4, board_y + 12, 4, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 8, board_y + 12, 4, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 2, board_y + 16, 2, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 4, board_y + 16, 2, 4, br_r, br_g, br_b, br_a );
+		// Top horizontal cap
+		Slayer_DrawRect( board_x + 16, board_y, board_w - 32, 1, br_r, br_g, br_b, br_a );
 
-		// Left and right edges (2px wide, main body region)
-		Slayer_DrawRect( board_x, board_y + 20, 2, board_h - 40, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 2, board_y + 20, 2, board_h - 40, br_r, br_g, br_b, br_a );
+		// Top staircase - left side
+		Slayer_DrawRect( board_x + 16, board_y, 1, 4, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + 12, board_y + 4, 4, 1, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + 12, board_y + 4, 1, 4, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + 8, board_y + 8, 4, 1, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + 8, board_y + 8, 1, 4, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + 4, board_y + 12, 4, 1, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + 4, board_y + 12, 1, 4, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + 2, board_y + 16, 2, 1, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + 2, board_y + 16, 1, 4, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x, board_y + 20, 2, 1, br_r, br_g, br_b, br_a );
 
-		// Bottom edge strips (2px thick, matching rounded insets)
-		Slayer_DrawRect( board_x + 2, board_y + board_h - 20, 2, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 4, board_y + board_h - 20, 2, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 4, board_y + board_h - 16, 4, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 8, board_y + board_h - 16, 4, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 8, board_y + board_h - 12, 4, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 12, board_y + board_h - 12, 4, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 12, board_y + board_h - 8, 4, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 16, board_y + board_h - 8, 4, 4, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + 16, board_y + board_h - 2, board_w - 32, 2, br_r, br_g, br_b, br_a );
+		// Top staircase - right side
+		Slayer_DrawRect( board_x + board_w - 17, board_y, 1, 4, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + board_w - 16, board_y + 4, 4, 1, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + board_w - 13, board_y + 4, 1, 4, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + board_w - 12, board_y + 8, 4, 1, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + board_w - 9, board_y + 8, 1, 4, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + board_w - 8, board_y + 12, 4, 1, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + board_w - 5, board_y + 12, 1, 4, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + board_w - 4, board_y + 16, 2, 1, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + board_w - 3, board_y + 16, 1, 4, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + board_w - 2, board_y + 20, 2, 1, br_r, br_g, br_b, br_a );
+
+		// Main body side walls (1px wide)
+		Slayer_DrawRect( board_x, board_y + 20, 1, board_h - 40, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + board_w - 1, board_y + 20, 1, board_h - 40, br_r, br_g, br_b, br_a );
+
+		// Bottom horizontal cap
+		Slayer_DrawRect( board_x + 16, board_y + board_h - 1, board_w - 32, 1, br_r, br_g, br_b, br_a );
+
+		// Bottom staircase - left side (mirror of top)
+		Slayer_DrawRect( board_x + 16, board_y + board_h - 4, 1, 4, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + 12, board_y + board_h - 5, 4, 1, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + 12, board_y + board_h - 8, 1, 4, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + 8, board_y + board_h - 9, 4, 1, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + 8, board_y + board_h - 12, 1, 4, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + 4, board_y + board_h - 13, 4, 1, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + 4, board_y + board_h - 16, 1, 4, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + 2, board_y + board_h - 17, 2, 1, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + 2, board_y + board_h - 20, 1, 4, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x, board_y + board_h - 21, 2, 1, br_r, br_g, br_b, br_a );
+
+		// Bottom staircase - right side (mirror of top)
+		Slayer_DrawRect( board_x + board_w - 17, board_y + board_h - 4, 1, 4, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + board_w - 16, board_y + board_h - 5, 4, 1, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + board_w - 13, board_y + board_h - 8, 1, 4, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + board_w - 12, board_y + board_h - 9, 4, 1, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + board_w - 9, board_y + board_h - 12, 1, 4, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + board_w - 8, board_y + board_h - 13, 4, 1, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + board_w - 5, board_y + board_h - 16, 1, 4, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + board_w - 4, board_y + board_h - 17, 2, 1, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + board_w - 3, board_y + board_h - 20, 1, 4, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + board_w - 2, board_y + board_h - 21, 2, 1, br_r, br_g, br_b, br_a );
 	}
 
 	cur_y = board_y;
@@ -894,7 +945,7 @@ void Slayer_Scoreboard_Draw( void )
 			Con_DrawString( col_ping_x, cur_y + 2, buf, stat_color );
 
 			// Health column
-			if( slayer_scores[pidx].flags & 1 )
+			if( ( slayer_scores[pidx].flags & 1 ) && ( team == SLAYER_TEAM_CT || team == SLAYER_TEAM_T ) )
 			{
 				// Dead player: show "DEAD" text in team color with alpha 200
 				rgba_t dead_color;
