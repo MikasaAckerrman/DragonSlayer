@@ -22,6 +22,10 @@ GNU General Public License for more details.
 #include "cl_scoreboard_slayer.h"
 #include "cl_avatar_download.h"
 
+#if XASH_ANDROID
+#include <android/log.h>
+#endif
+
 // ===========================================================================
 // Cvars
 // ===========================================================================
@@ -287,6 +291,7 @@ void Slayer_ParseStatusLine( const char *line )
 static void Slayer_LoadAvatarTexture( int slot )
 {
 	char path[128];
+	int  texid;
 
 	if( slot < 0 || slot >= MAX_CLIENTS )
 		return;
@@ -307,10 +312,34 @@ static void Slayer_LoadAvatarTexture( int slot )
 		return;
 	}
 
-	slayer_avatar_tex[slot] = ref.dllFuncs.GL_LoadTexture( path, NULL, 0, TF_IMAGE );
+	texid = ref.dllFuncs.GL_LoadTexture( path, NULL, 0, TF_IMAGE );
 
-	if( slayer_avatar_tex[slot] == 0 )
-		slayer_avatar_tex[slot] = -1;
+	if( texid == 0 )
+	{
+		// Bad cached file (e.g. legacy raw-JPEG written as .png by an older
+		// build). Delete it and reset the slot to 0 so the next call falls
+		// through to the FS_FileExists==false branch above and re-queues a
+		// fresh download via Slayer_AvatarDownload_Request.
+		FS_Delete( path );
+		slayer_avatar_tex[slot] = 0;
+		Con_Printf( S_WARN "Slayer: avatar load failed for steamid=%" PRIu64 " path=%s, cache invalidated\n",
+			slayer_steamid64[slot], path );
+#if XASH_ANDROID
+		__android_log_print( ANDROID_LOG_ERROR, "Xash",
+			"Slayer: avatar load failed for steamid=%" PRIu64 " path=%s, cache invalidated",
+			slayer_steamid64[slot], path );
+#endif
+		return;
+	}
+
+	slayer_avatar_tex[slot] = texid;
+	Con_Printf( "Slayer: avatar loaded for steamid=%" PRIu64 " texid=%d path=%s\n",
+		slayer_steamid64[slot], texid, path );
+#if XASH_ANDROID
+	__android_log_print( ANDROID_LOG_INFO, "Xash",
+		"Slayer: avatar loaded for steamid=%" PRIu64 " texid=%d path=%s",
+		slayer_steamid64[slot], texid, path );
+#endif
 }
 
 // ===========================================================================
@@ -585,12 +614,39 @@ void Slayer_Scoreboard_Draw( void )
 			if( slayer_avatar_tex[i] == -1 && slayer_steamid64[i] != 0 )
 			{
 				char avpath[128];
+				int  texid;
+
 				Q_snprintf( avpath, sizeof( avpath ), "avatars/%" PRIu64 ".png", slayer_steamid64[i] );
-				if( FS_FileExists( avpath, false ) )
+				if( !FS_FileExists( avpath, false ) )
+					continue;
+
+				texid = ref.dllFuncs.GL_LoadTexture( avpath, NULL, 0, TF_IMAGE );
+				if( texid == 0 )
 				{
-					slayer_avatar_tex[i] = ref.dllFuncs.GL_LoadTexture( avpath, NULL, 0, TF_IMAGE );
-					if( slayer_avatar_tex[i] == 0 )
-						slayer_avatar_tex[i] = -1;
+					// Worker reported success but the file is unreadable as a PNG.
+					// Wipe the bad cache and reset to 0 so the next frame
+					// re-queues a fresh download instead of permanently
+					// sticking on -1.
+					FS_Delete( avpath );
+					slayer_avatar_tex[i] = 0;
+					Con_Printf( S_WARN "Slayer: post-download avatar load failed for steamid=%" PRIu64 " path=%s, cache invalidated\n",
+						slayer_steamid64[i], avpath );
+#if XASH_ANDROID
+					__android_log_print( ANDROID_LOG_ERROR, "Xash",
+						"Slayer: post-download avatar load failed for steamid=%" PRIu64 " path=%s, cache invalidated",
+						slayer_steamid64[i], avpath );
+#endif
+				}
+				else
+				{
+					slayer_avatar_tex[i] = texid;
+					Con_Printf( "Slayer: post-download avatar loaded for steamid=%" PRIu64 " texid=%d path=%s\n",
+						slayer_steamid64[i], texid, avpath );
+#if XASH_ANDROID
+					__android_log_print( ANDROID_LOG_INFO, "Xash",
+						"Slayer: post-download avatar loaded for steamid=%" PRIu64 " texid=%d path=%s",
+						slayer_steamid64[i], texid, avpath );
+#endif
 				}
 			}
 		}

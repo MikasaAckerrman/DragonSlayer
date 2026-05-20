@@ -138,6 +138,47 @@ static void *AVD_WorkerThread( void *arg )
 		result = -1;  // force failure
 	}
 
+	// Defense in depth: even on JNI success, validate that what we wrote
+	// to disk is actually a PNG. The Java side now re-encodes via
+	// BitmapFactory + Bitmap.compress(PNG), but if that ever regresses,
+	// or a partial write/truncation slipped through, the engine imagelib
+	// would silently fail to load and the user would see no avatar with
+	// no obvious cause. Catch it here and force a slot failure so the
+	// scoreboard does not cache an in-memory texid for a corrupt file.
+	if( result == 0 )
+	{
+		FILE *fp = fopen( save_path, "rb" );
+		if( !fp )
+		{
+			__android_log_print( ANDROID_LOG_ERROR, "Xash",
+				"AvatarDL: post-save fopen failed for slot=%d path=%s",
+				work->slot, save_path );
+			result = -1;
+		}
+		else
+		{
+			static const unsigned char png_magic[8] = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+			unsigned char header[8];
+			size_t got = fread( header, 1, sizeof( header ), fp );
+			fclose( fp );
+
+			if( got != sizeof( header ) || memcmp( header, png_magic, sizeof( png_magic ) ) != 0 )
+			{
+				__android_log_print( ANDROID_LOG_ERROR, "Xash",
+					"AvatarDL: bad PNG magic for slot=%d path=%s (got %zu bytes), deleting",
+					work->slot, save_path, got );
+				remove( save_path );
+				result = -1;
+			}
+			else
+			{
+				__android_log_print( ANDROID_LOG_INFO, "Xash",
+					"AvatarDL: valid PNG saved for slot=%d path=%s",
+					work->slot, save_path );
+			}
+		}
+	}
+
 	// Cleanup JNI local refs
 	(*env)->DeleteLocalRef( env, j_steamid );
 	(*env)->DeleteLocalRef( env, j_path );
@@ -310,6 +351,9 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 	Q_snprintf( path, sizeof( path ), "avatars/%" PRIu64 ".png", steamid64 );
 	if( FS_FileExists( path, false ) )
 	{
+		__android_log_print( ANDROID_LOG_INFO, "Xash",
+			"AvatarDL: cache hit slot=%d steamid=%" PRIu64 " path=%s",
+			slot, steamid64, path );
 		avd_slot_result[slot] = AVD_RESULT_DONE;
 		return;
 	}
@@ -327,6 +371,9 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 
 	if( pthread_create( &thread, NULL, AVD_WorkerThread, work ) != 0 )
 	{
+		__android_log_print( ANDROID_LOG_ERROR, "Xash",
+			"AvatarDL: pthread_create failed for slot=%d steamid=%" PRIu64,
+			slot, steamid64 );
 		free( work );
 		avd_slot_result[slot] = AVD_RESULT_FAIL;
 		avd_slot_fail_time[slot] = host.realtime;
@@ -335,6 +382,9 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 	}
 
 	pthread_detach( thread );
+	__android_log_print( ANDROID_LOG_INFO, "Xash",
+		"AvatarDL: queued slot=%d steamid=%" PRIu64 " (active=%d)",
+		slot, steamid64, avd_active_count );
 	Con_DPrintf( "AvatarDL: started download for slot %d (%" PRIu64 ")\n", slot, steamid64 );
 }
 
@@ -356,6 +406,8 @@ qboolean Slayer_AvatarDownload_Frame( void )
 			if( avd_active_count > 0 )
 				avd_active_count--;
 			any_completed = true;
+			__android_log_print( ANDROID_LOG_INFO, "Xash",
+				"AvatarDL: download complete for slot %d", i );
 			Con_DPrintf( "AvatarDL: download complete for slot %d\n", i );
 		}
 		else if( avd_slot_result[i] == AVD_RESULT_FAIL )
@@ -364,6 +416,8 @@ qboolean Slayer_AvatarDownload_Frame( void )
 			avd_slot_fail_time[i] = host.realtime;
 			if( avd_active_count > 0 )
 				avd_active_count--;
+			__android_log_print( ANDROID_LOG_ERROR, "Xash",
+				"AvatarDL: download failed for slot %d", i );
 			Con_DPrintf( "AvatarDL: download failed for slot %d\n", i );
 		}
 	}

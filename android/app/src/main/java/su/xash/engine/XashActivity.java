@@ -4,6 +4,8 @@ import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.res.AssetManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings.Secure;
@@ -333,23 +335,54 @@ public class XashActivity extends SDLActivity {
 				imgConn.disconnect();
 			}
 
-			// Phase 4 - Save to disk
+			// Phase 4 - Decode the image (Steam returns JPEG, but engine imagelib
+			// has no JPEG loader) and re-encode as a real PNG so GL_LoadTexture
+			// can read it. Also handles WebP / any other format the platform
+			// decoder accepts. Bitmap.compress is bounded by image dimensions,
+			// not arbitrary input size, so re-encoded files stay small.
+			Log.d( TAG, "downloadAvatar: received " + imageData.length + " bytes from " + avatarUrl );
+
+			Bitmap bitmap = BitmapFactory.decodeByteArray( imageData, 0, imageData.length );
+			if( bitmap == null )
+			{
+				Log.d( TAG, "downloadAvatar: BitmapFactory.decodeByteArray returned null (unsupported image or HTML error page)" );
+				return 3;
+			}
+
+			Log.d( TAG, "downloadAvatar: decoded image " + bitmap.getWidth() + "x" + bitmap.getHeight() );
+
 			File outFile = new File( savePath );
 			File parentDir = outFile.getParentFile();
 			if( parentDir != null )
 				parentDir.mkdirs();
 
-			FileOutputStream fos = new FileOutputStream( outFile );
+			boolean compressed = false;
 			try
 			{
-				fos.write( imageData );
+				FileOutputStream fos = new FileOutputStream( outFile );
+				try
+				{
+					compressed = bitmap.compress( Bitmap.CompressFormat.PNG, 100, fos );
+					fos.flush();
+				}
+				finally
+				{
+					fos.close();
+				}
 			}
 			finally
 			{
-				fos.close();
+				bitmap.recycle();
 			}
 
-			Log.d( TAG, "downloadAvatar: saved to " + savePath );
+			if( !compressed )
+			{
+				Log.d( TAG, "downloadAvatar: Bitmap.compress(PNG) failed for " + savePath );
+				outFile.delete();
+				return 3;
+			}
+
+			Log.d( TAG, "downloadAvatar: saved PNG to " + savePath + " (" + outFile.length() + " bytes)" );
 			return 0;
 		}
 		catch( IOException e )
