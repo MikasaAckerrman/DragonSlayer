@@ -12,26 +12,296 @@ but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
-Async two-phase avatar download:
-  Phase 1: GET /profiles/<steamid64>/?xml=1 from steamcommunity.com
-           Parse <avatarMedium>/<avatarFull> tag to get image URL
-  Phase 2: GET image from CDN URL, save to avatars/<steamid64>.png
-
-Notes:
-  - HTTP only (no TLS). If endpoint requires HTTPS, fails after redirect limit.
-  - Non-blocking sockets and DNS to avoid stalling the engine main loop.
-  - Pending queue ensures requests beyond MAX_CONCURRENT are not lost.
+Android: Uses JNI to call XashActivity.downloadAvatar() from worker pthreads.
+Other platforms: Uses non-blocking HTTP sockets (port 80, no TLS).
 */
 
 #include <inttypes.h>
 #include "common.h"
 #include "client.h"
-#include "net_ws_private.h"
 #include "cl_avatar_download.h"
 
+#if XASH_ANDROID
 // ===========================================================================
+// ANDROID IMPLEMENTATION - JNI + pthread
+// ===========================================================================
+#include <pthread.h>
+#include <jni.h>
+#include <SDL.h>
+#include <stdlib.h>
+
+// ---------------------------------------------------------------------------
 // Configuration
+// ---------------------------------------------------------------------------
+
+#define AVD_MAX_CONCURRENT  2
+#define AVD_RETRY_DELAY     60.0
+
+// Slot result values (written by worker thread, read by Frame)
+#define AVD_RESULT_IDLE        0
+#define AVD_RESULT_IN_PROGRESS 1
+#define AVD_RESULT_SUCCESS     2
+#define AVD_RESULT_FAIL        3
+#define AVD_RESULT_DONE        4
+
+// ---------------------------------------------------------------------------
+// Static state
+// ---------------------------------------------------------------------------
+
+static JavaVM   *avd_jvm;             // cached from Init()
+static jclass    avd_activity_class;   // global ref to XashActivity class
+static jmethodID avd_download_method;  // downloadAvatar method ID
+
+static volatile int avd_slot_result[MAX_CLIENTS];  // thread-safe via volatile + barriers
+static uint64_t     avd_slot_id[MAX_CLIENTS];
+static double       avd_slot_fail_time[MAX_CLIENTS];
+static int          avd_active_count;              // number of in-progress downloads
+
+static CVAR_DEFINE_AUTO( slayer_avatar_download, "1", FCVAR_ARCHIVE,
+	"Slayer3D: auto-download Steam avatars (0=disabled)" );
+
+// ---------------------------------------------------------------------------
+// Worker thread
+// ---------------------------------------------------------------------------
+
+typedef struct
+{
+	int      slot;
+	uint64_t steamid64;
+} avd_work_t;
+
+static void *AVD_WorkerThread( void *arg )
+{
+	avd_work_t *work = (avd_work_t *)arg;
+	JNIEnv *env = NULL;
+	int result;
+	char steamid_str[21];  // max uint64 is 20 digits
+	char save_path[512];
+	const char *basedir;
+	jstring j_steamid, j_path;
+
+	// Attach this thread to JVM
+	if( (*avd_jvm)->AttachCurrentThread( avd_jvm, &env, NULL ) != JNI_OK )
+	{
+		__sync_synchronize();
+		avd_slot_result[work->slot] = AVD_RESULT_FAIL;
+		__sync_synchronize();
+		free( work );
+		return NULL;
+	}
+
+	// Build arguments
+	Q_snprintf( steamid_str, sizeof( steamid_str ), "%" PRIu64, work->steamid64 );
+
+	basedir = getenv( "XASH3D_BASEDIR" );
+	if( !basedir || basedir[0] == '\0' )
+		basedir = ".";
+
+	Q_snprintf( save_path, sizeof( save_path ), "%s/avatars/%" PRIu64 ".png",
+		basedir, work->steamid64 );
+
+	j_steamid = (*env)->NewStringUTF( env, steamid_str );
+	j_path = (*env)->NewStringUTF( env, save_path );
+
+	// Call Java method
+	result = (*env)->CallStaticIntMethod( env, avd_activity_class,
+		avd_download_method, j_steamid, j_path );
+
+	// Cleanup JNI local refs
+	(*env)->DeleteLocalRef( env, j_steamid );
+	(*env)->DeleteLocalRef( env, j_path );
+
+	// Detach from JVM
+	(*avd_jvm)->DetachCurrentThread( avd_jvm );
+
+	// Write result with memory barrier
+	__sync_synchronize();
+	avd_slot_result[work->slot] = ( result == 0 ) ? AVD_RESULT_SUCCESS : AVD_RESULT_FAIL;
+	__sync_synchronize();
+
+	free( work );
+	return NULL;
+}
+
+// ---------------------------------------------------------------------------
+// Public API - Android
+// ---------------------------------------------------------------------------
+
+void Slayer_AvatarDownload_Init( void )
+{
+	JNIEnv *env;
+	jobject activity;
+	jclass cls;
+
+	Cvar_RegisterVariable( &slayer_avatar_download );
+	memset( (void *)avd_slot_result, 0, sizeof( avd_slot_result ) );
+	memset( avd_slot_id, 0, sizeof( avd_slot_id ) );
+	memset( avd_slot_fail_time, 0, sizeof( avd_slot_fail_time ) );
+	avd_active_count = 0;
+	avd_jvm = NULL;
+	avd_activity_class = NULL;
+	avd_download_method = NULL;
+
+	// Get JNI env from SDL (only valid on main thread)
+	env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+	if( !env )
+	{
+		Con_DPrintf( "AvatarDL: failed to get JNIEnv\n" );
+		return;
+	}
+
+	// Cache JavaVM for worker threads
+	if( (*env)->GetJavaVM( env, &avd_jvm ) != 0 )
+	{
+		Con_DPrintf( "AvatarDL: failed to get JavaVM\n" );
+		return;
+	}
+
+	// Get XashActivity class
+	activity = (jobject)SDL_AndroidGetActivity();
+	if( !activity )
+	{
+		Con_DPrintf( "AvatarDL: failed to get activity\n" );
+		return;
+	}
+
+	cls = (*env)->GetObjectClass( env, activity );
+	avd_activity_class = (*env)->NewGlobalRef( env, cls );
+	(*env)->DeleteLocalRef( env, cls );
+	(*env)->DeleteLocalRef( env, activity );
+
+	// Get downloadAvatar method: static int downloadAvatar(String, String)
+	avd_download_method = (*env)->GetStaticMethodID( env, avd_activity_class,
+		"downloadAvatar", "(Ljava/lang/String;Ljava/lang/String;)I" );
+
+	if( !avd_download_method )
+	{
+		Con_DPrintf( "AvatarDL: failed to find downloadAvatar method\n" );
+		(*env)->DeleteGlobalRef( env, avd_activity_class );
+		avd_activity_class = NULL;
+	}
+	else
+	{
+		Con_DPrintf( "AvatarDL: JNI initialized successfully\n" );
+	}
+}
+
+void Slayer_AvatarDownload_Shutdown( void )
+{
+	// Worker threads are detached - they will finish on their own
+	// Just reset tracking state
+	avd_active_count = 0;
+}
+
+void Slayer_AvatarDownload_Reset( void )
+{
+	Slayer_AvatarDownload_Shutdown();
+	memset( (void *)avd_slot_result, 0, sizeof( avd_slot_result ) );
+	memset( avd_slot_id, 0, sizeof( avd_slot_id ) );
+	memset( avd_slot_fail_time, 0, sizeof( avd_slot_fail_time ) );
+}
+
+void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
+{
+	char path[128];
+	avd_work_t *work;
+	pthread_t thread;
+
+	if( slayer_avatar_download.value == 0.0f )
+		return;
+
+	if( slot < 0 || slot >= MAX_CLIENTS || steamid64 == 0 )
+		return;
+
+	if( !avd_download_method )
+		return;  // JNI not initialized
+
+	// Already done or in progress?
+	if( avd_slot_result[slot] == AVD_RESULT_DONE ||
+	    avd_slot_result[slot] == AVD_RESULT_IN_PROGRESS )
+		return;
+
+	// Recently failed - wait for retry delay
+	if( avd_slot_result[slot] == AVD_RESULT_FAIL &&
+	    host.realtime - avd_slot_fail_time[slot] < AVD_RETRY_DELAY )
+		return;
+
+	// Max concurrent check
+	if( avd_active_count >= AVD_MAX_CONCURRENT )
+		return;
+
+	// Already cached on disk?
+	Q_snprintf( path, sizeof( path ), "avatars/%" PRIu64 ".png", steamid64 );
+	if( FS_FileExists( path, false ) )
+	{
+		avd_slot_result[slot] = AVD_RESULT_DONE;
+		return;
+	}
+
+	// Spawn worker thread
+	work = (avd_work_t *)malloc( sizeof( avd_work_t ) );
+	if( !work )
+		return;
+
+	work->slot = slot;
+	work->steamid64 = steamid64;
+	avd_slot_id[slot] = steamid64;
+	avd_slot_result[slot] = AVD_RESULT_IN_PROGRESS;
+	avd_active_count++;
+
+	if( pthread_create( &thread, NULL, AVD_WorkerThread, work ) != 0 )
+	{
+		free( work );
+		avd_slot_result[slot] = AVD_RESULT_FAIL;
+		avd_slot_fail_time[slot] = host.realtime;
+		avd_active_count--;
+		return;
+	}
+
+	pthread_detach( thread );
+	Con_DPrintf( "AvatarDL: started download for slot %d (%" PRIu64 ")\n", slot, steamid64 );
+}
+
+qboolean Slayer_AvatarDownload_Frame( void )
+{
+	int i;
+	qboolean any_completed = false;
+
+	if( slayer_avatar_download.value == 0.0f )
+		return false;
+
+	__sync_synchronize();
+
+	for( i = 0; i < MAX_CLIENTS; i++ )
+	{
+		if( avd_slot_result[i] == AVD_RESULT_SUCCESS )
+		{
+			avd_slot_result[i] = AVD_RESULT_DONE;
+			avd_active_count--;
+			any_completed = true;
+			Con_DPrintf( "AvatarDL: download complete for slot %d\n", i );
+		}
+		else if( avd_slot_result[i] == AVD_RESULT_FAIL )
+		{
+			avd_slot_result[i] = AVD_RESULT_IDLE;
+			avd_slot_fail_time[i] = host.realtime;
+			avd_active_count--;
+			Con_DPrintf( "AvatarDL: download failed for slot %d\n", i );
+		}
+	}
+
+	return any_completed;
+}
+
+#else /* !XASH_ANDROID */
 // ===========================================================================
+// NON-ANDROID IMPLEMENTATION - HTTP sockets (original)
+// ===========================================================================
+#include "net_ws_private.h"
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
 
 #define AVATAR_MAX_CONCURRENT  2       // max simultaneous active downloads
 #define AVATAR_TIMEOUT         15.0    // seconds before giving up
@@ -42,9 +312,9 @@ Notes:
 #define AVATAR_STEAM_HOST      "steamcommunity.com"
 #define AVATAR_STEAM_PORT      80
 
-// ===========================================================================
+// ---------------------------------------------------------------------------
 // Types
-// ===========================================================================
+// ---------------------------------------------------------------------------
 
 typedef enum
 {
@@ -106,9 +376,9 @@ typedef enum
 	AVD_SLOT_FAILED,      // download failed
 } avd_slot_state_t;
 
-// ===========================================================================
+// ---------------------------------------------------------------------------
 // Static state
-// ===========================================================================
+// ---------------------------------------------------------------------------
 
 static avd_request_t *avd_active;            // linked list of active downloads
 static int            avd_active_count;
@@ -122,9 +392,9 @@ static qboolean avd_resolving;  // throttle: only one DNS resolve in flight per 
 static CVAR_DEFINE_AUTO( slayer_avatar_download, "1", FCVAR_ARCHIVE,
 	"Slayer3D: auto-download Steam avatars (0=disabled)" );
 
-// ===========================================================================
+// ---------------------------------------------------------------------------
 // Internal helpers
-// ===========================================================================
+// ---------------------------------------------------------------------------
 
 static void AVD_CloseSocket( avd_request_t *req )
 {
@@ -187,7 +457,8 @@ static void AVD_RemoveRequest( avd_request_t *req, qboolean success )
 	Mem_Free( req );
 }
 
-// Parse HTTP status code from "HTTP/1.x SSS ...\r\n". Returns -1 on parse error.
+// Parse HTTP status code from "HTTP/1.x SSS ...
+". Returns -1 on parse error.
 static int AVD_ParseStatusCode( const char *buf, int len )
 {
 	int code;
@@ -217,15 +488,17 @@ static const char *AVD_FindHeader( const char *headers, const char *name )
 		if( Q_strnicmp( p, name, name_len ) == 0 && p[name_len] == ':' )
 		{
 			p += name_len + 1;
-			while( *p == ' ' || *p == '\t' )
+			while( *p == ' ' || *p == '	' )
 				p++;
 			return p;
 		}
 
 		// Advance to next line
-		while( *p && *p != '\n' )
+		while( *p && *p != '
+' )
 			p++;
-		if( *p == '\n' )
+		if( *p == '
+' )
 			p++;
 	}
 
@@ -258,7 +531,7 @@ static qboolean AVD_ParseURL( avd_request_t *req, const char *url, int url_len )
 		return false;
 
 	memcpy( req->target_host, host_start, host_len );
-	req->target_host[host_len] = '\0';
+	req->target_host[host_len] = ' ';
 
 	// Skip optional port (we ignore it - always use HTTP port 80)
 	if( path_start < url + url_len && *path_start == ':' )
@@ -273,7 +546,7 @@ static qboolean AVD_ParseURL( avd_request_t *req, const char *url, int url_len )
 	{
 		// No path: default to "/"
 		req->target_path[0] = '/';
-		req->target_path[1] = '\0';
+		req->target_path[1] = ' ';
 	}
 	else
 	{
@@ -281,16 +554,16 @@ static qboolean AVD_ParseURL( avd_request_t *req, const char *url, int url_len )
 		if( path_len <= 0 || path_len >= (int)sizeof( req->target_path ) )
 			return false;
 		memcpy( req->target_path, path_start, path_len );
-		req->target_path[path_len] = '\0';
+		req->target_path[path_len] = ' ';
 	}
 
 	req->target_port = 80;
 	return true;
 }
 
-// ===========================================================================
+// ---------------------------------------------------------------------------
 // Phase setup
-// ===========================================================================
+// ---------------------------------------------------------------------------
 
 static void AVD_SetupXMLPhase( avd_request_t *req )
 {
@@ -306,19 +579,25 @@ static void AVD_SetupXMLPhase( avd_request_t *req )
 static void AVD_BuildHTTPRequest( avd_request_t *req )
 {
 	req->request_len = Q_snprintf( req->request, sizeof( req->request ),
-		"GET %s HTTP/1.0\r\n"
-		"Host: %s\r\n"
-		"User-Agent: Mozilla/5.0\r\n"
-		"Accept: */*\r\n"
-		"Connection: close\r\n"
-		"\r\n",
+		"GET %s HTTP/1.0
+"
+		"Host: %s
+"
+		"User-Agent: Mozilla/5.0
+"
+		"Accept: */*
+"
+		"Connection: close
+"
+		"
+",
 		req->target_path, req->target_host );
 	req->bytes_sent = 0;
 }
 
-// ===========================================================================
+// ---------------------------------------------------------------------------
 // XML parsing - extract avatar URL from Steam profile response
-// ===========================================================================
+// ---------------------------------------------------------------------------
 
 static qboolean AVD_ParseXMLForAvatar( avd_request_t *req )
 {
@@ -367,14 +646,15 @@ static qboolean AVD_ParseXMLForAvatar( avd_request_t *req )
 	if( !AVD_ParseURL( req, url, url_len ) )
 		return false;
 
-	Con_DPrintf( "AvatarDL: parsed image URL host=%s path=%s\n",
+	Con_DPrintf( "AvatarDL: parsed image URL host=%s path=%s
+",
 		req->target_host, req->target_path );
 	return true;
 }
 
-// ===========================================================================
+// ---------------------------------------------------------------------------
 // Save image body to disk
-// ===========================================================================
+// ---------------------------------------------------------------------------
 
 static qboolean AVD_SaveImage( avd_request_t *req )
 {
@@ -398,30 +678,34 @@ static qboolean AVD_SaveImage( avd_request_t *req )
 	if( !FS_WriteFile( file_path, image_data, image_size ) )
 	{
 		FS_AllowDirectPaths( false );
-		Con_DPrintf( "AvatarDL: failed to write %s\n", file_path );
+		Con_DPrintf( "AvatarDL: failed to write %s
+", file_path );
 		return false;
 	}
 	FS_AllowDirectPaths( false );
 
-	Con_DPrintf( "AvatarDL: saved %s (%d bytes)\n", file_path, image_size );
+	Con_DPrintf( "AvatarDL: saved %s (%d bytes)
+", file_path, image_size );
 	return true;
 }
 
-// ===========================================================================
+// ---------------------------------------------------------------------------
 // Redirect handling
-// ===========================================================================
+// ---------------------------------------------------------------------------
 
 static qboolean AVD_FollowRedirect( avd_request_t *req, const char *location, int loc_len )
 {
 	if( ++req->redirect_count > AVATAR_MAX_REDIRECTS )
 	{
-		Con_DPrintf( "AvatarDL: too many redirects for slot %d\n", req->slot );
+		Con_DPrintf( "AvatarDL: too many redirects for slot %d
+", req->slot );
 		return false;
 	}
 
 	if( !AVD_ParseURL( req, location, loc_len ) )
 	{
-		Con_DPrintf( "AvatarDL: bad redirect URL for slot %d\n", req->slot );
+		Con_DPrintf( "AvatarDL: bad redirect URL for slot %d
+", req->slot );
 		return false;
 	}
 
@@ -430,13 +714,14 @@ static qboolean AVD_FollowRedirect( avd_request_t *req, const char *location, in
 	AVD_FreeResponse( req );
 	req->state = AVD_STATE_RESOLVE;
 
-	Con_DPrintf( "AvatarDL: redirect to %s%s\n", req->target_host, req->target_path );
+	Con_DPrintf( "AvatarDL: redirect to %s%s
+", req->target_host, req->target_path );
 	return true;
 }
 
-// ===========================================================================
+// ---------------------------------------------------------------------------
 // State machine - per-frame processing of one request
-// ===========================================================================
+// ---------------------------------------------------------------------------
 
 static void AVD_StateResolve( avd_request_t *req )
 {
@@ -457,7 +742,8 @@ static void AVD_StateResolve( avd_request_t *req )
 
 	if( res == NET_EAI_NONAME )
 	{
-		Con_DPrintf( "AvatarDL: DNS failed for %s\n", req->target_host );
+		Con_DPrintf( "AvatarDL: DNS failed for %s
+", req->target_host );
 		req->state = AVD_STATE_DONE;
 		return;
 	}
@@ -469,14 +755,16 @@ static void AVD_StateResolve( avd_request_t *req )
 	req->sock = socket( req->addr.ss_family, SOCK_STREAM, IPPROTO_TCP );
 	if( req->sock < 0 )
 	{
-		Con_DPrintf( "AvatarDL: socket() failed: %s\n", NET_ErrorString() );
+		Con_DPrintf( "AvatarDL: socket() failed: %s
+", NET_ErrorString() );
 		req->state = AVD_STATE_DONE;
 		return;
 	}
 
 	if( !NET_MakeSocketNonBlocking( req->sock ) )
 	{
-		Con_DPrintf( "AvatarDL: failed to set non-blocking\n" );
+		Con_DPrintf( "AvatarDL: failed to set non-blocking
+" );
 		closesocket( req->sock );
 		req->sock = -1;
 		req->state = AVD_STATE_DONE;
@@ -506,7 +794,8 @@ static void AVD_StateConnect( avd_request_t *req )
 		}
 		else
 		{
-			Con_DPrintf( "AvatarDL: connect to %s failed: %s\n",
+			Con_DPrintf( "AvatarDL: connect to %s failed: %s
+",
 				req->target_host, NET_ErrorString() );
 			req->state = AVD_STATE_DONE;
 			return;
@@ -546,7 +835,8 @@ static void AVD_StateSend( avd_request_t *req )
 		int err = WSAGetLastError();
 		if( err != WSAEWOULDBLOCK && err != WSAEINPROGRESS )
 		{
-			Con_DPrintf( "AvatarDL: send failed: %s\n", NET_ErrorString() );
+			Con_DPrintf( "AvatarDL: send failed: %s
+", NET_ErrorString() );
 			req->state = AVD_STATE_DONE;
 		}
 	}
@@ -559,7 +849,7 @@ static qboolean AVD_HandleHeaderComplete( avd_request_t *req )
 	const char *cl_hdr;
 
 	// Null-terminate at end of received data (safe: we allocated cap+1)
-	req->response[req->response_len] = '\0';
+	req->response[req->response_len] = ' ';
 
 	status = AVD_ParseStatusCode( (char *)req->response, req->response_len );
 
@@ -569,9 +859,11 @@ static qboolean AVD_HandleHeaderComplete( avd_request_t *req )
 		const char *loc = AVD_FindHeader( (char *)req->response, "Location" );
 		if( loc )
 		{
-			const char *loc_end = Q_strstr( loc, "\r\n" );
+			const char *loc_end = Q_strstr( loc, "
+" );
 			if( !loc_end )
-				loc_end = Q_strstr( loc, "\n" );
+				loc_end = Q_strstr( loc, "
+" );
 
 			if( loc_end )
 			{
@@ -581,14 +873,16 @@ static qboolean AVD_HandleHeaderComplete( avd_request_t *req )
 			}
 		}
 
-		Con_DPrintf( "AvatarDL: redirect without Location header\n" );
+		Con_DPrintf( "AvatarDL: redirect without Location header
+" );
 		req->state = AVD_STATE_DONE;
 		return true;
 	}
 
 	if( status != 200 )
 	{
-		Con_DPrintf( "AvatarDL: HTTP %d for %" PRIu64 "\n",
+		Con_DPrintf( "AvatarDL: HTTP %d for %" PRIu64 "
+",
 			status < 0 ? 0 : status, req->steamid64 );
 		req->state = AVD_STATE_DONE;
 		return true;
@@ -603,7 +897,8 @@ static qboolean AVD_HandleHeaderComplete( avd_request_t *req )
 		// Reject oversized payload up front
 		if( req->content_length > req->response_cap - req->header_end )
 		{
-			Con_DPrintf( "AvatarDL: payload too large (%d bytes) for slot %d\n",
+			Con_DPrintf( "AvatarDL: payload too large (%d bytes) for slot %d
+",
 				req->content_length, req->slot );
 			req->state = AVD_STATE_DONE;
 			return true;
@@ -639,8 +934,10 @@ static void AVD_StateRecv( avd_request_t *req )
 		{
 			char *hdr_end;
 
-			req->response[req->response_len] = '\0';
-			hdr_end = Q_strstr( (char *)req->response, "\r\n\r\n" );
+			req->response[req->response_len] = ' ';
+			hdr_end = Q_strstr( (char *)req->response, "
+
+" );
 
 			if( hdr_end )
 			{
@@ -674,7 +971,8 @@ static void AVD_StateRecv( avd_request_t *req )
 		int err = WSAGetLastError();
 		if( err != WSAEWOULDBLOCK && err != WSAEINPROGRESS )
 		{
-			Con_DPrintf( "AvatarDL: recv error: %s\n", NET_ErrorString() );
+			Con_DPrintf( "AvatarDL: recv error: %s
+", NET_ErrorString() );
 			req->state = AVD_STATE_DONE;
 		}
 	}
@@ -705,9 +1003,9 @@ static void AVD_ProcessRequest( avd_request_t *req )
 	}
 }
 
-// ===========================================================================
+// ---------------------------------------------------------------------------
 // Phase completion / pending queue
-// ===========================================================================
+// ---------------------------------------------------------------------------
 
 static qboolean AVD_OnPhaseDone( avd_request_t *req )
 {
@@ -715,7 +1013,8 @@ static qboolean AVD_OnPhaseDone( avd_request_t *req )
 	{
 		if( !AVD_ParseXMLForAvatar( req ) )
 		{
-			Con_DPrintf( "AvatarDL: XML parse failed for slot %d\n", req->slot );
+			Con_DPrintf( "AvatarDL: XML parse failed for slot %d
+", req->slot );
 			AVD_RemoveRequest( req, false );
 			return false;
 		}
@@ -737,7 +1036,8 @@ static qboolean AVD_OnPhaseDone( avd_request_t *req )
 		return false;
 	}
 
-	Con_DPrintf( "AvatarDL: download complete for slot %d\n", req->slot );
+	Con_DPrintf( "AvatarDL: download complete for slot %d
+", req->slot );
 	AVD_RemoveRequest( req, true );
 	return true;
 }
@@ -774,14 +1074,15 @@ static qboolean AVD_TryQueuePending( int slot )
 
 	avd_slot_state[slot] = AVD_SLOT_ACTIVE;
 
-	Con_DPrintf( "AvatarDL: starting download for slot %d (%" PRIu64 ")\n",
+	Con_DPrintf( "AvatarDL: starting download for slot %d (%" PRIu64 ")
+",
 		slot, req->steamid64 );
 	return true;
 }
 
-// ===========================================================================
+// ---------------------------------------------------------------------------
 // Public API
-// ===========================================================================
+// ---------------------------------------------------------------------------
 
 void Slayer_AvatarDownload_Init( void )
 {
@@ -874,7 +1175,8 @@ qboolean Slayer_AvatarDownload_Frame( void )
 		// Timeout check
 		if( host.realtime - req->start_time > AVATAR_TIMEOUT )
 		{
-			Con_DPrintf( "AvatarDL: timeout for slot %d (phase %d)\n",
+			Con_DPrintf( "AvatarDL: timeout for slot %d (phase %d)
+",
 				req->slot, (int)req->phase );
 			AVD_RemoveRequest( req, false );
 			continue;
@@ -898,3 +1200,5 @@ qboolean Slayer_AvatarDownload_Frame( void )
 
 	return any_completed;
 }
+
+#endif /* XASH_ANDROID */
