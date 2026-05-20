@@ -1119,7 +1119,10 @@ TEMPENTITY *R_DefaultSprite( const vec3_t pos, int spriteIndex, float framerate 
 
 	if(( psprite = CL_ModelHandle( spriteIndex )) == NULL || psprite->type != mod_sprite )
 	{
-		Con_Reportf( "No Sprite %d!\n", spriteIndex );
+		// Slayer3D: silently ignore null sprite index (game DLL bug, fires
+		// hundreds of times per second with stale temp-entity sprites).
+		if( spriteIndex != 0 )
+			Con_Reportf( "No Sprite %d!\n", spriteIndex );
 		return NULL;
 	}
 
