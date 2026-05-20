@@ -349,7 +349,7 @@ void Slayer_Scoreboard_Draw( void )
 	int          i, row;
 	int          screen_w, screen_h;
 	int          board_x, board_y, board_w, board_h;
-	int          header_h, row_h, col_name_x, col_frags_x, col_deaths_x, col_ping_x;
+	int          row_h, col_name_x, col_frags_x, col_deaths_x, col_ping_x;
 	int          text_w, text_h;
 	int          cur_y;
 	int          ct_player_count = 0, t_player_count = 0;
@@ -466,7 +466,7 @@ void Slayer_Scoreboard_Draw( void )
 
 	// Height adapts to content: header + column headers + team headers + rows + padding
 	{
-		int content_rows = num_players + 3; // +3 for header, 2 team headers
+		int content_rows = num_players + 4; // +4 for header, column headers, 2 team headers
 		int min_h = row_h * content_rows + 40;
 		int max_h = (int)( screen_h * 0.85f );
 
@@ -488,14 +488,19 @@ void Slayer_Scoreboard_Draw( void )
 	// Draw thin border (2px)
 	Slayer_DrawBorder( board_x, board_y, board_w, board_h, 80, 80, 80, (byte)global_opacity, 2 );
 
-	header_h = row_h + 4;
 	cur_y = board_y;
 
-	// Draw dark header bar
-	Slayer_DrawRect( board_x, cur_y, board_w, header_h + row_h,
+	// Column layout (percentage of board width)
+	col_name_x   = board_x + (int)( board_w * 0.05f );
+	col_frags_x  = board_x + (int)( board_w * 0.58f );
+	col_deaths_x = board_x + (int)( board_w * 0.72f );
+	col_ping_x   = board_x + (int)( board_w * 0.86f );
+
+	// Draw dark header bar (covers only hostname/mapname row)
+	Slayer_DrawRect( board_x, cur_y, board_w, row_h + 6,
 		10, 10, 10, (byte)( global_opacity * 240 / 255 ) );
 
-	// Draw server name (centered in header)
+	// Draw server name (left-aligned)
 	hostname = Info_ValueForKey( cl.serverinfo, "hostname" );
 	if( !hostname || hostname[0] == '\0' )
 		hostname = Info_ValueForKey( cl.serverinfo, "name" );
@@ -506,12 +511,10 @@ void Slayer_Scoreboard_Draw( void )
 	if( !hostname || hostname[0] == '\0' )
 		hostname = cls.servername;
 
-	cur_y += 6;
-	Con_DrawStringLen( hostname, &text_w, &text_h );
-	Con_DrawString( board_x + ( board_w - text_w ) / 2, cur_y, hostname, color_text );
-	cur_y += row_h;
+	cur_y += 4;
+	Con_DrawString( col_name_x, cur_y, hostname, color_text );
 
-	// Map name / round info line (below hostname)
+	// Draw map name (right-aligned, same line as hostname)
 	{
 		const char *mapname = Info_ValueForKey( cl.serverinfo, "map" );
 		if( !mapname || mapname[0] == '\0' )
@@ -521,20 +524,29 @@ void Slayer_Scoreboard_Draw( void )
 			rgba_t color_map;
 			MakeRGBA( color_map, color_text[0] * 160 / 255, color_text[1] * 160 / 255, color_text[2] * 160 / 255, 200 );
 			Con_DrawStringLen( mapname, &text_w, &text_h );
-			Con_DrawString( board_x + ( board_w - text_w ) / 2, cur_y, mapname, color_map );
+			Con_DrawString( col_ping_x + (int)( board_w * 0.10f ) - text_w, cur_y, mapname, color_map );
 		}
 	}
-	cur_y += row_h;
+	cur_y += row_h + 2;
 
-	// Thin separator below header
+	// Separator below hostname/mapname
 	Slayer_DrawRect( board_x + 2, cur_y, board_w - 4, 1, 60, 60, 60, (byte)global_opacity );
 	cur_y += 4;
 
-	// Column layout (percentage of board width)
-	col_name_x   = board_x + (int)( board_w * 0.05f );
-	col_frags_x  = board_x + (int)( board_w * 0.58f );
-	col_deaths_x = board_x + (int)( board_w * 0.72f );
-	col_ping_x   = board_x + (int)( board_w * 0.86f );
+	// Column headers row (slightly dimmer text)
+	{
+		rgba_t color_hdr;
+		MakeRGBA( color_hdr, color_text[0] * 200 / 255, color_text[1] * 200 / 255, color_text[2] * 200 / 255, color_text[3] );
+		Con_DrawString( col_name_x, cur_y, "Name", color_hdr );
+		Con_DrawString( col_frags_x, cur_y, "Kills", color_hdr );
+		Con_DrawString( col_deaths_x, cur_y, "Deaths", color_hdr );
+		Con_DrawString( col_ping_x, cur_y, "Ping", color_hdr );
+	}
+	cur_y += row_h;
+
+	// Separator below column headers
+	Slayer_DrawRect( board_x + 2, cur_y, board_w - 4, 1, 60, 60, 60, (byte)global_opacity );
+	cur_y += 4;
 
 	// Draw player rows
 	for( row = 0; row < num_players; row++ )
