@@ -19,6 +19,7 @@ GNU General Public License for more details.
 #include "cl_tent.h"
 #include "pm_local.h"
 #include "studio.h"
+#include "cl_view_slayer.h"
 
 #define MAX_FORWARD			6	// forward probes for set idealpitch
 #define MIN_CORRECTION_DISTANCE	0.25f	// use smoothing if error is > this
@@ -950,6 +951,22 @@ static void CL_RunUsercmd( local_state_t *from, local_state_t *to, usercmd_t *u,
 	}
 
 	clgame.dllFuncs.pfnPostRunCmd( from, to, &cmd, runfuncs, *time, random_seed );
+
+	// Slayer3D: fast-zoom — zero out secondary attack cooldown in prediction
+	// so client-side prediction doesn't block rapid zoom toggling.
+	// Works fully on listen-server; on dedicated the server corrects within 1-2 ticks.
+	if( slayer_fast_zoom.value != 0.0f )
+	{
+		int wpn_id = to->client.m_iId;
+
+		if( wpn_id >= 0 && wpn_id < MAX_LOCAL_WEAPONS )
+		{
+			to->weapondata[wpn_id].m_flNextSecondaryAttack = 0.0f;
+		}
+
+		// Also zero the global m_flNextAttack so it doesn't gate zoom
+		to->client.m_flNextAttack = 0.0f;
+	}
 
 	*time += (double)cmd.msec / 1000.0;
 }
