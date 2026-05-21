@@ -1053,6 +1053,19 @@ void CL_PredictMovement( qboolean repredicting )
 	memcpy( from->weapondata, frame->weapondata, sizeof( from->weapondata ));
 	from->playerstate = frame->playerstate[cl.playernum];
 	from->client = frame->clientdata;
+
+	// Slayer3D: fast-zoom — zero secondary attack cooldown in the base frame
+	// so prediction never blocks rapid zoom toggling. This patches the
+	// authoritative server state on receipt, making it work on both listen
+	// and dedicated servers (dedicated will still send its own corrections,
+	// but IN_ATTACK2 input will reach the server without local suppression).
+	if( slayer_fast_zoom.value != 0.0f )
+	{
+		int j;
+		for( j = 0; j < MAX_LOCAL_WEAPONS; j++ )
+			from->weapondata[j].m_flNextSecondaryAttack = 0.0f;
+		from->client.m_flNextAttack = 0.0f;
+	}
 	if( !frame->valid ) return;
 
 	time = frame->time;

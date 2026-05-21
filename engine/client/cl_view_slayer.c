@@ -474,37 +474,26 @@ qboolean Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 	}
 
 	// Feed killfeed for ALL kills (regardless of who is killer/victim)
-	Slayer_Killfeed_OnDeathMsg( killer, victim, is_headshot, weapon_str );
+	// Returns true to suppress the game DLL's built-in killfeed when ours is on.
+	{
+		qboolean suppress = Slayer_Killfeed_OnDeathMsg( killer, victim, is_headshot, weapon_str );
 
-	// --- Killsound logic below: only for LOCAL player kills ---
+		// --- Killsound logic below: only for LOCAL player kills ---
+		if( killer == cl.playernum + 1 && killer != victim && killer != 0 )
+		{
+			is_teamkill = Slayer_IsTeamkill( killer, victim );
 
-	// We only care when the LOCAL player is the KILLER.
-	// cl.playernum is 0-based, entindex is 1-based.
-	if( killer != cl.playernum + 1 )
-		return false;
+			snd = Slayer_PickKillSound( is_teamkill, is_headshot );
+			if( !COM_StringEmptyOrNULL( snd ))
+			{
+				vol = bound( 0.0f, slayer_killsound_volume.value, 1.0f );
+				if( vol > 0.0f )
+					S_StartLocalSound( snd, vol, false );
+			}
+		}
 
-	// Suicide - do NOT play.
-	if( killer == victim )
-		return false;
-
-	// World kill guard (killer == 0 means environment killed them).
-	if( killer == 0 )
-		return false;
-
-	is_teamkill = Slayer_IsTeamkill( killer, victim );
-
-	snd = Slayer_PickKillSound( is_teamkill, is_headshot );
-	if( COM_StringEmptyOrNULL( snd ))
-		return false;
-
-	vol = bound( 0.0f, slayer_killsound_volume.value, 1.0f );
-	if( vol <= 0.0f )
-		return false;
-
-	// Force-load it on first kill (S_RegisterSound inside S_StartLocalSound
-	// is fine to call without precache for a local UI-style sound).
-	S_StartLocalSound( snd, vol, false );
-	return true;
+		return suppress;
+	}
 }
 
 // ===========================================================================

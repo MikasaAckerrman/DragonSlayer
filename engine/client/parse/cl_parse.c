@@ -2340,18 +2340,25 @@ void CL_ParseUserMessage( sizebuf_t *msg, int svc_num, connprotocol_t proto )
 	MSG_ReadBytes( msg, pbuf, iSize );
 
 	// Slayer3D: peek at DeathMsg / TeamInfo before forwarding to client.dll.
-	// Both hooks are read-only; the engine's own dispatch path below is
-	// untouched.
-	if( !Q_strcmp( clgame.msg[i].name, "DeathMsg" ))
-		Slayer_OnDeathMsg( pbuf, iSize );
-	else if( !Q_strcmp( clgame.msg[i].name, "TeamInfo" ))
-		Slayer_OnTeamInfo( pbuf, iSize );
-	else if( !Q_strcmp( clgame.msg[i].name, "ScoreInfo" ))
-		Slayer_OnScoreInfo( pbuf, iSize );
-	else if( !Q_strcmp( clgame.msg[i].name, "ScoreAttrib" ))
-		Slayer_OnScoreAttrib( pbuf, iSize );
-	else if( !Q_strcmp( clgame.msg[i].name, "HealthInfo" ))
-		Slayer_OnHealthInfo( pbuf, iSize );
+	// DeathMsg is suppressed from the game DLL when our killfeed is active
+	// (prevents duplicate killfeed on screen).
+	{
+		qboolean suppress_msg = false;
+
+		if( !Q_strcmp( clgame.msg[i].name, "DeathMsg" ))
+			suppress_msg = Slayer_OnDeathMsg( pbuf, iSize );
+		else if( !Q_strcmp( clgame.msg[i].name, "TeamInfo" ))
+			Slayer_OnTeamInfo( pbuf, iSize );
+		else if( !Q_strcmp( clgame.msg[i].name, "ScoreInfo" ))
+			Slayer_OnScoreInfo( pbuf, iSize );
+		else if( !Q_strcmp( clgame.msg[i].name, "ScoreAttrib" ))
+			Slayer_OnScoreAttrib( pbuf, iSize );
+		else if( !Q_strcmp( clgame.msg[i].name, "HealthInfo" ))
+			Slayer_OnHealthInfo( pbuf, iSize );
+
+		if( suppress_msg )
+			return; // do not forward to game DLL
+	}
 
 	if( cl_trace_messages.value )
 	{
