@@ -63,4 +63,8 @@ struct usercmd_s;
 // No-op when scoreboard is inactive or cmd is NULL.
 void Slayer_Scoreboard_PatchUsercmd( struct usercmd_s *cmd );
 
+// Get team_id for a player slot (0-based). Returns SLAYER_TEAM_* constant.
+// Used by killsound to detect teamkills.
+int Slayer_GetPlayerTeam( int slot );
+
 #endif // CL_SCOREBOARD_SLAYER_H

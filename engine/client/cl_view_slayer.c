@@ -344,15 +344,6 @@ void Slayer_ResetMatchState( void )
 // Kill-sound - Helpers
 // ===========================================================================
 
-// Returns true if the current game is a Counter-Strike variant.
-static qboolean Slayer_GameIsCStrike( void )
-{
-	const char *g;
-	if( !GI ) return false;
-	g = GI->gamefolder;
-	return !Q_stricmp( g, "cstrike" ) || !Q_stricmp( g, "czero" ) || !Q_stricmp( g, "czeror" );
-}
-
 // Returns true when both players have a known, non-empty team and
 // those teams match. Suicide and self-kill are not teamkills.
 static qboolean Slayer_IsTeamkill( int killer, int victim )
