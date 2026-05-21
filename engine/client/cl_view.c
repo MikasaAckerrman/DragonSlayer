@@ -23,6 +23,7 @@ GNU General Public License for more details.
 #include "platform/platform.h" // GL_UpdateSwapInterval
 #include "cl_view_slayer.h" // Slayer3D third-person camera
 #include "cl_scoreboard_slayer.h" // Slayer3D custom scoreboard
+#include "cl_killfeed_slayer.h" // Slayer3D killfeed overlay
 
 /*
 ===============
@@ -578,6 +579,7 @@ void V_PostRender( void )
 		CL_DrawHUD( CL_CHANGELEVEL );
 		ref.dllFuncs.R_ShowTextures();
 		R_ShowTree();
+		Slayer_Killfeed_Draw();
 		Slayer_Scoreboard_Draw();
 		Con_DrawConsole();
 		UI_UpdateMenu( host.realtime );
