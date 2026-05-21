@@ -344,15 +344,6 @@ void Slayer_ResetMatchState( void )
 // Kill-sound - Helpers
 // ===========================================================================
 
-// Returns true if the current game is a Counter-Strike variant.
-static qboolean Slayer_GameIsCStrike( void )
-{
-	const char *g;
-	if( !GI ) return false;
-	g = GI->gamefolder;
-	return !Q_stricmp( g, "cstrike" ) || !Q_stricmp( g, "czero" ) || !Q_stricmp( g, "czeror" );
-}
-
 // Returns true when both players have a known, non-empty team and
 // those teams match. Suicide and self-kill are not teamkills.
 static qboolean Slayer_IsTeamkill( int killer, int victim )
@@ -452,9 +443,8 @@ qboolean Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 	}
 
 	// Killsound: only when the LOCAL player is the killer.
-	// Killfeed rendering used to be done here too, but is now handled
-	// entirely by the client.dll (Slayer-client). The return value is
-	// kept for API compatibility but is always false (never suppress).
+	// The return value is kept for API compatibility (cl_view_slayer.h
+	// declares qboolean) but always returns false — no message suppression.
 	if( killer == cl.playernum + 1 && killer != victim && killer != 0 )
 	{
 		is_teamkill = Slayer_IsTeamkill( killer, victim );

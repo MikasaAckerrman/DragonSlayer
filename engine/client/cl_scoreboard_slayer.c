@@ -549,17 +549,27 @@ void Slayer_OnScoreAttrib( const byte *pbuf, int iSize )
 
 void Slayer_OnHealthInfo( const byte *pbuf, int iSize )
 {
-	int slot;
+	int slot, health;
 
-	// HealthInfo format (ReGameDLL): byte slot(1-based), byte health
-	if( !pbuf || iSize < 2 )
+	// HealthInfo format (ReGameDLL): byte slot(1-based), long health(4 bytes)
+	// Total message size = 5.  Server sends -1 when HP should be hidden
+	// (e.g. the player is on the opposing team and mp_show_health_info
+	// doesn't allow it).  We treat -1 as "unknown" and show 0.
+	if( !pbuf || iSize < 5 )
 		return;
 
 	slot = pbuf[0];
 	if( slot < 1 || slot > MAX_CLIENTS )
 		return;
 
-	slayer_scores[slot - 1].health = pbuf[1];
+	// Read int32 little-endian from pbuf+1
+	health = (int)( pbuf[1] | ( pbuf[2] << 8 ) | ( pbuf[3] << 16 ) | ( pbuf[4] << 24 ) );
+
+	// -1 means "hidden" — don't show HP for this player
+	if( health < 0 )
+		health = 0;
+
+	slayer_scores[slot - 1].health = health;
 }
 
 // ===========================================================================

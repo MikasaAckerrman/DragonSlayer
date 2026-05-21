@@ -949,25 +949,23 @@ static void CL_RunUsercmd( local_state_t *from, local_state_t *to, usercmd_t *u,
 		else cl.local.lastground = clgame.pmove->onground; // world(0) or in air(-1)
 	}
 
-	// Slayer3D: fast-zoom — zero secondary attack cooldown BEFORE PostRunCmd
-	// so client.dll weapon prediction (HUD_WeaponsPostThink inside PostRunCmd)
-	// never sees a cooldown and allows immediate zoom toggling.
+	// Slayer3D: fast-zoom — zero secondary attack cooldown around PostRunCmd
+	// so client.dll weapon prediction never blocks rapid zoom toggling.
+	// NOTE: only m_flNextSecondaryAttack is zeroed; m_flNextAttack is left
+	// intact to avoid breaking reload/weapon-switch timing.
 	{
 		int j;
 		for( j = 0; j < MAX_LOCAL_WEAPONS; j++ )
 			from->weapondata[j].m_flNextSecondaryAttack = 0.0f;
-		from->client.m_flNextAttack = 0.0f;
-		to->client.m_flNextAttack = 0.0f;
 	}
 
 	clgame.dllFuncs.pfnPostRunCmd( from, to, &cmd, runfuncs, *time, random_seed );
 
-	// Also zero the result so next prediction step starts clean
+	// Zero the result so next prediction step starts clean
 	{
 		int j;
 		for( j = 0; j < MAX_LOCAL_WEAPONS; j++ )
 			to->weapondata[j].m_flNextSecondaryAttack = 0.0f;
-		to->client.m_flNextAttack = 0.0f;
 	}
 
 	*time += (double)cmd.msec / 1000.0;
@@ -1056,13 +1054,14 @@ void CL_PredictMovement( qboolean repredicting )
 	from->playerstate = frame->playerstate[cl.playernum];
 	from->client = frame->clientdata;
 
-	// Slayer3D: fast-zoom — zero secondary attack cooldown in the base frame
-	// so prediction never blocks rapid zoom toggling. Always active (no cvar).
+	// Slayer3D: fast-zoom — zero secondary attack cooldown in the base frame.
+	// Redundant safety net (cl_parse.c already zeroes at network level), but
+	// kept in case a code path populates from->weapondata without going
+	// through CL_ParseClientData (e.g. demo playback edge cases).
 	{
 		int j;
 		for( j = 0; j < MAX_LOCAL_WEAPONS; j++ )
 			from->weapondata[j].m_flNextSecondaryAttack = 0.0f;
-		from->client.m_flNextAttack = 0.0f;
 	}
 	if( !frame->valid ) return;
 

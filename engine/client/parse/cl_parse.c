@@ -1161,6 +1161,14 @@ void CL_ParseClientData( sizebuf_t *msg, connprotocol_t proto )
 		if( proto == PROTO_GOLDSRC )
 			Delta_ReadGSFields( msg, DT_WEAPONDATA_T, &from_wd[idx], &to_wd[idx], cl.mtime[0] );
 		else MSG_ReadWeaponData( msg, &from_wd[idx], &to_wd[idx], cl.mtime[0] );
+
+		// Slayer3D: fast-zoom — unconditionally zero the secondary attack
+		// cooldown received from the server so that neither listenserver
+		// nor dedicated server can impose a scope-toggle delay on the client.
+		// This is the authoritative fix: the prediction-side zeroing in
+		// cl_pmove.c was insufficient because the server kept overwriting
+		// the value every tick via this delta update.
+		to_wd[idx].m_flNextSecondaryAttack = 0.0f;
 	}
 
 	// make a local copy of physinfo
