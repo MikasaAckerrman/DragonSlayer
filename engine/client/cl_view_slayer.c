@@ -17,6 +17,8 @@ GNU General Public License for more details.
 #include "client.h"
 #include "cl_view_slayer.h"
 #include "cl_scoreboard_slayer.h"
+#include "cl_steam_api.h"
+#include "cl_steam_login.h"
 
 // ===========================================================================
 // Cvars - Third-person camera
@@ -178,6 +180,12 @@ void V_InitSlayerCvars( void )
 
 	// Scoreboard
 	Slayer_Scoreboard_Init();
+
+	// Steam Web API (batch avatars)
+	Slayer_SteamAPI_Init();
+
+	// Steam OpenID Login
+	Slayer_SteamLogin_Init();
 
 	Con_Printf( "Slayer3D: cvars initialized\n" );
 }
