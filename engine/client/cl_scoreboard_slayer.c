@@ -71,6 +71,7 @@ static int             slayer_avatar_tex[MAX_CLIENTS]; // 0 = not tried, >0 = lo
 static double          slayer_status_next_time;       // throttle: next allowed "status" send
 static double          slayer_status_deadline;        // until: parse # lines from svc_print
 static qboolean        slayer_status_pending;          // true while we expect status reply
+static int             slayer_steam_reject_count;     // debounce: non-STEAM lines logged per session (reset on map change)
 
 // Cached parsed cvar colors (re-parsed only when cvar string changes)
 static char   cached_bg_str[64] = "";
@@ -239,7 +240,30 @@ void Slayer_ParseStatusLine( const char *line )
 
 	// Parse STEAM_X:Y:Z
 	if( Q_strncmp( p, "STEAM_", 6 ) != 0 )
+	{
+		// Non-STEAM row (BOT, STEAM_ID_LAN, STEAM_ID_BOT, HLTV, VALVE_ID_LAN, ...)
+		// is silently rejected because there is no Steam avatar to fetch. Log
+		// the first 8 rejections per session at DEBUG so the user can confirm
+		// from 'adb logcat -s Xash *:D' why no avatars appear in single-player
+		// or LAN games.
+		if( slayer_steam_reject_count < 8 )
+		{
+			char prefix[17];
+			int  k;
+			for( k = 0; k < 16 && p[k] != '\0' && p[k] != ' ' && p[k] != '\t' && p[k] != '\r' && p[k] != '\n'; k++ )
+				prefix[k] = p[k];
+			prefix[k] = '\0';
+			slayer_steam_reject_count++;
+#if XASH_ANDROID
+			__android_log_print( ANDROID_LOG_DEBUG, "Xash",
+				"Slayer: status line slot=%d has no real STEAM_ id (got '%s'), no avatar (skip %d/8)",
+				slot, prefix, slayer_steam_reject_count );
+#endif
+			Con_DPrintf( "Slayer: status line slot=%d has no real STEAM_ id (got '%s'), no avatar (skip %d/8)\n",
+				slot, prefix, slayer_steam_reject_count );
+		}
 		return;
+	}
 	p += 6;
 
 	// X
@@ -284,6 +308,10 @@ void Slayer_ParseStatusLine( const char *line )
 	slayer_avatar_tex[i] = 0; // reset so texture will be reloaded
 
 	Con_Printf( "Slayer: parsed steamid %"PRIu64" for slot %d\n", steamid64, slot );
+#if XASH_ANDROID
+	__android_log_print( ANDROID_LOG_INFO, "Xash",
+		"Slayer: parsed steamid %"PRIu64" for slot %d", steamid64, slot );
+#endif
 
 	// Load texture immediately at parse time (outside render loop)
 	Slayer_LoadAvatarTexture( i );
@@ -386,6 +414,12 @@ static void Cmd_ScoreboardDown_f( void )
 		slayer_status_next_time = host.realtime + 30.0;
 		slayer_status_pending = true;
 		slayer_status_deadline = host.realtime + 5.0; // 5s parse window
+		slayer_steam_reject_count = 0; // reset debounce per request
+#if XASH_ANDROID
+		__android_log_print( ANDROID_LOG_INFO, "Xash",
+			"Slayer SB: status request queued, parse window 5s" );
+#endif
+		Con_DPrintf( "Slayer SB: status request queued, parse window 5s\n" );
 	}
 }
 
@@ -448,6 +482,7 @@ void Slayer_Scoreboard_Reset( void )
 	slayer_status_pending = false;
 	slayer_status_next_time = 0.0;   // allow immediate re-fetch on next connect
 	slayer_status_deadline = 0.0;
+	slayer_steam_reject_count = 0;
 
 	Slayer_AvatarDownload_Reset();
 }

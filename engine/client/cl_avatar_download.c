@@ -325,7 +325,12 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 	pthread_t thread;
 
 	if( slayer_avatar_download.value == 0.0f )
+	{
+		__android_log_print( ANDROID_LOG_DEBUG, "Xash",
+			"AvatarDL: skip slot=%d steamid=%" PRIu64 " (cvar slayer_avatar_download=0)",
+			slot, steamid64 );
 		return;
+	}
 
 	if( slot < 0 || slot >= MAX_CLIENTS || steamid64 == 0 )
 		return;
@@ -336,16 +341,32 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 	// Already done or in progress?
 	if( avd_slot_result[slot] == AVD_RESULT_DONE ||
 	    avd_slot_result[slot] == AVD_RESULT_IN_PROGRESS )
+	{
+		__android_log_print( ANDROID_LOG_DEBUG, "Xash",
+			"AvatarDL: skip slot=%d steamid=%" PRIu64 " (slot busy: result=%d)",
+			slot, steamid64, avd_slot_result[slot] );
 		return;
+	}
 
 	// Recently failed - wait for retry delay
 	if( avd_slot_result[slot] == AVD_RESULT_FAIL &&
 	    host.realtime - avd_slot_fail_time[slot] < AVD_RETRY_DELAY )
+	{
+		__android_log_print( ANDROID_LOG_DEBUG, "Xash",
+			"AvatarDL: skip slot=%d steamid=%" PRIu64 " (cooldown, %.1fs left)",
+			slot, steamid64,
+			AVD_RETRY_DELAY - ( host.realtime - avd_slot_fail_time[slot] ) );
 		return;
+	}
 
 	// Max concurrent check
 	if( avd_active_count >= AVD_MAX_CONCURRENT )
+	{
+		__android_log_print( ANDROID_LOG_DEBUG, "Xash",
+			"AvatarDL: skip slot=%d steamid=%" PRIu64 " (concurrent limit %d reached)",
+			slot, steamid64, AVD_MAX_CONCURRENT );
 		return;
+	}
 
 	// Already cached on disk?
 	Q_snprintf( path, sizeof( path ), "avatars/%" PRIu64 ".png", steamid64 );
