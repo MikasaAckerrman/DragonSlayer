@@ -1150,15 +1150,6 @@ void CL_ParseClientData( sizebuf_t *msg, connprotocol_t proto )
 		Delta_ReadGSFields( msg, DT_CLIENTDATA_T, from_cd, to_cd, cl.mtime[0] );
 	else MSG_ReadClientData( msg, from_cd, to_cd, cl.mtime[0] );
 
-	// Slayer3D: fast-zoom — strip server-imposed general attack cooldown
-	// from clientdata immediately after parsing. The server sends
-	// m_flNextAttack > 0 every tick (set by SecondaryAttack in game DLL),
-	// which blocks HUD_WeaponsPostThink from allowing another +attack2.
-	// Zeroing here is safe: prediction sets its own m_flNextAttack via
-	// PostRunCmd for reload/switch; the server value is only authoritative
-	// for the server, not for client-side prediction input.
-	to_cd->m_flNextAttack = 0.0f;
-
 	for( i = 0; i < 64; i++ )
 	{
 		// check for end of weapondata (and clientdata_t message)
@@ -1170,12 +1161,6 @@ void CL_ParseClientData( sizebuf_t *msg, connprotocol_t proto )
 		if( proto == PROTO_GOLDSRC )
 			Delta_ReadGSFields( msg, DT_WEAPONDATA_T, &from_wd[idx], &to_wd[idx], cl.mtime[0] );
 		else MSG_ReadWeaponData( msg, &from_wd[idx], &to_wd[idx], cl.mtime[0] );
-
-		// Slayer3D: fast-zoom — strip server-imposed secondary attack cooldown
-		// immediately after parsing so prediction never sees it.
-		// This is the primary fix: server sends m_flNextSecondaryAttack > 0 every
-		// tick via delta weapondata; prediction-only zeroing gets overwritten.
-		to_wd[idx].m_flNextSecondaryAttack = 0.0f;
 	}
 
 	// make a local copy of physinfo
