@@ -1143,3 +1143,15 @@ void Slayer_Scoreboard_Draw( void )
 		cur_y += row_h;
 	}
 }
+
+
+// ===========================================================================
+// Killfeed helper: expose team_id for a player slot (0-based)
+// ===========================================================================
+
+int Slayer_GetPlayerTeam( int slot )
+{
+	if( slot < 0 || slot >= MAX_CLIENTS )
+		return 0;
+	return slayer_scores[slot].team_id;
+}

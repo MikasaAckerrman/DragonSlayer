@@ -17,6 +17,7 @@ GNU General Public License for more details.
 #include "client.h"
 #include "cl_view_slayer.h"
 #include "cl_scoreboard_slayer.h"
+#include "cl_killfeed_slayer.h"
 
 // ===========================================================================
 // Cvars - Third-person camera
@@ -188,6 +189,9 @@ void V_InitSlayerCvars( void )
 	// Scoreboard
 	Slayer_Scoreboard_Init();
 
+	// Killfeed
+	Slayer_Killfeed_Init();
+
 	Con_Printf( "Slayer3D: cvars initialized\n" );
 }
 
@@ -347,6 +351,9 @@ void Slayer_ResetMatchState( void )
 
 	// Clear scoreboard score data
 	Slayer_Scoreboard_Reset();
+
+	// Clear killfeed
+	Slayer_Killfeed_Reset();
 }
 
 // ===========================================================================
@@ -438,6 +445,7 @@ qboolean Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 	int         killer, victim;
 	qboolean    is_teamkill = false;
 	qboolean    is_headshot = false;
+	const char *weapon_str = NULL;
 
 	// HL/CS DeathMsg layout: byte killer_id, byte victim_id, ...optional rest
 	if( !pbuf || iSize < 2 )
@@ -445,6 +453,30 @@ qboolean Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 
 	killer = pbuf[0];
 	victim = pbuf[1];
+
+	// Headshot detection. In CS/CSCZ the DeathMsg layout is:
+	//   byte killer, byte victim, byte headshot(0/1), string weapon
+	// In vanilla HL/DM it's:
+	//   byte killer, byte victim, string weapon
+	// We detect headshot if the third byte is exactly 0 or 1 AND there
+	// are at least 4 bytes (room for the weapon string after the flag).
+	// This heuristic works across CS, CSCZ, and bot mods that mimic
+	// the CS format. For non-CS mods where pbuf[2] is the first char
+	// of the weapon name (always >= 0x20), it safely won't trigger.
+	if( iSize >= 4 && pbuf[2] <= 1 )
+	{
+		is_headshot = ( pbuf[2] == 1 );
+		weapon_str = (const char *)( pbuf + 3 );
+	}
+	else if( iSize >= 3 )
+	{
+		weapon_str = (const char *)( pbuf + 2 );
+	}
+
+	// Feed killfeed for ALL kills (regardless of who is killer/victim)
+	Slayer_Killfeed_OnDeathMsg( killer, victim, is_headshot, weapon_str );
+
+	// --- Killsound logic below: only for LOCAL player kills ---
 
 	// We only care when the LOCAL player is the KILLER.
 	// cl.playernum is 0-based, entindex is 1-based.
@@ -458,18 +490,6 @@ qboolean Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 	// World kill guard (killer == 0 means environment killed them).
 	if( killer == 0 )
 		return false;
-
-	// Headshot detection. In CS/CSCZ the DeathMsg layout is:
-	//   byte killer, byte victim, byte headshot(0/1), string weapon
-	// In vanilla HL/DM it's:
-	//   byte killer, byte victim, string weapon
-	// We detect headshot if the third byte is exactly 0 or 1 AND there
-	// are at least 4 bytes (room for the weapon string after the flag).
-	// This heuristic works across CS, CSCZ, and bot mods that mimic
-	// the CS format. For non-CS mods where pbuf[2] is the first char
-	// of the weapon name (always >= 0x20), it safely won't trigger.
-	if( iSize >= 4 && pbuf[2] <= 1 )
-		is_headshot = ( pbuf[2] == 1 );
 
 	is_teamkill = Slayer_IsTeamkill( killer, victim );
 
