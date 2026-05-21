@@ -35,7 +35,8 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_bg_color, "20 20 20 180", FCVAR_ARCHI
 static CVAR_DEFINE_AUTO( slayer_scoreboard_text_color, "255 255 255 255", FCVAR_ARCHIVE, "Slayer3D: scoreboard text RGBA" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_ct_color, "120 180 255", FCVAR_ARCHIVE, "Slayer3D: CT team RGB" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_t_color, "255 100 80", FCVAR_ARCHIVE, "Slayer3D: T team RGB" );
-static CVAR_DEFINE_AUTO( slayer_scoreboard_border_color, "255 255 255 200", FCVAR_ARCHIVE, "Slayer3D: scoreboard border RGBA" );
+// Border alpha lowered from 200 -> 150 (lighter visual weight, less stair-stepping)
+static CVAR_DEFINE_AUTO( slayer_scoreboard_border_color, "255 255 255 150", FCVAR_ARCHIVE, "Slayer3D: scoreboard border RGBA" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_opacity, "220", FCVAR_ARCHIVE, "Slayer3D: overall scoreboard opacity (0-255)" );
 
 // ===========================================================================
@@ -488,6 +489,12 @@ void Slayer_OnScoreInfo( const byte *pbuf, int iSize )
 	slayer_scores[slot].deaths    = deaths;
 	slayer_scores[slot].team_id   = team_id;
 	slayer_scores[slot].connected = 1;
+
+	// Clear stale health when a player switches off CT/T (e.g. moves to spec).
+	// HP is only meaningful for in-round CT/T players; without this, a value
+	// previously sent via HealthInfo could leak into the spectator row.
+	if( team_id != SLAYER_TEAM_CT && team_id != SLAYER_TEAM_T )
+		slayer_scores[slot].health = 0;
 }
 
 void Slayer_OnScoreAttrib( const byte *pbuf, int iSize )
@@ -768,17 +775,46 @@ void Slayer_Scoreboard_Draw( void )
 	// Fixed board width: 65% of screen_w
 	board_w = (int)( screen_w * 0.65f );
 
-	// Height adapts to content: header + column headers + team headers + rows + padding
+	// === DIAG: build summary (visible to user via in-game console + adb logcat -s Xash) ===
+	Con_Printf( "Slayer SB: built %d players (CT=%d T=%d SPEC=%d) maxclients=%d playernum=%d\n",
+		num_players, ct_player_count, t_player_count, spec_player_count,
+		cl.maxclients, cl.playernum );
+#if XASH_ANDROID
+	__android_log_print( ANDROID_LOG_INFO, "Xash",
+		"Slayer SB: built %d players (CT=%d T=%d SPEC=%d) maxclients=%d playernum=%d",
+		num_players, ct_player_count, t_player_count, spec_player_count,
+		cl.maxclients, cl.playernum );
+#endif
+
+	// Height adapts to content: hostname + column-headers + populated team headers + rows + padding
 	{
-		int content_rows = num_players + 4; // +4 for header, column headers, 2 team headers
-		int min_h = row_h * content_rows + 40;
-		int max_h = (int)( screen_h * 0.85f );
+		// Count only team headers that will actually render (have >=1 player).
+		// Old code assumed exactly 2 (CT+T); when all 3 (CT+T+SPEC) fire the
+		// content under-allocated by one row and the inner height-clip break
+		// silently dropped the last row. Add +60 of slack to cover the
+		// cumulative top-pad / inter-team-spacing / separator pixels (was 40
+		// which is too tight when 3 team headers fire).
+		int team_headers = ( ct_player_count > 0 ? 1 : 0 )
+		                 + ( t_player_count > 0 ? 1 : 0 )
+		                 + ( spec_player_count > 0 ? 1 : 0 );
+		int content_rows = num_players + 2 + team_headers;
+		int min_h = row_h * content_rows + 60;
+		int max_h = (int)( screen_h * 0.92f );
 
 		board_h = min_h;
 		if( board_h > max_h )
 			board_h = max_h;
 		if( board_h < (int)( screen_h * 0.20f ) )
 			board_h = (int)( screen_h * 0.20f );
+
+		// === DIAG: layout summary (so user can see why a row was clipped) ===
+		Con_Printf( "Slayer SB: layout row_h=%d team_hdr=%d board_h=%d (min=%d max=%d) screen=%dx%d\n",
+			row_h, team_headers, board_h, min_h, max_h, screen_w, screen_h );
+#if XASH_ANDROID
+		__android_log_print( ANDROID_LOG_INFO, "Xash",
+			"Slayer SB: layout row_h=%d team_hdr=%d board_h=%d (min=%d max=%d) screen=%dx%d",
+			row_h, team_headers, board_h, min_h, max_h, screen_w, screen_h );
+#endif
 	}
 
 	// Center the board
@@ -896,7 +932,17 @@ void Slayer_Scoreboard_Draw( void )
 
 		// Stop drawing if we exceed the board
 		if( cur_y + row_h > board_y + board_h - 4 )
+		{
+			// === DIAG: row clipped by board height (pre-team-header) ===
+			Con_Printf( "Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d\n",
+				row, num_players, cur_y, board_y + board_h );
+#if XASH_ANDROID
+			__android_log_print( ANDROID_LOG_INFO, "Xash",
+				"Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d",
+				row, num_players, cur_y, board_y + board_h );
+#endif
 			break;
+		}
 
 		// Team section headers
 		if( team == SLAYER_TEAM_CT && !drawn_ct_header )
@@ -936,7 +982,17 @@ void Slayer_Scoreboard_Draw( void )
 
 		// Stop drawing if we exceed the board after team header
 		if( cur_y + row_h > board_y + board_h - 4 )
+		{
+			// === DIAG: row clipped by board height (post-team-header) ===
+			Con_Printf( "Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d\n",
+				row, num_players, cur_y, board_y + board_h );
+#if XASH_ANDROID
+			__android_log_print( ANDROID_LOG_INFO, "Xash",
+				"Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d",
+				row, num_players, cur_y, board_y + board_h );
+#endif
 			break;
+		}
 
 		// Alternating row backgrounds (every other row slightly lighter)
 		if( row % 2 == 0 )
@@ -988,7 +1044,6 @@ void Slayer_Scoreboard_Draw( void )
 		// Frags
 		{
 			rgba_t stat_color;
-			int hp = 0;
 
 			if( team == SLAYER_TEAM_CT )
 				MakeRGBA( stat_color, color_ct[0], color_ct[1], color_ct[2], row_alpha );
@@ -1010,35 +1065,40 @@ void Slayer_Scoreboard_Draw( void )
 				Q_snprintf( buf, sizeof( buf ), "%d", cl.players[pidx].ping );
 			Con_DrawString( col_ping_x, cur_y + 2, buf, stat_color );
 
-			// Health column
-			if( ( slayer_scores[pidx].flags & 1 ) && ( team == SLAYER_TEAM_CT || team == SLAYER_TEAM_T ) )
+			// Health column - only meaningful for CT/T (active round players).
+			// Spectators / unassigned: draw nothing (avoids leaking stale HP from
+			// a prior team or live-spectator HealthInfo into the scoreboard).
+			if( team == SLAYER_TEAM_CT || team == SLAYER_TEAM_T )
 			{
-				// Dead player: show "DEAD" text in team color with alpha 200
-				rgba_t dead_color;
-				if( team == SLAYER_TEAM_CT )
-					MakeRGBA( dead_color, color_ct[0], color_ct[1], color_ct[2], 200 );
-				else if( team == SLAYER_TEAM_T )
-					MakeRGBA( dead_color, color_t[0], color_t[1], color_t[2], 200 );
-				else
-					MakeRGBA( dead_color, color_text[0], color_text[1], color_text[2], 200 );
-				Con_DrawString( col_health_x, cur_y + 2, "DEAD", dead_color );
-			}
-			else
-			{
-				if( pidx == cl.playernum )
+				if( slayer_scores[pidx].flags & 1 )
 				{
-					hp = cl.local.health;
-					slayer_scores[pidx].health = hp;
+					// Dead player: show "DEAD" text in team color with alpha 200
+					rgba_t dead_color;
+					if( team == SLAYER_TEAM_CT )
+						MakeRGBA( dead_color, color_ct[0], color_ct[1], color_ct[2], 200 );
+					else
+						MakeRGBA( dead_color, color_t[0], color_t[1], color_t[2], 200 );
+					Con_DrawString( col_health_x, cur_y + 2, "DEAD", dead_color );
 				}
 				else
 				{
-					hp = slayer_scores[pidx].health;
-				}
+					int hp;
 
-				if( hp > 0 )
-				{
-					Q_snprintf( buf, sizeof( buf ), "%d", hp );
-					Con_DrawString( col_health_x, cur_y + 2, buf, stat_color );
+					if( pidx == cl.playernum )
+					{
+						hp = cl.local.health;
+						slayer_scores[pidx].health = hp;
+					}
+					else
+					{
+						hp = slayer_scores[pidx].health;
+					}
+
+					if( hp > 0 )
+					{
+						Q_snprintf( buf, sizeof( buf ), "%d", hp );
+						Con_DrawString( col_health_x, cur_y + 2, buf, stat_color );
+					}
 				}
 			}
 		}
