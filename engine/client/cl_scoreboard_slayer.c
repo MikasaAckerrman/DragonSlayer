@@ -550,16 +550,30 @@ void Slayer_OnScoreAttrib( const byte *pbuf, int iSize )
 void Slayer_OnHealthInfo( const byte *pbuf, int iSize )
 {
 	int slot;
+	int32_t health;
 
-	// HealthInfo format (ReGameDLL): byte slot(1-based), byte health
-	if( !pbuf || iSize < 2 )
+	// HealthInfo format (ReGameDLL): byte slot(1-based) + int32 health (WRITE_LONG)
+	// Total message size = 5 bytes. Server sends -1 (0xFFFFFFFF) when HP is
+	// hidden (opposing team). Reading only pbuf[1] as a single byte would
+	// yield 0xFF = 255 for hidden players — the original HP 255 bug.
+	if( !pbuf || iSize < 5 )
 		return;
 
 	slot = pbuf[0];
 	if( slot < 1 || slot > MAX_CLIENTS )
 		return;
 
-	slayer_scores[slot - 1].health = pbuf[1];
+	// Read int32 little-endian from pbuf[1..4]
+	health = (int32_t)( (uint32_t)pbuf[1]
+	       | ( (uint32_t)pbuf[2] << 8 )
+	       | ( (uint32_t)pbuf[3] << 16 )
+	       | ( (uint32_t)pbuf[4] << 24 ) );
+
+	// Negative means hidden (server sends -1 for opposing team) — treat as 0
+	if( health < 0 )
+		health = 0;
+
+	slayer_scores[slot - 1].health = health;
 }
 
 // ===========================================================================
