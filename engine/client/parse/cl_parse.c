@@ -2339,26 +2339,22 @@ void CL_ParseUserMessage( sizebuf_t *msg, int svc_num, connprotocol_t proto )
 	// parse user message into buffer
 	MSG_ReadBytes( msg, pbuf, iSize );
 
-	// Slayer3D: peek at DeathMsg / TeamInfo before forwarding to client.dll.
-	// DeathMsg is suppressed from the game DLL when our killfeed is active
-	// (prevents duplicate killfeed on screen).
-	{
-		qboolean suppress_msg = false;
-
-		if( !Q_strcmp( clgame.msg[i].name, "DeathMsg" ))
-			suppress_msg = Slayer_OnDeathMsg( pbuf, iSize );
-		else if( !Q_strcmp( clgame.msg[i].name, "TeamInfo" ))
-			Slayer_OnTeamInfo( pbuf, iSize );
-		else if( !Q_strcmp( clgame.msg[i].name, "ScoreInfo" ))
-			Slayer_OnScoreInfo( pbuf, iSize );
-		else if( !Q_strcmp( clgame.msg[i].name, "ScoreAttrib" ))
-			Slayer_OnScoreAttrib( pbuf, iSize );
-		else if( !Q_strcmp( clgame.msg[i].name, "HealthInfo" ))
-			Slayer_OnHealthInfo( pbuf, iSize );
-
-		if( suppress_msg )
-			return; // do not forward to game DLL
-	}
+	// Slayer3D: peek at DeathMsg / TeamInfo / score / health user-messages
+	// before forwarding them to client.dll. DeathMsg is no longer suppressed
+	// here - the client-side killfeed (Slayer-client) consumes the message
+	// directly via the game-DLL path, and the engine-side killfeed has been
+	// removed. Slayer_OnDeathMsg still runs to drive the kill-sound; the rest
+	// feed the slayer scoreboard / status panel.
+	if( !Q_strcmp( clgame.msg[i].name, "DeathMsg" ))
+		Slayer_OnDeathMsg( pbuf, iSize );
+	else if( !Q_strcmp( clgame.msg[i].name, "TeamInfo" ))
+		Slayer_OnTeamInfo( pbuf, iSize );
+	else if( !Q_strcmp( clgame.msg[i].name, "ScoreInfo" ))
+		Slayer_OnScoreInfo( pbuf, iSize );
+	else if( !Q_strcmp( clgame.msg[i].name, "ScoreAttrib" ))
+		Slayer_OnScoreAttrib( pbuf, iSize );
+	else if( !Q_strcmp( clgame.msg[i].name, "HealthInfo" ))
+		Slayer_OnHealthInfo( pbuf, iSize );
 
 	if( cl_trace_messages.value )
 	{
