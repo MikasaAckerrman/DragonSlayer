@@ -949,16 +949,6 @@ static void CL_RunUsercmd( local_state_t *from, local_state_t *to, usercmd_t *u,
 		else cl.local.lastground = clgame.pmove->onground; // world(0) or in air(-1)
 	}
 
-	// Slayer3D: fast-zoom — do NOT zero cooldowns here in the prediction loop!
-	// Zeroing m_flNextSecondaryAttack before/after PostRunCmd causes prediction
-	// to call SecondaryAttack() on EVERY prediction frame (oscillating the zoom
-	// state 90→40→10→90... within a single tick). The correct approach is to
-	// zero ONLY in cl_parse.c when receiving server data — that way:
-	// 1. Server-imposed cooldown never reaches the prediction base frame
-	// 2. Prediction's own cooldown (set by SecondaryAttack in PostRunCmd) is
-	//    preserved across prediction steps, preventing re-triggering
-	// 3. Next server packet arrives → we zero again → one clean toggle
-
 	clgame.dllFuncs.pfnPostRunCmd( from, to, &cmd, runfuncs, *time, random_seed );
 
 	*time += (double)cmd.msec / 1000.0;
@@ -1047,14 +1037,6 @@ void CL_PredictMovement( qboolean repredicting )
 	from->playerstate = frame->playerstate[cl.playernum];
 	from->client = frame->clientdata;
 
-	// Slayer3D: fast-zoom — zero secondary attack cooldown in the base frame
-	// so prediction never blocks rapid zoom toggling. Always active (no cvar).
-	{
-		int j;
-		for( j = 0; j < MAX_LOCAL_WEAPONS; j++ )
-			from->weapondata[j].m_flNextSecondaryAttack = 0.0f;
-		from->client.m_flNextAttack = 0.0f;
-	}
 	if( !frame->valid ) return;
 
 	time = frame->time;
