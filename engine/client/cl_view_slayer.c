@@ -17,7 +17,6 @@ GNU General Public License for more details.
 #include "client.h"
 #include "cl_view_slayer.h"
 #include "cl_scoreboard_slayer.h"
-#include "cl_killfeed_slayer.h"
 
 // ===========================================================================
 // Cvars - Third-person camera
@@ -180,9 +179,6 @@ void V_InitSlayerCvars( void )
 	// Scoreboard
 	Slayer_Scoreboard_Init();
 
-	// Killfeed
-	Slayer_Killfeed_Init();
-
 	Con_Printf( "Slayer3D: cvars initialized\n" );
 }
 
@@ -342,9 +338,6 @@ void Slayer_ResetMatchState( void )
 
 	// Clear scoreboard score data
 	Slayer_Scoreboard_Reset();
-
-	// Clear killfeed
-	Slayer_Killfeed_Reset();
 }
 
 // ===========================================================================
@@ -429,7 +422,7 @@ void Slayer_OnTeamInfo( const byte *pbuf, int iSize )
 	}
 }
 
-qboolean Slayer_OnDeathMsg( const byte *pbuf, int iSize )
+void Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 {
 	const char *snd;
 	float       vol;
@@ -440,7 +433,7 @@ qboolean Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 
 	// HL/CS DeathMsg layout: byte killer_id, byte victim_id, ...optional rest
 	if( !pbuf || iSize < 2 )
-		return false;
+		return;
 
 	killer = pbuf[0];
 	victim = pbuf[1];
@@ -464,27 +457,21 @@ qboolean Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 		weapon_str = (const char *)( pbuf + 2 );
 	}
 
-	// Feed killfeed for ALL kills (regardless of who is killer/victim)
-	// Returns true to suppress the game DLL's built-in killfeed when ours is on.
+	// --- Killsound logic: only for LOCAL player kills ---
+	if( killer == cl.playernum + 1 && killer != victim && killer != 0 )
 	{
-		qboolean suppress = Slayer_Killfeed_OnDeathMsg( killer, victim, is_headshot, weapon_str );
+		is_teamkill = Slayer_IsTeamkill( killer, victim );
 
-		// --- Killsound logic below: only for LOCAL player kills ---
-		if( killer == cl.playernum + 1 && killer != victim && killer != 0 )
+		snd = Slayer_PickKillSound( is_teamkill, is_headshot );
+		if( !COM_StringEmptyOrNULL( snd ))
 		{
-			is_teamkill = Slayer_IsTeamkill( killer, victim );
-
-			snd = Slayer_PickKillSound( is_teamkill, is_headshot );
-			if( !COM_StringEmptyOrNULL( snd ))
-			{
-				vol = bound( 0.0f, slayer_killsound_volume.value, 1.0f );
-				if( vol > 0.0f )
-					S_StartLocalSound( snd, vol, false );
-			}
+			vol = bound( 0.0f, slayer_killsound_volume.value, 1.0f );
+			if( vol > 0.0f )
+				S_StartLocalSound( snd, vol, false );
 		}
-
-		return suppress;
 	}
+
+	(void)weapon_str; // used by killsound path only for future extensions
 }
 
 // ===========================================================================

@@ -952,12 +952,11 @@ static void CL_RunUsercmd( local_state_t *from, local_state_t *to, usercmd_t *u,
 	// Slayer3D: fast-zoom — zero secondary attack cooldown BEFORE PostRunCmd
 	// so client.dll weapon prediction (HUD_WeaponsPostThink inside PostRunCmd)
 	// never sees a cooldown and allows immediate zoom toggling.
+	// NOTE: do NOT zero m_flNextAttack here — it breaks reload/weapon-switch.
 	{
 		int j;
 		for( j = 0; j < MAX_LOCAL_WEAPONS; j++ )
 			from->weapondata[j].m_flNextSecondaryAttack = 0.0f;
-		from->client.m_flNextAttack = 0.0f;
-		to->client.m_flNextAttack = 0.0f;
 	}
 
 	clgame.dllFuncs.pfnPostRunCmd( from, to, &cmd, runfuncs, *time, random_seed );
@@ -967,7 +966,6 @@ static void CL_RunUsercmd( local_state_t *from, local_state_t *to, usercmd_t *u,
 		int j;
 		for( j = 0; j < MAX_LOCAL_WEAPONS; j++ )
 			to->weapondata[j].m_flNextSecondaryAttack = 0.0f;
-		to->client.m_flNextAttack = 0.0f;
 	}
 
 	*time += (double)cmd.msec / 1000.0;

@@ -1146,7 +1146,7 @@ void Slayer_Scoreboard_Draw( void )
 
 
 // ===========================================================================
-// Killfeed helper: expose team_id for a player slot (0-based)
+// Team helper: expose team_id for a player slot (0-based)
 // ===========================================================================
 
 int Slayer_GetPlayerTeam( int slot )

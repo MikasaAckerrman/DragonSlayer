@@ -79,9 +79,7 @@ void V_SlayerSmoothZoom( ref_viewpass_t *rvp );
 //
 //   pbuf  - raw payload bytes (same buffer handed to client.dll)
 //   iSize - payload length in bytes
-//
-// Returns true if a kill sound was triggered, false otherwise.
-qboolean Slayer_OnDeathMsg( const byte *pbuf, int iSize );
+void Slayer_OnDeathMsg( const byte *pbuf, int iSize );
 
 // Hook for a server-sent "TeamInfo" user message. Stores the team name
 // of a given client so Slayer_OnDeathMsg can detect teamkills.
