@@ -187,10 +187,11 @@ void Slayer_Killfeed_Draw( void )
 	cl_font_t  *font;
 	int         scr_w, scr_h;
 	int         max_lines;
-	float       duration;
+	float       duration, scale;
 	float       anchor_x_frac, anchor_y_frac;
 	int         anchor_x, anchor_y;
 	int         row_h, icon_size;
+	int         pad_x, pad_y, entry_gap;
 	int         drawn;
 	int         i;
 	byte        bg_r, bg_g, bg_b, bg_a;
@@ -208,9 +209,15 @@ void Slayer_Killfeed_Draw( void )
 	scr_h = refState.height;
 
 	{
-		float scale = bound( 0.5f, slayer_killfeed_scale.value, 2.0f );
+		scale = bound( 0.5f, slayer_killfeed_scale.value, 2.0f );
 		row_h = (int)(( font->charHeight + KF_PAD_Y * 2 ) * scale);
 		icon_size = (int)( font->charHeight * scale );
+		pad_x = (int)( KF_PAD_X * scale );
+		pad_y = (int)( KF_PAD_Y * scale );
+		entry_gap = (int)( KF_ENTRY_GAP * scale );
+		if( pad_x < 2 ) pad_x = 2;
+		if( pad_y < 1 ) pad_y = 1;
+		if( entry_gap < 1 ) entry_gap = 1;
 	}
 
 	duration = slayer_killfeed_duration.value;
@@ -299,12 +306,12 @@ void Slayer_Killfeed_Draw( void )
 		Con_DrawStringLen( killer_name, &killer_name_w, &dummy_h );
 		Con_DrawStringLen( victim_name, &victim_name_w, &dummy_h );
 
-		// Weapon width: icon_size if we have a texture, otherwise dash width
+		// Weapon width: icon_size if we have a texture, otherwise text width
 		weapon_w = icon_size;
-		if( e->weapon_tex == 0 )
+		if( e->weapon_tex == 0 && e->weapon[0] )
 		{
 			int dw;
-			Con_DrawStringLen( "-", &dw, &dummy_h );
+			Con_DrawStringLen( e->weapon, &dw, &dummy_h );
 			weapon_w = dw;
 		}
 
@@ -318,7 +325,7 @@ void Slayer_Killfeed_Draw( void )
 		}
 
 		// Total entry width
-		entry_w = KF_PAD_X + killer_name_w + KF_PAD_X + weapon_w + KF_PAD_X + victim_name_w + hs_w + KF_PAD_X;
+		entry_w = pad_x + killer_name_w + pad_x + weapon_w + pad_x + victim_name_w + hs_w + pad_x;
 
 		// Position: right-aligned from anchor_x, slide in from right
 		{
@@ -326,7 +333,7 @@ void Slayer_Killfeed_Draw( void )
 			int off_screen_x = anchor_x + 20; // starts off-screen right
 			entry_x = (int)( off_screen_x + ( fully_in_x - off_screen_x ) * slide_frac );
 		}
-		entry_y = anchor_y + drawn * ( row_h + KF_ENTRY_GAP );
+		entry_y = anchor_y + drawn * ( row_h + entry_gap );
 
 		// Effective alpha
 		{
@@ -388,42 +395,43 @@ void Slayer_Killfeed_Draw( void )
 		victim_color[3] = (byte)( 255 * alpha_mult );
 
 		// Draw text: [killer] [weapon] [victim] [HS]
-		text_x = entry_x + KF_PAD_X;
+		text_x = entry_x + pad_x;
 
 		// Killer name
-		Con_DrawString( text_x, entry_y + KF_PAD_Y, killer_name, killer_color );
-		text_x += killer_name_w + KF_PAD_X;
+		Con_DrawString( text_x, entry_y + pad_y, killer_name, killer_color );
+		text_x += killer_name_w + pad_x;
 
-		// Weapon icon or separator
+		// Weapon icon or name
 		if( e->weapon_tex != 0 )
 		{
 			byte icon_alpha = (byte)( 255 * alpha_mult );
 			ref.dllFuncs.GL_SetRenderMode( kRenderTransTexture );
 			ref.dllFuncs.Color4ub( 255, 255, 255, icon_alpha );
-			ref.dllFuncs.R_DrawStretchPic( text_x, entry_y + KF_PAD_Y, icon_size, icon_size, 0, 0, 1, 1, e->weapon_tex );
-			text_x += icon_size + KF_PAD_X;
+			ref.dllFuncs.R_DrawStretchPic( text_x, entry_y + pad_y, icon_size, icon_size, 0, 0, 1, 1, e->weapon_tex );
+			text_x += icon_size + pad_x;
+		}
+		else if( e->weapon[0] )
+		{
+			// Show weapon name in grey
+			rgba_t weapon_color = { 220, 220, 220, (byte)( 220 * alpha_mult ) };
+			Con_DrawString( text_x, entry_y + pad_y, e->weapon, weapon_color );
+			text_x += weapon_w + pad_x;
 		}
 		else
 		{
-			// No icon available: draw a simple dash separator
-			rgba_t sep_color = { 180, 180, 180, (byte)( 180 * alpha_mult ) };
-			Con_DrawString( text_x, entry_y + KF_PAD_Y, "-", sep_color );
-			{
-				int sep_w, sep_h_unused;
-				Con_DrawStringLen( "-", &sep_w, &sep_h_unused );
-				text_x += sep_w + KF_PAD_X;
-			}
+			// No weapon info at all — just a small gap
+			text_x += pad_x;
 		}
 
 		// Victim name
-		Con_DrawString( text_x, entry_y + KF_PAD_Y, victim_name, victim_color );
+		Con_DrawString( text_x, entry_y + pad_y, victim_name, victim_color );
 		text_x += victim_name_w;
 
 		// Headshot indicator
 		if( e->headshot )
 		{
 			rgba_t hs_color = { 255, 50, 50, (byte)( 255 * alpha_mult ) };
-			Con_DrawString( text_x, entry_y + KF_PAD_Y, " HS", hs_color );
+			Con_DrawString( text_x, entry_y + pad_y, " HS", hs_color );
 		}
 	}
 }
