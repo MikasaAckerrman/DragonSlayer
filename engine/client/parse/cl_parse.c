@@ -1150,6 +1150,15 @@ void CL_ParseClientData( sizebuf_t *msg, connprotocol_t proto )
 		Delta_ReadGSFields( msg, DT_CLIENTDATA_T, from_cd, to_cd, cl.mtime[0] );
 	else MSG_ReadClientData( msg, from_cd, to_cd, cl.mtime[0] );
 
+	// Slayer3D: fast-zoom — strip server-imposed general attack cooldown
+	// from clientdata immediately after parsing. The server sends
+	// m_flNextAttack > 0 every tick (set by SecondaryAttack in game DLL),
+	// which blocks HUD_WeaponsPostThink from allowing another +attack2.
+	// Zeroing here is safe: prediction sets its own m_flNextAttack via
+	// PostRunCmd for reload/switch; the server value is only authoritative
+	// for the server, not for client-side prediction input.
+	to_cd->m_flNextAttack = 0.0f;
+
 	for( i = 0; i < 64; i++ )
 	{
 		// check for end of weapondata (and clientdata_t message)
