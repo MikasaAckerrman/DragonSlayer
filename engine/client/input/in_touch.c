@@ -1818,7 +1818,12 @@ static qboolean Touch_ButtonPress( touchbuttonlist_t *list, touchEventType type,
 					touch.precision = true;
 
 				result = true;
-				if( Touch_IsSlotMenuCommand( button->command ) )
+				// Only block look-passthrough for client/unprivileged slot buttons
+				// (e.g. the numbers popup menu from numbers.cfg). User-defined
+				// buttons that happen to run slot commands should NOT steal the
+				// finger from the look zone — the player still wants to aim.
+				if( Touch_IsSlotMenuCommand( button->command )
+					&& FBitSet( button->flags, TOUCH_FL_CLIENT ))
 					break; // slot/menu button handled, prevent passthrough
 			}
 			else if( button->type == touch_wheel )
