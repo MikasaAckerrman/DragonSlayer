@@ -30,7 +30,8 @@ void Slayer_Killfeed_Reset( void );
 //   victim  - 1-based entindex of the victim
 //   headshot - true if headshot kill
 //   weapon  - weapon name string (e.g. "ak47"), may be NULL
-void Slayer_Killfeed_OnDeathMsg( int killer, int victim, qboolean headshot, const char *weapon );
+// Returns true if the default game DLL killfeed should be suppressed.
+qboolean Slayer_Killfeed_OnDeathMsg( int killer, int victim, qboolean headshot, const char *weapon );
 
 // Draw the killfeed overlay. Called every frame from V_PostRender 2D block.
 // No-op when disabled or no entries to draw.

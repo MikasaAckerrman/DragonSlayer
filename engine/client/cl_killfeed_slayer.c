@@ -29,6 +29,7 @@ static CVAR_DEFINE_AUTO( slayer_killfeed_max, "5", FCVAR_ARCHIVE, "Slayer3D: max
 static CVAR_DEFINE_AUTO( slayer_killfeed_bg_color, "0 0 0 140", FCVAR_ARCHIVE, "Slayer3D: killfeed background RGBA" );
 static CVAR_DEFINE_AUTO( slayer_killfeed_border_color, "255 255 255 180", FCVAR_ARCHIVE, "Slayer3D: killfeed border RGBA" );
 static CVAR_DEFINE_AUTO( slayer_killfeed_local_color, "255 200 0 220", FCVAR_ARCHIVE, "Slayer3D: killfeed local-kill highlight RGBA (gold)" );
+static CVAR_DEFINE_AUTO( slayer_killfeed_scale, "1.0", FCVAR_ARCHIVE, "Slayer3D: killfeed size multiplier (0.5..2.0)" );
 
 // ===========================================================================
 // Constants
@@ -135,6 +136,7 @@ void Slayer_Killfeed_Init( void )
 	Cvar_RegisterVariable( &slayer_killfeed_bg_color );
 	Cvar_RegisterVariable( &slayer_killfeed_border_color );
 	Cvar_RegisterVariable( &slayer_killfeed_local_color );
+	Cvar_RegisterVariable( &slayer_killfeed_scale );
 
 	Slayer_Killfeed_Reset();
 }
@@ -145,12 +147,12 @@ void Slayer_Killfeed_Reset( void )
 	kf_count = 0;
 }
 
-void Slayer_Killfeed_OnDeathMsg( int killer, int victim, qboolean headshot, const char *weapon )
+qboolean Slayer_Killfeed_OnDeathMsg( int killer, int victim, qboolean headshot, const char *weapon )
 {
 	killfeed_entry_t *e;
 
 	if( slayer_killfeed.value == 0.0f )
-		return;
+		return false;
 
 	// Shift entries down if full
 	if( kf_count >= SLAYER_KILLFEED_MAX )
@@ -175,6 +177,9 @@ void Slayer_Killfeed_OnDeathMsg( int killer, int victim, qboolean headshot, cons
 	}
 
 	kf_count++;
+
+	// Return true to suppress the game DLL's default killfeed
+	return true;
 }
 
 void Slayer_Killfeed_Draw( void )
@@ -201,8 +206,12 @@ void Slayer_Killfeed_Draw( void )
 
 	scr_w = refState.width;
 	scr_h = refState.height;
-	row_h = font->charHeight + KF_PAD_Y * 2;
-	icon_size = font->charHeight;
+
+	{
+		float scale = bound( 0.5f, slayer_killfeed_scale.value, 2.0f );
+		row_h = (int)(( font->charHeight + KF_PAD_Y * 2 ) * scale);
+		icon_size = (int)( font->charHeight * scale );
+	}
 
 	duration = slayer_killfeed_duration.value;
 	if( duration <= 0.0f )
@@ -290,15 +299,13 @@ void Slayer_Killfeed_Draw( void )
 		Con_DrawStringLen( killer_name, &killer_name_w, &dummy_h );
 		Con_DrawStringLen( victim_name, &victim_name_w, &dummy_h );
 
-		// Weapon text width (used as fallback if no icon)
-		weapon_w = icon_size; // default: icon placeholder
-		if( e->weapon_tex == 0 && e->weapon[0] )
+		// Weapon width: icon_size if we have a texture, otherwise dash width
+		weapon_w = icon_size;
+		if( e->weapon_tex == 0 )
 		{
-			char weapon_str[36];
-			int ww;
-			Q_snprintf( weapon_str, sizeof( weapon_str ), "[%s]", e->weapon );
-			Con_DrawStringLen( weapon_str, &ww, &dummy_h );
-			weapon_w = ww;
+			int dw;
+			Con_DrawStringLen( "-", &dw, &dummy_h );
+			weapon_w = dw;
 		}
 
 		// Headshot indicator width
@@ -387,7 +394,7 @@ void Slayer_Killfeed_Draw( void )
 		Con_DrawString( text_x, entry_y + KF_PAD_Y, killer_name, killer_color );
 		text_x += killer_name_w + KF_PAD_X;
 
-		// Weapon icon or text fallback
+		// Weapon icon or separator
 		if( e->weapon_tex != 0 )
 		{
 			byte icon_alpha = (byte)( 255 * alpha_mult );
@@ -396,17 +403,16 @@ void Slayer_Killfeed_Draw( void )
 			ref.dllFuncs.R_DrawStretchPic( text_x, entry_y + KF_PAD_Y, icon_size, icon_size, 0, 0, 1, 1, e->weapon_tex );
 			text_x += icon_size + KF_PAD_X;
 		}
-		else if( e->weapon[0] )
-		{
-			char weapon_str[36];
-			rgba_t weapon_color = { 200, 200, 200, (byte)( 200 * alpha_mult ) };
-			Q_snprintf( weapon_str, sizeof( weapon_str ), "[%s]", e->weapon );
-			Con_DrawString( text_x, entry_y + KF_PAD_Y, weapon_str, weapon_color );
-			text_x += weapon_w + KF_PAD_X;
-		}
 		else
 		{
-			text_x += KF_PAD_X;
+			// No icon available: draw a simple dash separator
+			rgba_t sep_color = { 180, 180, 180, (byte)( 180 * alpha_mult ) };
+			Con_DrawString( text_x, entry_y + KF_PAD_Y, "-", sep_color );
+			{
+				int sep_w, sep_h_unused;
+				Con_DrawStringLen( "-", &sep_w, &sep_h_unused );
+				text_x += sep_w + KF_PAD_X;
+			}
 		}
 
 		// Victim name
