@@ -19,7 +19,6 @@ GNU General Public License for more details.
 #include "cl_tent.h"
 #include "pm_local.h"
 #include "studio.h"
-#include "cl_view_slayer.h"
 
 #define MAX_FORWARD			6	// forward probes for set idealpitch
 #define MIN_CORRECTION_DISTANCE	0.25f	// use smoothing if error is > this
@@ -950,21 +949,24 @@ static void CL_RunUsercmd( local_state_t *from, local_state_t *to, usercmd_t *u,
 		else cl.local.lastground = clgame.pmove->onground; // world(0) or in air(-1)
 	}
 
+	// Slayer3D: fast-zoom — zero secondary attack cooldown BEFORE PostRunCmd
+	// so client.dll weapon prediction (HUD_WeaponsPostThink inside PostRunCmd)
+	// never sees a cooldown and allows immediate zoom toggling.
+	{
+		int j;
+		for( j = 0; j < MAX_LOCAL_WEAPONS; j++ )
+			from->weapondata[j].m_flNextSecondaryAttack = 0.0f;
+		from->client.m_flNextAttack = 0.0f;
+		to->client.m_flNextAttack = 0.0f;
+	}
+
 	clgame.dllFuncs.pfnPostRunCmd( from, to, &cmd, runfuncs, *time, random_seed );
 
-	// Slayer3D: fast-zoom — zero out secondary attack cooldown in prediction
-	// so client-side prediction doesn't block rapid zoom toggling.
-	// Works fully on listen-server; on dedicated the server corrects within 1-2 ticks.
-	if( slayer_fast_zoom.value != 0.0f )
+	// Also zero the result so next prediction step starts clean
 	{
-		int wpn_id = to->client.m_iId;
-
-		if( wpn_id >= 0 && wpn_id < MAX_LOCAL_WEAPONS )
-		{
-			to->weapondata[wpn_id].m_flNextSecondaryAttack = 0.0f;
-		}
-
-		// Also zero the global m_flNextAttack so it doesn't gate zoom
+		int j;
+		for( j = 0; j < MAX_LOCAL_WEAPONS; j++ )
+			to->weapondata[j].m_flNextSecondaryAttack = 0.0f;
 		to->client.m_flNextAttack = 0.0f;
 	}
 
@@ -1055,11 +1057,7 @@ void CL_PredictMovement( qboolean repredicting )
 	from->client = frame->clientdata;
 
 	// Slayer3D: fast-zoom — zero secondary attack cooldown in the base frame
-	// so prediction never blocks rapid zoom toggling. This patches the
-	// authoritative server state on receipt, making it work on both listen
-	// and dedicated servers (dedicated will still send its own corrections,
-	// but IN_ATTACK2 input will reach the server without local suppression).
-	if( slayer_fast_zoom.value != 0.0f )
+	// so prediction never blocks rapid zoom toggling. Always active (no cvar).
 	{
 		int j;
 		for( j = 0; j < MAX_LOCAL_WEAPONS; j++ )

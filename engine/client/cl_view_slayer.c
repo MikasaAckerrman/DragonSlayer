@@ -56,12 +56,6 @@ static CVAR_DEFINE_AUTO( slayer_smooth_zoom, "1", FCVAR_ARCHIVE, "Slayer3D: enab
 static CVAR_DEFINE_AUTO( slayer_smooth_zoom_speed, "12.0", FCVAR_ARCHIVE, "Slayer3D: smooth zoom interpolation speed" );
 
 // ===========================================================================
-// Cvars - Fast zoom (remove sniper scope cooldown)
-// ===========================================================================
-
-CVAR_DEFINE_AUTO( slayer_fast_zoom, "0", FCVAR_ARCHIVE, "Slayer3D: remove zoom cooldown for snipers (listen-server/singleplayer)" );
-
-// ===========================================================================
 // Cvars - Kill-sound
 // ===========================================================================
 
@@ -179,9 +173,6 @@ void V_InitSlayerCvars( void )
 	// Smooth zoom
 	Cvar_RegisterVariable( &slayer_smooth_zoom );
 	Cvar_RegisterVariable( &slayer_smooth_zoom_speed );
-
-	// Fast zoom
-	Cvar_RegisterVariable( &slayer_fast_zoom );
 
 	// Initialize per-match state
 	Slayer_ResetMatchState();
