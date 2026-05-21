@@ -1161,6 +1161,12 @@ void CL_ParseClientData( sizebuf_t *msg, connprotocol_t proto )
 		if( proto == PROTO_GOLDSRC )
 			Delta_ReadGSFields( msg, DT_WEAPONDATA_T, &from_wd[idx], &to_wd[idx], cl.mtime[0] );
 		else MSG_ReadWeaponData( msg, &from_wd[idx], &to_wd[idx], cl.mtime[0] );
+
+		// Slayer3D: fast-zoom — strip server-imposed secondary attack cooldown
+		// immediately after parsing so prediction never sees it.
+		// This is the primary fix: server sends m_flNextSecondaryAttack > 0 every
+		// tick via delta weapondata; prediction-only zeroing gets overwritten.
+		to_wd[idx].m_flNextSecondaryAttack = 0.0f;
 	}
 
 	// make a local copy of physinfo
@@ -2339,14 +2345,11 @@ void CL_ParseUserMessage( sizebuf_t *msg, int svc_num, connprotocol_t proto )
 	// parse user message into buffer
 	MSG_ReadBytes( msg, pbuf, iSize );
 
-	// Slayer3D: peek at DeathMsg / TeamInfo before forwarding to client.dll.
-	// DeathMsg is suppressed from the game DLL when our killfeed is active
-	// (prevents duplicate killfeed on screen).
+	// Slayer3D: peek at DeathMsg / TeamInfo / ScoreInfo / etc. before forwarding
+	// to client.dll, so we can feed our overlays (scoreboard, killsound, etc.)
 	{
-		qboolean suppress_msg = false;
-
 		if( !Q_strcmp( clgame.msg[i].name, "DeathMsg" ))
-			suppress_msg = Slayer_OnDeathMsg( pbuf, iSize );
+			Slayer_OnDeathMsg( pbuf, iSize );
 		else if( !Q_strcmp( clgame.msg[i].name, "TeamInfo" ))
 			Slayer_OnTeamInfo( pbuf, iSize );
 		else if( !Q_strcmp( clgame.msg[i].name, "ScoreInfo" ))
@@ -2355,9 +2358,6 @@ void CL_ParseUserMessage( sizebuf_t *msg, int svc_num, connprotocol_t proto )
 			Slayer_OnScoreAttrib( pbuf, iSize );
 		else if( !Q_strcmp( clgame.msg[i].name, "HealthInfo" ))
 			Slayer_OnHealthInfo( pbuf, iSize );
-
-		if( suppress_msg )
-			return; // do not forward to game DLL
 	}
 
 	if( cl_trace_messages.value )
