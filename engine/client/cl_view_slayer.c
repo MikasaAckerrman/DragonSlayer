@@ -17,7 +17,6 @@ GNU General Public License for more details.
 #include "client.h"
 #include "cl_view_slayer.h"
 #include "cl_scoreboard_slayer.h"
-#include "cl_killfeed_slayer.h"
 
 // ===========================================================================
 // Cvars - Third-person camera
@@ -180,9 +179,6 @@ void V_InitSlayerCvars( void )
 	// Scoreboard
 	Slayer_Scoreboard_Init();
 
-	// Killfeed
-	Slayer_Killfeed_Init();
-
 	Con_Printf( "Slayer3D: cvars initialized\n" );
 }
 
@@ -342,23 +338,11 @@ void Slayer_ResetMatchState( void )
 
 	// Clear scoreboard score data
 	Slayer_Scoreboard_Reset();
-
-	// Clear killfeed
-	Slayer_Killfeed_Reset();
 }
 
 // ===========================================================================
 // Kill-sound - Helpers
 // ===========================================================================
-
-// Returns true if the current game is a Counter-Strike variant.
-static qboolean Slayer_GameIsCStrike( void )
-{
-	const char *g;
-	if( !GI ) return false;
-	g = GI->gamefolder;
-	return !Q_stricmp( g, "cstrike" ) || !Q_stricmp( g, "czero" ) || !Q_stricmp( g, "czeror" );
-}
 
 // Returns true when both players have a known, non-empty team and
 // those teams match. Suicide and self-kill are not teamkills.
@@ -436,7 +420,6 @@ qboolean Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 	int         killer, victim;
 	qboolean    is_teamkill = false;
 	qboolean    is_headshot = false;
-	const char *weapon_str = NULL;
 
 	// HL/CS DeathMsg layout: byte killer_id, byte victim_id, ...optional rest
 	if( !pbuf || iSize < 2 )
@@ -457,34 +440,25 @@ qboolean Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 	if( iSize >= 4 && pbuf[2] <= 1 )
 	{
 		is_headshot = ( pbuf[2] == 1 );
-		weapon_str = (const char *)( pbuf + 3 );
-	}
-	else if( iSize >= 3 )
-	{
-		weapon_str = (const char *)( pbuf + 2 );
 	}
 
-	// Feed killfeed for ALL kills (regardless of who is killer/victim)
-	// Returns true to suppress the game DLL's built-in killfeed when ours is on.
+	// Killsound: only when the LOCAL player is the killer.
+	// The return value is kept for API compatibility (cl_view_slayer.h
+	// declares qboolean) but always returns false — no message suppression.
+	if( killer == cl.playernum + 1 && killer != victim && killer != 0 )
 	{
-		qboolean suppress = Slayer_Killfeed_OnDeathMsg( killer, victim, is_headshot, weapon_str );
+		is_teamkill = Slayer_IsTeamkill( killer, victim );
 
-		// --- Killsound logic below: only for LOCAL player kills ---
-		if( killer == cl.playernum + 1 && killer != victim && killer != 0 )
+		snd = Slayer_PickKillSound( is_teamkill, is_headshot );
+		if( !COM_StringEmptyOrNULL( snd ))
 		{
-			is_teamkill = Slayer_IsTeamkill( killer, victim );
-
-			snd = Slayer_PickKillSound( is_teamkill, is_headshot );
-			if( !COM_StringEmptyOrNULL( snd ))
-			{
-				vol = bound( 0.0f, slayer_killsound_volume.value, 1.0f );
-				if( vol > 0.0f )
-					S_StartLocalSound( snd, vol, false );
-			}
+			vol = bound( 0.0f, slayer_killsound_volume.value, 1.0f );
+			if( vol > 0.0f )
+				S_StartLocalSound( snd, vol, false );
 		}
-
-		return suppress;
 	}
+
+	return false;
 }
 
 // ===========================================================================
