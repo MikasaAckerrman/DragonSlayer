@@ -810,8 +810,9 @@ void Slayer_Scoreboard_Draw( void )
 	// Fixed board width: 65% of screen_w
 	board_w = (int)( screen_w * 0.65f );
 
-	// === DIAG: build summary (visible to user via in-game console + adb logcat -s Xash) ===
-	Con_Printf( "Slayer SB: built %d players (CT=%d T=%d SPEC=%d) maxclients=%d playernum=%d\n",
+	// === DIAG: build summary (visible to user via adb logcat -s Xash; Con_DPrintf
+	// avoids per-frame in-game console flood while the scoreboard is held) ===
+	Con_DPrintf( "Slayer SB: built %d players (CT=%d T=%d SPEC=%d) maxclients=%d playernum=%d\n",
 		num_players, ct_player_count, t_player_count, spec_player_count,
 		cl.maxclients, cl.playernum );
 #if XASH_ANDROID
@@ -842,8 +843,9 @@ void Slayer_Scoreboard_Draw( void )
 		if( board_h < (int)( screen_h * 0.20f ) )
 			board_h = (int)( screen_h * 0.20f );
 
-		// === DIAG: layout summary (so user can see why a row was clipped) ===
-		Con_Printf( "Slayer SB: layout row_h=%d team_hdr=%d board_h=%d (min=%d max=%d) screen=%dx%d\n",
+		// === DIAG: layout summary (Con_DPrintf to avoid per-frame in-game
+		// console flood; logcat path stays INFO so the user can capture it) ===
+		Con_DPrintf( "Slayer SB: layout row_h=%d team_hdr=%d board_h=%d (min=%d max=%d) screen=%dx%d\n",
 			row_h, team_headers, board_h, min_h, max_h, screen_w, screen_h );
 #if XASH_ANDROID
 		__android_log_print( ANDROID_LOG_INFO, "Xash",
@@ -969,11 +971,11 @@ void Slayer_Scoreboard_Draw( void )
 		if( cur_y + row_h > board_y + board_h - 4 )
 		{
 			// === DIAG: row clipped by board height (pre-team-header) ===
-			Con_Printf( "Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d\n",
+			Con_Printf( "Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d (pre-hdr)\n",
 				row, num_players, cur_y, board_y + board_h );
 #if XASH_ANDROID
 			__android_log_print( ANDROID_LOG_INFO, "Xash",
-				"Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d",
+				"Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d (pre-hdr)",
 				row, num_players, cur_y, board_y + board_h );
 #endif
 			break;
@@ -1019,11 +1021,11 @@ void Slayer_Scoreboard_Draw( void )
 		if( cur_y + row_h > board_y + board_h - 4 )
 		{
 			// === DIAG: row clipped by board height (post-team-header) ===
-			Con_Printf( "Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d\n",
+			Con_Printf( "Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d (post-hdr)\n",
 				row, num_players, cur_y, board_y + board_h );
 #if XASH_ANDROID
 			__android_log_print( ANDROID_LOG_INFO, "Xash",
-				"Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d",
+				"Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d (post-hdr)",
 				row, num_players, cur_y, board_y + board_h );
 #endif
 			break;
