@@ -395,27 +395,58 @@ static void Cmd_AvatarUrls_f( void )
 
 // Throttled "status" request used by both the keybind path and the
 // auto-warm-on-connect path. Sends "status" at most once every 30s and
-// arms a 5s parse window in Slayer_ParseStatusLine so stray svc_print
-// lines that happen later cannot accidentally match the #N STEAM_X:Y:Z
-// regex.
-static void Slayer_RequestStatus( void )
+// arms a 30s parse window in Slayer_ParseStatusLine so a slow first-spawn
+// round-trip on Android cellular doesn't race the deadline. The 30s
+// window is safe because Slayer_ParseStatusLine's regex (#N "name" id
+// STEAM_X:Y:Z) cannot match normal svc_print chat / server-log lines —
+// chat is "PlayerName: msg" (no leading '#') and server messages don't
+// follow the strict quoted-name + STEAM_X:Y:Z shape.
+//
+// 'force' bypasses the throttle. Used as a recovery path from the
+// keypress when the auto-warm reply was missed entirely (e.g. server
+// dropped the request, or response arrived after a 30s window with no
+// matching '#' line) so the user can refresh by re-opening the
+// scoreboard instead of waiting for the throttle to expire.
+static void Slayer_RequestStatus( qboolean force )
 {
-	if( host.realtime < slayer_status_next_time )
+	if( !force && host.realtime < slayer_status_next_time )
 		return;
 
 	Cbuf_AddText( "status\n" );
 	slayer_status_next_time = host.realtime + 30.0;
 	slayer_status_pending = true;
-	slayer_status_deadline = host.realtime + 5.0; // 5s parse window
+	slayer_status_deadline = host.realtime + 30.0; // 30s parse window (mobile-friendly)
 	slayer_steam_reject_count = 0;                 // reset debounce per request
 }
 
 static void Cmd_ScoreboardDown_f( void )
 {
+	qboolean force_retry = false;
+	int      i, name_count = 0, steamid_count = 0;
+
 	slayer_scoreboard_active = true;
 
-	// Request status to get SteamIDs (throttled to once per 30 seconds)
-	Slayer_RequestStatus();
+	// Recovery: if the auto-warm parse window already closed and we still
+	// have no STEAM_IDs for any named player, re-issue 'status' bypassing
+	// the 30s throttle. Without this the user would be stuck without
+	// avatars for the first half-minute on every fresh connect whenever
+	// the auto-warm reply was lost (server dropped it, slow round-trip,
+	// etc.). When at least one STEAM_ID is loaded we treat the
+	// pre-warm as successful and respect the throttle.
+	for( i = 0; i < cl.maxclients && i < MAX_CLIENTS; i++ )
+	{
+		if( cl.players[i].name[0] == '\0' )
+			continue;
+		name_count++;
+		if( slayer_steamid64[i] != 0 )
+			steamid_count++;
+	}
+	if( !slayer_status_pending && name_count > 0 && steamid_count == 0 )
+		force_retry = true;
+
+	// Request status to get SteamIDs (throttled to once per 30 seconds,
+	// unless the recovery path above forces a re-issue).
+	Slayer_RequestStatus( force_retry );
 
 	// Trigger batch avatar fetch via Steam Web API (if API key is set)
 	Slayer_SteamAPI_RequestBatch( slayer_steamid64, MAX_CLIENTS );
@@ -438,7 +469,7 @@ void Slayer_Scoreboard_OnConnected( void )
 	if( cls.state != ca_active )
 		return;
 
-	Slayer_RequestStatus();
+	Slayer_RequestStatus( false );
 	Slayer_SteamAPI_RequestBatch( slayer_steamid64, MAX_CLIENTS );
 }
 
