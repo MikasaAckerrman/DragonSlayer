@@ -166,20 +166,23 @@ static void Slayer_LoadAvatarTexture( int slot );
 
 void Slayer_ParseStatusLine( const char *line )
 {
-	int slot;
 	int userid;
 	int steam_x, steam_y;
 	unsigned int steam_z;
 	uint64_t steamid64;
 	int i;
+	int slot = -1;
 	const char *p;
+	const char *name_start;
+	int name_len;
+	char namebuf[MAX_SCOREBOARDNAME];
 
 	if( !slayer_status_pending )
 		return;
 
 	// Status reply is fast (~1s). Cap parse window so random svc_print
 	// messages later (chat, server logs) cannot accidentally match the
-	// strict #N "name" STEAM_X:Y:Z format.
+	// strict # N "name" STEAM_X:Y:Z format.
 	if( host.realtime > slayer_status_deadline )
 	{
 		slayer_status_pending = false;
@@ -188,53 +191,61 @@ void Slayer_ParseStatusLine( const char *line )
 
 	// Skip non-# lines silently. The status reply begins with header
 	// lines (hostname:, version:, players:) which we don't care about,
-	// and they would otherwise abort parsing before any '#N' player
-	// entry was reached.
+	// and they would otherwise abort parsing before any player row
+	// was reached. Also reject lines like "# userid name uniqueid ..."
+	// which is the column-header banner some HLDS variants print before
+	// the player entries.
 	if( !line || line[0] != '#' )
 		return;
 
-	// Format: #<slot> "<name>" <userid> STEAM_X:Y:Z ...
+	// Real GoldSrc / HLDS / ReHLDS / ReGameDLL status format:
+	//     # <userid> "<name>" STEAM_X:Y:Z <frags> <time> <ping> <loss> <addr>
+	// Note the SPACE between '#' and userid — earlier versions of this
+	// parser walked digits immediately after '#', which produced 0 for
+	// every line and silently dropped every player. That is the reason
+	// the avatars never appeared.
 	p = line + 1;
 
-	// Parse slot number
-	slot = 0;
-	while( *p >= '0' && *p <= '9' )
-	{
-		slot = slot * 10 + ( *p - '0' );
-		p++;
-	}
-
-	if( slot < 1 || slot > MAX_CLIENTS )
-		return;
-
-	// Skip whitespace
+	// Skip whitespace between '#' and userid
 	while( *p == ' ' || *p == '\t' )
 		p++;
 
-	// Skip quoted name (we don't need it, just advance past it)
-	if( *p != '"' )
-		return;
-	p++;
-
-	while( *p && *p != '"' )
-		p++;
-
-	if( *p != '"' )
-		return;
-	p++; // skip closing quote
-
-	// Skip whitespace
-	while( *p == ' ' || *p == '\t' )
-		p++;
-
-	// Parse userid (skip it)
+	// Parse userid (1-based, server-assigned). NOT the same as
+	// cl.players[] slot index after a player rejoins, so we resolve
+	// to slot via cl.players[].userid lookup below.
 	userid = 0;
 	while( *p >= '0' && *p <= '9' )
 	{
 		userid = userid * 10 + ( *p - '0' );
 		p++;
 	}
-	(void)userid;
+
+	if( userid < 1 )
+		return; // header line "# userid name uniqueid ..."
+
+	// Skip whitespace
+	while( *p == ' ' || *p == '\t' )
+		p++;
+
+	// Quoted name follows
+	if( *p != '"' )
+		return;
+	p++;
+
+	name_start = p;
+	while( *p && *p != '"' )
+		p++;
+
+	if( *p != '"' )
+		return;
+
+	name_len = (int)( p - name_start );
+	if( name_len <= 0 || name_len >= (int)sizeof( namebuf ) )
+		name_len = (int)sizeof( namebuf ) - 1;
+	memcpy( namebuf, name_start, name_len );
+	namebuf[name_len] = '\0';
+
+	p++; // skip closing quote
 
 	// Skip whitespace
 	while( *p == ' ' || *p == '\t' )
@@ -258,11 +269,11 @@ void Slayer_ParseStatusLine( const char *line )
 			slayer_steam_reject_count++;
 #if XASH_ANDROID
 			__android_log_print( ANDROID_LOG_DEBUG, "Xash",
-				"Slayer: status line slot=%d has no real STEAM_ id (got '%s'), no avatar (skip %d/8)",
-				slot, prefix, slayer_steam_reject_count );
+				"Slayer: status line userid=%d name='%s' has no real STEAM_ id (got '%s'), no avatar (skip %d/8)",
+				userid, namebuf, prefix, slayer_steam_reject_count );
 #endif
-			Con_DPrintf( "Slayer: status line slot=%d has no real STEAM_ id (got '%s'), no avatar (skip %d/8)\n",
-				slot, prefix, slayer_steam_reject_count );
+			Con_DPrintf( "Slayer: status line userid=%d name='%s' has no real STEAM_ id (got '%s'), no avatar (skip %d/8)\n",
+				userid, namebuf, prefix, slayer_steam_reject_count );
 		}
 		return;
 	}
@@ -304,19 +315,65 @@ void Slayer_ParseStatusLine( const char *line )
 	// Compute SteamID64
 	steamid64 = 76561197960265728ULL + (uint64_t)steam_z * 2 + (uint64_t)steam_y;
 
-	// Use the authoritative slot number directly (1-based -> 0-based)
-	i = slot - 1;
-	slayer_steamid64[i] = steamid64;
-	slayer_avatar_tex[i] = 0; // reset so texture will be reloaded
+	// Resolve the cl.players[] slot for this status row.
+	//
+	// Earlier code assumed the leading number on a "# N \"name\" STEAM_..."
+	// line is the cl.players[] slot index (1-based). It is NOT — that
+	// number is the server-assigned userid which only equals slot+1 for
+	// the very first connect of a player. After any disconnect+rejoin
+	// cycle the userid keeps increasing while the slot is reused, so a
+	// userid-as-slot mapping silently writes the SteamID into the wrong
+	// row (or out of bounds for userid > MAX_CLIENTS).
+	//
+	// Match by userid first, then fall back to a case-sensitive name
+	// match so we still get an avatar on engines that don't populate
+	// cl.players[].userid client-side.
+	slot = -1;
+	for( i = 0; i < MAX_CLIENTS; i++ )
+	{
+		if( cl.players[i].userid == userid && userid > 0 )
+		{
+			slot = i;
+			break;
+		}
+	}
 
-	Con_Printf( "Slayer: parsed steamid %"PRIu64" for slot %d\n", steamid64, slot );
+	if( slot < 0 && namebuf[0] != '\0' )
+	{
+		for( i = 0; i < MAX_CLIENTS; i++ )
+		{
+			if( cl.players[i].name[0] != '\0' &&
+			    Q_strcmp( cl.players[i].name, namebuf ) == 0 )
+			{
+				slot = i;
+				break;
+			}
+		}
+	}
+
+	if( slot < 0 )
+	{
+		// Last resort: treat the leading number as a 1-based slot.
+		// Keeps single-game (no rejoin) behavior identical to before.
+		if( userid >= 1 && userid <= MAX_CLIENTS )
+			slot = userid - 1;
+		else
+			return;
+	}
+
+	slayer_steamid64[slot] = steamid64;
+	slayer_avatar_tex[slot] = 0; // reset so texture will be reloaded
+
+	Con_Printf( "Slayer: parsed steamid %"PRIu64" for slot %d (userid=%d name='%s')\n",
+		steamid64, slot, userid, namebuf );
 #if XASH_ANDROID
 	__android_log_print( ANDROID_LOG_INFO, "Xash",
-		"Slayer: parsed steamid %"PRIu64" for slot %d", steamid64, slot );
+		"Slayer: parsed steamid %"PRIu64" for slot %d (userid=%d name='%s')",
+		steamid64, slot, userid, namebuf );
 #endif
 
 	// Load texture immediately at parse time (outside render loop)
-	Slayer_LoadAvatarTexture( i );
+	Slayer_LoadAvatarTexture( slot );
 }
 
 static void Slayer_LoadAvatarTexture( int slot )
