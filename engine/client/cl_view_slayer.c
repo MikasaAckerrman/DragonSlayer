@@ -17,6 +17,7 @@ GNU General Public License for more details.
 #include "client.h"
 #include "cl_view_slayer.h"
 #include "cl_scoreboard_slayer.h"
+#include "cl_hud_slayer.h"
 
 // ===========================================================================
 // Cvars - Third-person camera
@@ -46,6 +47,14 @@ CVAR_DEFINE_AUTO( slayer_chat_color_ct, "", FCVAR_ARCHIVE, "Slayer3D: CT name co
 static CVAR_DEFINE_AUTO( slayer_ducktap,    "0", FCVAR_ARCHIVE, "Slayer3D: enable ducktap (rapid duck toggling for duckrun speed)" );
 static CVAR_DEFINE_AUTO( slayer_autostrafe, "0", FCVAR_ARCHIVE, "Slayer3D: enable automatic air-strafing based on yaw delta" );
 static CVAR_DEFINE_AUTO( slayer_autojump,   "0", FCVAR_ARCHIVE, "Slayer3D: enable auto-bhop with ladder safety and anti-bhop bypass" );
+// SGS = Side-Game Strafe combo. When the cvar is non-zero OR the
+// +slayer_sgs hold-button is pressed, we run all three movement
+// tweaks (ducktap + autostrafe + autojump) at once, regardless of
+// their individual cvars. Net effect on mobile: hold +slayer_sgs,
+// swipe to turn the camera, the engine bhops + ducks + air-strafes
+// in sync. Pure yaw-only "screen wiggle" was the wrong model and
+// has been removed.
+static CVAR_DEFINE_AUTO( slayer_sgs,        "0", FCVAR_ARCHIVE, "Slayer3D: enable SGS combo (bhop + ducktap + autostrafe at once)" );
 
 // ===========================================================================
 // Cvars - Smooth zoom
@@ -78,6 +87,7 @@ static CVAR_DEFINE_AUTO( slayer_killsound_volume,   "1.0",                  FCVA
 // ===========================================================================
 
 static int slayer_ducktap_active = 0;
+static int slayer_sgs_active     = 0; // set by +slayer_sgs / -slayer_sgs
 
 // Movement tweak state (file-scoped so Slayer_ResetMatchState can clear them)
 static float slayer_prev_yaw = 0.0f;
@@ -91,6 +101,22 @@ static void Cmd_DucktapDown_f( void )
 
 static void Cmd_DucktapUp_f( void )
 {
+	slayer_ducktap_active = 0;
+}
+
+// +slayer_sgs / -slayer_sgs: hold button engaging the SGS combo.
+// Setting slayer_ducktap_active too keeps the duckrun ground boost
+// path aligned with the combo without exposing two buttons to the
+// player — one button, all three behaviors.
+static void Cmd_SgsDown_f( void )
+{
+	slayer_sgs_active     = 1;
+	slayer_ducktap_active = 1;
+}
+
+static void Cmd_SgsUp_f( void )
+{
+	slayer_sgs_active     = 0;
 	slayer_ducktap_active = 0;
 }
 
@@ -164,10 +190,15 @@ void V_InitSlayerCvars( void )
 	Cvar_RegisterVariable( &slayer_ducktap );
 	Cvar_RegisterVariable( &slayer_autostrafe );
 	Cvar_RegisterVariable( &slayer_autojump );
+	Cvar_RegisterVariable( &slayer_sgs );
 	Cmd_AddCommand( "+ducktap", Cmd_DucktapDown_f,
 		"begin rapid duck toggling (ducktap)" );
 	Cmd_AddCommand( "-ducktap", Cmd_DucktapUp_f,
 		"stop rapid duck toggling (ducktap)" );
+	Cmd_AddCommand( "+slayer_sgs", Cmd_SgsDown_f,
+		"begin SGS combo (bhop + ducktap + autostrafe at once)" );
+	Cmd_AddCommand( "-slayer_sgs", Cmd_SgsUp_f,
+		"stop SGS combo" );
 
 	// Smooth zoom
 	Cvar_RegisterVariable( &slayer_smooth_zoom );
@@ -178,6 +209,9 @@ void V_InitSlayerCvars( void )
 
 	// Scoreboard
 	Slayer_Scoreboard_Init();
+
+	// Crosshair-area HUD overlay (damage indicator)
+	Slayer_HUD_Init();
 
 	Con_Printf( "Slayer3D: cvars initialized\n" );
 }
@@ -335,9 +369,13 @@ void Slayer_ResetMatchState( void )
 	slayer_prev_onground = 0;
 	slayer_yaw_initialized = 0;
 	slayer_ducktap_active = 0; // clear sticky +ducktap on disconnect
+	slayer_sgs_active     = 0; // clear sticky +slayer_sgs on disconnect
 
 	// Clear scoreboard score data
 	Slayer_Scoreboard_Reset();
+
+	// Clear in-flight damage indicators so old hits don't survive map change
+	Slayer_HUD_Reset();
 }
 
 // ===========================================================================
@@ -471,10 +509,25 @@ void Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 
 void V_SlayerMovementTweaks( usercmd_t *cmd )
 {
-	int do_autojump = 0;
+	int      do_autojump = 0;
+	qboolean sgs;
+	qboolean ducktap_on;
+	qboolean autostrafe_on;
+	qboolean autojump_on;
+
+	// SGS combo flag — folded into each per-feature gate below so SGS
+	// = ducktap + autostrafe + autojump all running together. The pure
+	// yaw-oscillation version was wrong: real SGS in GoldSrc is
+	// strafe + duck + jump simultaneously, gaining speed via standard
+	// air-strafe physics. The user controls the strafe direction by
+	// turning the camera (autostrafe still keys off yaw delta).
+	sgs           = ( slayer_sgs.value != 0.0f ) || slayer_sgs_active;
+	ducktap_on    = sgs || ( slayer_ducktap.value != 0.0f && slayer_ducktap_active );
+	autostrafe_on = sgs || ( slayer_autostrafe.value != 0.0f );
+	autojump_on   = sgs || ( slayer_autojump.value != 0.0f );
 
 	// --- Ducktap ---
-	if( slayer_ducktap.value != 0.0f && slayer_ducktap_active )
+	if( ducktap_on )
 	{
 		if( host.framecount & 1 )
 			cmd->buttons &= ~IN_DUCK;
@@ -490,8 +543,8 @@ void V_SlayerMovementTweaks( usercmd_t *cmd )
 		}
 	}
 
-	// --- Autostrafe ---
-	if( slayer_autostrafe.value != 0.0f && cl.local.onground == -1 )
+	// --- Autostrafe (in air only) ---
+	if( autostrafe_on && cl.local.onground == -1 )
 	{
 		float delta;
 
@@ -533,11 +586,15 @@ void V_SlayerMovementTweaks( usercmd_t *cmd )
 	slayer_yaw_initialized = 1;
 
 	// --- Autojump ---
-	// Determine if autojump should process this frame.
-	// Ladder safety: do not auto-bhop on ladders (MOVETYPE_FLY).
-	if( slayer_autojump.value != 0.0f && ( cmd->buttons & IN_JUMP ))
+	// In SGS mode the player doesn't have to hold +jump — the engine
+	// keeps the bhop chain going on its own. Outside SGS we keep the
+	// classic "autojump only while +jump is held" semantics so a casual
+	// `slayer_autojump 1` doesn't make the player constantly hop.
+	if( autojump_on )
 	{
-		if( clgame.pmove == NULL || clgame.pmove->movetype != MOVETYPE_FLY )
+		const qboolean want = sgs ? true : (( cmd->buttons & IN_JUMP ) != 0 );
+
+		if( want && ( clgame.pmove == NULL || clgame.pmove->movetype != MOVETYPE_FLY ))
 			do_autojump = 1;
 	}
 
@@ -551,6 +608,10 @@ void V_SlayerMovementTweaks( usercmd_t *cmd )
 			else
 				cmd->buttons |= IN_JUMP;
 		}
+		// In air we deliberately do not touch IN_JUMP. The button is
+		// only consumed on ground frames in GoldSrc, so preserving the
+		// player's actual input here means manual mid-air chaining
+		// still works alongside the SGS combo.
 	}
 
 	slayer_prev_onground = cl.local.onground;
