@@ -53,6 +53,14 @@ static JavaVM   *avd_jvm;             // cached from Init()
 static jclass    avd_activity_class;   // global ref to XashActivity class
 static jmethodID avd_download_method;  // downloadAvatar method ID
 
+// Lazy-init bookkeeping: when JNI binding fails (e.g. SDL_AndroidGetActivity()
+// returns NULL because SDL hasn't fully initialized at engine startup), we
+// record the reason and retry on subsequent Request() calls instead of
+// silently giving up for the entire session. avd_init_next_retry rate-limits
+// the retries so we don't hammer JNI from inside Request().
+static char         avd_init_reason[128] = "not yet attempted";
+static double       avd_init_next_retry;     // host.realtime threshold
+
 static volatile int avd_slot_result[MAX_CLIENTS];  // thread-safe via volatile + barriers
 static uint64_t     avd_slot_id[MAX_CLIENTS];
 static double       avd_slot_fail_time[MAX_CLIENTS];
@@ -202,15 +210,136 @@ static void *AVD_WorkerThread( void *arg )
 }
 
 // ---------------------------------------------------------------------------
-// Public API - Android
+// JNI binding (lazy, retried from Request when first attempt failed)
 // ---------------------------------------------------------------------------
 
-void Slayer_AvatarDownload_Init( void )
+#define AVD_INIT_RETRY_PERIOD 5.0  // seconds between re-bind attempts
+
+// Try to (re-)bind the XashActivity class and downloadAvatar method.
+// Returns true on success. On failure, leaves avd_download_method == NULL
+// and writes a human-readable reason into avd_init_reason. Safe to call
+// multiple times - if already bound, returns true immediately without doing
+// any JNI work.
+static qboolean AVD_BindJNI( void )
 {
 	JNIEnv *env;
 	jobject activity;
 	jclass cls;
 
+	if( avd_download_method )
+		return true;  // already bound
+
+	env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+	if( !env )
+	{
+		Q_strncpy( avd_init_reason, "SDL_AndroidGetJNIEnv returned NULL",
+			sizeof( avd_init_reason ) );
+		__android_log_print( ANDROID_LOG_WARN, "Xash",
+			"AvatarDL: bind: %s", avd_init_reason );
+		return false;
+	}
+
+	if( !avd_jvm && (*env)->GetJavaVM( env, &avd_jvm ) != 0 )
+	{
+		avd_jvm = NULL;
+		Q_strncpy( avd_init_reason, "GetJavaVM failed",
+			sizeof( avd_init_reason ) );
+		__android_log_print( ANDROID_LOG_WARN, "Xash",
+			"AvatarDL: bind: %s", avd_init_reason );
+		return false;
+	}
+
+	activity = (jobject)SDL_AndroidGetActivity();
+	if( !activity )
+	{
+		Q_strncpy( avd_init_reason,
+			"SDL_AndroidGetActivity returned NULL (SDL not ready yet?)",
+			sizeof( avd_init_reason ) );
+		__android_log_print( ANDROID_LOG_WARN, "Xash",
+			"AvatarDL: bind: %s", avd_init_reason );
+		return false;
+	}
+
+	cls = (*env)->GetObjectClass( env, activity );
+
+	if( (*env)->ExceptionCheck( env ) )
+	{
+		(*env)->ExceptionDescribe( env );
+		(*env)->ExceptionClear( env );
+		if( cls ) (*env)->DeleteLocalRef( env, cls );
+		(*env)->DeleteLocalRef( env, activity );
+		Q_strncpy( avd_init_reason, "GetObjectClass threw exception",
+			sizeof( avd_init_reason ) );
+		__android_log_print( ANDROID_LOG_WARN, "Xash",
+			"AvatarDL: bind: %s", avd_init_reason );
+		return false;
+	}
+
+	avd_activity_class = (*env)->NewGlobalRef( env, cls );
+	(*env)->DeleteLocalRef( env, cls );
+	(*env)->DeleteLocalRef( env, activity );
+
+	if( !avd_activity_class )
+	{
+		if( (*env)->ExceptionCheck( env ) )
+			(*env)->ExceptionClear( env );
+		Q_strncpy( avd_init_reason, "NewGlobalRef returned NULL",
+			sizeof( avd_init_reason ) );
+		__android_log_print( ANDROID_LOG_WARN, "Xash",
+			"AvatarDL: bind: %s", avd_init_reason );
+		return false;
+	}
+
+	if( (*env)->ExceptionCheck( env ) )
+	{
+		(*env)->ExceptionDescribe( env );
+		(*env)->ExceptionClear( env );
+	}
+
+	avd_download_method = (*env)->GetStaticMethodID( env, avd_activity_class,
+		"downloadAvatar", "(Ljava/lang/String;Ljava/lang/String;)I" );
+
+	if( !avd_download_method )
+	{
+		if( (*env)->ExceptionCheck( env ) )
+		{
+			(*env)->ExceptionDescribe( env );
+			(*env)->ExceptionClear( env );
+		}
+		(*env)->DeleteGlobalRef( env, avd_activity_class );
+		avd_activity_class = NULL;
+		Q_strncpy( avd_init_reason,
+			"GetStaticMethodID(downloadAvatar) returned NULL",
+			sizeof( avd_init_reason ) );
+		__android_log_print( ANDROID_LOG_WARN, "Xash",
+			"AvatarDL: bind: %s", avd_init_reason );
+		return false;
+	}
+
+	Q_strncpy( avd_init_reason, "OK", sizeof( avd_init_reason ) );
+	__android_log_print( ANDROID_LOG_INFO, "Xash",
+		"AvatarDL: JNI bind succeeded (slot count %d)", MAX_CLIENTS );
+	Con_Printf( "Slayer3D: avatar JNI bind OK (slot count %d)\n", MAX_CLIENTS );
+	return true;
+}
+
+// Rate-limited wrapper: retry binding at most once per AVD_INIT_RETRY_PERIOD.
+static qboolean AVD_EnsureJNI( void )
+{
+	if( avd_download_method )
+		return true;
+	if( host.realtime < avd_init_next_retry )
+		return false;
+	avd_init_next_retry = host.realtime + AVD_INIT_RETRY_PERIOD;
+	return AVD_BindJNI();
+}
+
+// ---------------------------------------------------------------------------
+// Public API - Android
+// ---------------------------------------------------------------------------
+
+void Slayer_AvatarDownload_Init( void )
+{
 	Cvar_RegisterVariable( &slayer_avatar_download );
 	memset( (void *)avd_slot_result, 0, sizeof( avd_slot_result ) );
 	memset( avd_slot_id, 0, sizeof( avd_slot_id ) );
@@ -219,85 +348,13 @@ void Slayer_AvatarDownload_Init( void )
 	avd_jvm = NULL;
 	avd_activity_class = NULL;
 	avd_download_method = NULL;
+	avd_init_next_retry = 0.0;
+	Q_strncpy( avd_init_reason, "init not yet attempted", sizeof( avd_init_reason ) );
 
-	// Get JNI env from SDL (only valid on main thread)
-	env = (JNIEnv *)SDL_AndroidGetJNIEnv();
-	if( !env )
-	{
-		Con_Printf( S_WARN "AvatarDL: failed to get JNIEnv\n" );
-		return;
-	}
-
-	// Cache JavaVM for worker threads
-	if( (*env)->GetJavaVM( env, &avd_jvm ) != 0 )
-	{
-		Con_Printf( S_WARN "AvatarDL: failed to get JavaVM\n" );
-		return;
-	}
-
-	// Get XashActivity class
-	activity = (jobject)SDL_AndroidGetActivity();
-	if( !activity )
-	{
-		Con_Printf( S_WARN "AvatarDL: failed to get activity\n" );
-		return;
-	}
-
-	cls = (*env)->GetObjectClass( env, activity );
-
-	// Defensive: GetObjectClass should not throw, but if it did on some quirky
-	// Android build, surface the exception and bail rather than carry it forward.
-	if( (*env)->ExceptionCheck( env ) )
-	{
-		(*env)->ExceptionDescribe( env );
-		(*env)->ExceptionClear( env );
-		if( cls ) (*env)->DeleteLocalRef( env, cls );
-		(*env)->DeleteLocalRef( env, activity );
-		avd_activity_class = NULL;
-		Con_Printf( S_WARN "AvatarDL: GetObjectClass threw exception\n" );
-		return;
-	}
-
-	avd_activity_class = (*env)->NewGlobalRef( env, cls );
-	(*env)->DeleteLocalRef( env, cls );
-	(*env)->DeleteLocalRef( env, activity );
-
-	// NewGlobalRef returns NULL if the JVM is out of memory or the local ref was NULL.
-	if( !avd_activity_class )
-	{
-		if( (*env)->ExceptionCheck( env ) )
-			(*env)->ExceptionClear( env );
-		Con_Printf( S_WARN "AvatarDL: NewGlobalRef returned NULL\n" );
-		return;
-	}
-
-	// Clear any stale pending exception before the next JNI call.
-	if( (*env)->ExceptionCheck( env ) )
-	{
-		(*env)->ExceptionDescribe( env );
-		(*env)->ExceptionClear( env );
-	}
-
-	// Get downloadAvatar method: static int downloadAvatar(String, String)
-	avd_download_method = (*env)->GetStaticMethodID( env, avd_activity_class,
-		"downloadAvatar", "(Ljava/lang/String;Ljava/lang/String;)I" );
-
-	if( !avd_download_method )
-	{
-		// On older or stripped builds the method may be missing - log,
-		// clear the pending NoSuchMethodError, drop the global ref and bail.
-		if( (*env)->ExceptionCheck( env ) )
-		{
-			(*env)->ExceptionDescribe( env );
-			(*env)->ExceptionClear( env );
-		}
-		Con_Printf( S_WARN "AvatarDL: failed to find downloadAvatar method\n" );
-		(*env)->DeleteGlobalRef( env, avd_activity_class );
-		avd_activity_class = NULL;
-		return;
-	}
-
-	Con_Printf( "Slayer3D: avatar JNI init OK (slot count %d)\n", MAX_CLIENTS );
+	// First-shot bind. Failure is non-fatal: subsequent Request() calls
+	// will retry through AVD_EnsureJNI. This handles the case where SDL's
+	// Java context isn't fully wired up at engine init time.
+	(void)AVD_BindJNI();
 }
 
 void Slayer_AvatarDownload_Shutdown( void )
@@ -335,8 +392,17 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 	if( slot < 0 || slot >= MAX_CLIENTS || steamid64 == 0 )
 		return;
 
-	if( !avd_download_method )
-		return;  // JNI not initialized
+	// Lazy/retry JNI binding. If SDL wasn't ready at engine init time,
+	// avd_download_method is NULL and the Init-time bind logged a reason.
+	// Retry now (rate-limited) so a player who joins a server several
+	// seconds after launch still gets avatars.
+	if( !AVD_EnsureJNI() )
+	{
+		__android_log_print( ANDROID_LOG_DEBUG, "Xash",
+			"AvatarDL: skip slot=%d steamid=%" PRIu64 " (JNI not bound: %s)",
+			slot, steamid64, avd_init_reason );
+		return;
+	}
 
 	// Already done or in progress?
 	if( avd_slot_result[slot] == AVD_RESULT_DONE ||
@@ -483,10 +549,16 @@ void Slayer_AvatarDownload_Diag( file_t *f )
 
 	AVD_DiagLine( f, "  cvar slayer_avatar_download = %g\n",
 		slayer_avatar_download.value );
-	AVD_DiagLine( f, "  JNI: jvm=%s class=%s method=%s\n",
+	AVD_DiagLine( f, "  JNI: jvm=%s class=%s method=%s  bind_status=%s\n",
 		avd_jvm ? "OK" : "NULL",
 		avd_activity_class ? "OK" : "NULL",
-		avd_download_method ? "OK" : "NULL" );
+		avd_download_method ? "OK" : "NULL",
+		avd_init_reason );
+	if( !avd_download_method )
+	{
+		AVD_DiagLine( f, "  next bind retry in %.1fs\n",
+			avd_init_next_retry > host.realtime ? avd_init_next_retry - host.realtime : 0.0 );
+	}
 	AVD_DiagLine( f, "  active_count = %d / %d\n",
 		avd_active_count, AVD_MAX_CONCURRENT );
 
