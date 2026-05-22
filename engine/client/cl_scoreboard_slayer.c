@@ -88,35 +88,23 @@ static rgba_t cached_color_t;
 static rgba_t cached_color_border;
 
 // ===========================================================================
-// Border corner template (top-left quadrant, mirrored at draw time)
+// Rounded corner curve (20px radius quarter-circle)
 // ===========================================================================
 //
-// Each entry = {x_off, y_off, w, h} relative to the corner's origin
-// (the top-left of the bounding board). The 10 entries trace the OUTERMOST
-// pixel of the staircase BG contour for one corner, with NO overlap at the
-// step elbows. Slayer_DrawBorderCorner() mirrors this set across X and/or Y
-// to produce all four corners. The four "stretchy" rects (top cap, bottom
-// cap, left/right body walls) are emitted directly in Slayer_Scoreboard_Draw.
-//
-// Total border draw calls: 4 corners * 10 + 4 stretchy = 44.
+// slayer_corner_inset[y] = horizontal pixel inset at row y inside the corner
+// box (y = 0 is the topmost row of the top corner). Sampled at pixel centers
+// against a 20px circle so the staircase looks the way a hardware-AA rounded
+// rect would, without per-pixel alpha. Mirrored across X for the right side
+// and across Y for the bottom corners. Used by both the background fill and
+// the 1px border outline so the two contours line up exactly.
 
-typedef struct
-{
-	int x, y, w, h;
-} slayer_border_seg_t;
+#define SLAYER_CORNER_RADIUS 20
 
-static const slayer_border_seg_t slayer_border_corner_segs[10] =
+static const int slayer_corner_inset[SLAYER_CORNER_RADIUS] =
 {
-	{ 16,  1, 1, 3 }, // strip 0 left wall, 3px tall (y=0 row is owned by top cap)
-	{ 12,  4, 4, 1 }, // strip 1 shoulder cap, 4px wide
-	{ 12,  5, 1, 3 }, // strip 1 left wall, 3px tall
-	{  8,  8, 4, 1 }, // strip 2 shoulder cap
-	{  8,  9, 1, 3 }, // strip 2 left wall
-	{  4, 12, 4, 1 }, // strip 3 shoulder cap
-	{  4, 13, 1, 3 }, // strip 3 left wall
-	{  2, 16, 2, 1 }, // strip 4 shoulder cap, 2px wide
-	{  2, 17, 1, 3 }, // strip 4 left wall
-	{  0, 20, 2, 1 }, // body-top shoulder, 2px wide (body wall takes y=21..h-22)
+	16, 12, 10,  9,  7,  6,  5,  4,
+	 4,  3,  2,  2,  1,  1,  1,  1,
+	 0,  0,  0,  0,
 };
 
 // ===========================================================================
@@ -417,11 +405,6 @@ static void Cmd_ScoreboardDown_f( void )
 		slayer_status_pending = true;
 		slayer_status_deadline = host.realtime + 5.0; // 5s parse window
 		slayer_steam_reject_count = 0; // reset debounce per request
-#if XASH_ANDROID
-		__android_log_print( ANDROID_LOG_INFO, "Xash",
-			"Slayer SB: status request queued, parse window 5s" );
-#endif
-		Con_DPrintf( "Slayer SB: status request queued, parse window 5s\n" );
 	}
 
 	// Trigger batch avatar fetch via Steam Web API (if API key is set)
@@ -593,21 +576,100 @@ static void Slayer_DrawRect( int x, int y, int w, int h, byte r, byte g, byte b,
 	ref.dllFuncs.FillRGBA( kRenderTransTexture, x, y, w, h, r, g, b, a );
 }
 
-// Draw one rounded corner of the border by walking slayer_border_corner_segs[]
-// and reflecting each segment across X/Y as requested. The corner table
-// describes the top-left quadrant; all other quadrants are exact mirrors.
-static void Slayer_DrawBorderCorner( int bx, int by, int bw, int bh,
-	qboolean mirror_x, qboolean mirror_y, byte r, byte g, byte b, byte a )
+// Fill a rounded rectangle. The two corner blocks (top + bottom, R rows each)
+// are emitted as one horizontal strip per row using slayer_corner_inset[]; the
+// straight body in between is one big rect. Total fill calls: 1 + 2*R = 41.
+static void Slayer_DrawRoundedFill( int bx, int by, int bw, int bh,
+	byte r, byte g, byte b, byte a )
 {
-	size_t i;
+	const int R = SLAYER_CORNER_RADIUS;
+	int       y;
 
-	for( i = 0; i < sizeof( slayer_border_corner_segs ) / sizeof( slayer_border_corner_segs[0] ); i++ )
+	if( bw <= 0 || bh <= 0 )
+		return;
+
+	// Straight body (between the two curved caps). Guarded so very small
+	// boards (bh <= 2*R) don't emit a negative-height rect.
+	if( bh > 2 * R )
+		Slayer_DrawRect( bx, by + R, bw, bh - 2 * R, r, g, b, a );
+
+	// Curved caps: one 1px-tall strip per row of the inset table, mirrored
+	// across Y for the bottom cap. If the board is too short for two full
+	// caps, clamp how many rows we emit so the top and bottom don't overlap.
 	{
-		const slayer_border_seg_t *s = &slayer_border_corner_segs[i];
-		int x = mirror_x ? ( bx + bw - s->x - s->w ) : ( bx + s->x );
-		int y = mirror_y ? ( by + bh - s->y - s->h ) : ( by + s->y );
+		int rows = R;
+		if( rows > bh / 2 )
+			rows = bh / 2;
 
-		Slayer_DrawRect( x, y, s->w, s->h, r, g, b, a );
+		for( y = 0; y < rows; y++ )
+		{
+			int inset = slayer_corner_inset[y];
+			int w = bw - 2 * inset;
+
+			if( w <= 0 )
+				continue;
+
+			// Top row
+			Slayer_DrawRect( bx + inset, by + y, w, 1, r, g, b, a );
+			// Bottom row (mirror over Y)
+			Slayer_DrawRect( bx + inset, by + bh - 1 - y, w, 1, r, g, b, a );
+		}
+	}
+}
+
+// Draw a 1px outline that follows the rounded-rect contour produced by
+// Slayer_DrawRoundedFill. For each row of the corner block we emit the
+// outermost-pixel segment of the staircase: where the inset shrinks vs the
+// previous row we widen the segment to also paint the new "shoulder", which
+// closes off the diagonal so there are no 1px holes between steps. The four
+// straight edges (top / bottom caps and left / right body walls) are emitted
+// once each at the end.
+static void Slayer_DrawRoundedBorder( int bx, int by, int bw, int bh,
+	byte r, byte g, byte b, byte a )
+{
+	const int R = SLAYER_CORNER_RADIUS;
+	int       y;
+	int       rows;
+
+	if( bw <= 0 || bh <= 0 )
+		return;
+
+	rows = R;
+	if( rows > bh / 2 )
+		rows = bh / 2;
+
+	for( y = 0; y < rows; y++ )
+	{
+		int inset_cur  = slayer_corner_inset[y];
+		int inset_prev = ( y == 0 ) ? R : slayer_corner_inset[y - 1];
+		int step_w     = inset_prev - inset_cur;
+		int seg_w      = ( step_w > 0 ) ? step_w : 1;
+
+		// Top-left corner shoulder + wall pixel
+		Slayer_DrawRect( bx + inset_cur,                 by + y,           seg_w, 1, r, g, b, a );
+		// Top-right corner (mirror over X)
+		Slayer_DrawRect( bx + bw - inset_cur - seg_w,    by + y,           seg_w, 1, r, g, b, a );
+		// Bottom-left corner (mirror over Y)
+		Slayer_DrawRect( bx + inset_cur,                 by + bh - 1 - y,  seg_w, 1, r, g, b, a );
+		// Bottom-right corner (mirror over X and Y)
+		Slayer_DrawRect( bx + bw - inset_cur - seg_w,    by + bh - 1 - y,  seg_w, 1, r, g, b, a );
+	}
+
+	// Top and bottom horizontal caps: at y = 0 / y = bh-1 the corners only
+	// covered x in [0, R) and [bw-R, bw). The flat span between them needs
+	// its own 1px strip top and bottom.
+	if( bw > 2 * R )
+	{
+		Slayer_DrawRect( bx + R, by,             bw - 2 * R, 1, r, g, b, a );
+		Slayer_DrawRect( bx + R, by + bh - 1,    bw - 2 * R, 1, r, g, b, a );
+	}
+
+	// Left and right body walls: at y = R-1 the corner has inset = 0, so the
+	// wall starts at y = R and runs until the bottom corner picks it up.
+	if( bh > 2 * R )
+	{
+		Slayer_DrawRect( bx,             by + R, 1, bh - 2 * R, r, g, b, a );
+		Slayer_DrawRect( bx + bw - 1,    by + R, 1, bh - 2 * R, r, g, b, a );
 	}
 }
 
@@ -620,6 +682,7 @@ typedef struct
 	int idx;     // 0-based player index
 	int team_id;
 	int frags;
+	int dead;    // 1 = dead within CT/T (sinks to bottom of its own team), 0 otherwise
 } slayer_sort_entry_t;
 
 static int Slayer_SortCompare( const void *a, const void *b )
@@ -638,6 +701,13 @@ static int Slayer_SortCompare( const void *a, const void *b )
 		if( order_a != order_b )
 			return order_a - order_b;
 	}
+
+	// Within the same team: alive players above dead. The 'dead' field is
+	// only set for CT/T (see population in Slayer_Scoreboard_Draw), so this
+	// can never push a body across a team boundary — dead CTs stay at the
+	// bottom of CT, dead Ts stay at the bottom of T.
+	if( ea->dead != eb->dead )
+		return ea->dead - eb->dead;
 
 	// Within same team: higher frags first
 	if( ea->frags != eb->frags )
@@ -804,6 +874,7 @@ void Slayer_Scoreboard_Draw( void )
 				sorted[num_players].idx     = i;
 				sorted[num_players].team_id = SLAYER_TEAM_SPECTATOR;
 				sorted[num_players].frags   = 0;
+				sorted[num_players].dead    = 0;
 				num_players++;
 				continue;
 			}
@@ -812,6 +883,13 @@ void Slayer_Scoreboard_Draw( void )
 		sorted[num_players].idx     = i;
 		sorted[num_players].team_id = slayer_scores[i].team_id;
 		sorted[num_players].frags   = slayer_scores[i].frags;
+		// 'dead' is only meaningful for CT/T (the dead flag is set/cleared per
+		// round). Spectators / unassigned always sort as alive so the dead
+		// bucket can never absorb a non-team player.
+		sorted[num_players].dead    =
+			( ( slayer_scores[i].team_id == SLAYER_TEAM_CT
+			 || slayer_scores[i].team_id == SLAYER_TEAM_T )
+			 && ( slayer_scores[i].flags & 1 ) ) ? 1 : 0;
 		num_players++;
 	}
 
@@ -835,18 +913,6 @@ void Slayer_Scoreboard_Draw( void )
 	// Fixed board width: 65% of screen_w
 	board_w = (int)( screen_w * 0.65f );
 
-	// === DIAG: build summary (visible to user via adb logcat -s Xash; Con_DPrintf
-	// avoids per-frame in-game console flood while the scoreboard is held) ===
-	Con_DPrintf( "Slayer SB: built %d players (CT=%d T=%d SPEC=%d) maxclients=%d playernum=%d\n",
-		num_players, ct_player_count, t_player_count, spec_player_count,
-		cl.maxclients, cl.playernum );
-#if XASH_ANDROID
-	__android_log_print( ANDROID_LOG_INFO, "Xash",
-		"Slayer SB: built %d players (CT=%d T=%d SPEC=%d) maxclients=%d playernum=%d",
-		num_players, ct_player_count, t_player_count, spec_player_count,
-		cl.maxclients, cl.playernum );
-#endif
-
 	// Height adapts to content: hostname + column-headers + populated team headers + rows + padding
 	{
 		// Count only team headers that will actually render (have >=1 player).
@@ -867,64 +933,24 @@ void Slayer_Scoreboard_Draw( void )
 			board_h = max_h;
 		if( board_h < (int)( screen_h * 0.20f ) )
 			board_h = (int)( screen_h * 0.20f );
-
-		// === DIAG: layout summary (Con_DPrintf to avoid per-frame in-game
-		// console flood; logcat path stays INFO so the user can capture it) ===
-		Con_DPrintf( "Slayer SB: layout row_h=%d team_hdr=%d board_h=%d (min=%d max=%d) screen=%dx%d\n",
-			row_h, team_headers, board_h, min_h, max_h, screen_w, screen_h );
-#if XASH_ANDROID
-		__android_log_print( ANDROID_LOG_INFO, "Xash",
-			"Slayer SB: layout row_h=%d team_hdr=%d board_h=%d (min=%d max=%d) screen=%dx%d",
-			row_h, team_headers, board_h, min_h, max_h, screen_w, screen_h );
-#endif
 	}
 
 	// Center the board
 	board_x = ( screen_w - board_w ) / 2;
 	board_y = ( screen_h - board_h ) / 2;
 
-	// Simulated rounded corners (20px radius, 5 strips per side)
+	// Smooth rounded background (quarter-circle staircase, 20px radius).
 	{
 		byte bg_r = color_bg[0], bg_g = color_bg[1], bg_b = color_bg[2];
 		byte bg_a = (byte)( color_bg[3] * global_opacity / 255 );
-		// Main body (inset 20px top/bottom)
-		Slayer_DrawRect( board_x, board_y + 20, board_w, board_h - 40, bg_r, bg_g, bg_b, bg_a );
-		// Top rounding (5 strips, progressively narrower)
-		Slayer_DrawRect( board_x + 16, board_y, board_w - 32, 4, bg_r, bg_g, bg_b, bg_a );
-		Slayer_DrawRect( board_x + 12, board_y + 4, board_w - 24, 4, bg_r, bg_g, bg_b, bg_a );
-		Slayer_DrawRect( board_x + 8, board_y + 8, board_w - 16, 4, bg_r, bg_g, bg_b, bg_a );
-		Slayer_DrawRect( board_x + 4, board_y + 12, board_w - 8, 4, bg_r, bg_g, bg_b, bg_a );
-		Slayer_DrawRect( board_x + 2, board_y + 16, board_w - 4, 4, bg_r, bg_g, bg_b, bg_a );
-		// Bottom rounding (5 strips, progressively narrower)
-		Slayer_DrawRect( board_x + 2, board_y + board_h - 20, board_w - 4, 4, bg_r, bg_g, bg_b, bg_a );
-		Slayer_DrawRect( board_x + 4, board_y + board_h - 16, board_w - 8, 4, bg_r, bg_g, bg_b, bg_a );
-		Slayer_DrawRect( board_x + 8, board_y + board_h - 12, board_w - 16, 4, bg_r, bg_g, bg_b, bg_a );
-		Slayer_DrawRect( board_x + 12, board_y + board_h - 8, board_w - 24, 4, bg_r, bg_g, bg_b, bg_a );
-		Slayer_DrawRect( board_x + 16, board_y + board_h - 4, board_w - 32, 4, bg_r, bg_g, bg_b, bg_a );
+		Slayer_DrawRoundedFill( board_x, board_y, board_w, board_h, bg_r, bg_g, bg_b, bg_a );
 	}
 
-	// Rounded border (1px thick, follows same contour as background)
+	// Matching 1px rounded border (same contour as the fill above).
 	{
 		byte br_r = cached_color_border[0], br_g = cached_color_border[1];
 		byte br_b = cached_color_border[2], br_a = (byte)( cached_color_border[3] * global_opacity / 255 );
-
-		// Four staircase corners (table-driven, no overlap at the step elbows).
-		Slayer_DrawBorderCorner( board_x, board_y, board_w, board_h, false, false, br_r, br_g, br_b, br_a );
-		Slayer_DrawBorderCorner( board_x, board_y, board_w, board_h, true,  false, br_r, br_g, br_b, br_a );
-		Slayer_DrawBorderCorner( board_x, board_y, board_w, board_h, false, true,  br_r, br_g, br_b, br_a );
-		Slayer_DrawBorderCorner( board_x, board_y, board_w, board_h, true,  true,  br_r, br_g, br_b, br_a );
-
-		// Top horizontal cap
-		Slayer_DrawRect( board_x + 16, board_y, board_w - 32, 1, br_r, br_g, br_b, br_a );
-
-		// Bottom horizontal cap
-		Slayer_DrawRect( board_x + 16, board_y + board_h - 1, board_w - 32, 1, br_r, br_g, br_b, br_a );
-
-		// Body side walls. Height is board_h - 42 because the two body shoulder
-		// rows (y = board_y + 20 and y = board_y + board_h - 21) are now painted
-		// by the corner template's {0,20,2,1} entry under the y-mirror.
-		Slayer_DrawRect( board_x, board_y + 21, 1, board_h - 42, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 1, board_y + 21, 1, board_h - 42, br_r, br_g, br_b, br_a );
+		Slayer_DrawRoundedBorder( board_x, board_y, board_w, board_h, br_r, br_g, br_b, br_a );
 	}
 
 	cur_y = board_y;
@@ -994,27 +1020,22 @@ void Slayer_Scoreboard_Draw( void )
 
 		// Stop drawing if we exceed the board
 		if( cur_y + row_h > board_y + board_h - 4 )
-		{
-			// === DIAG: row clipped by board height (pre-team-header) ===
-			Con_Printf( "Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d (pre-hdr)\n",
-				row, num_players, cur_y, board_y + board_h );
-#if XASH_ANDROID
-			__android_log_print( ANDROID_LOG_INFO, "Xash",
-				"Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d (pre-hdr)",
-				row, num_players, cur_y, board_y + board_h );
-#endif
 			break;
-		}
 
 		// Team section headers
 		if( team == SLAYER_TEAM_CT && !drawn_ct_header )
 		{
 			drawn_ct_header = 1;
+			// Tinted full-row banner behind the section title — gives every
+			// team (CT / T / Spectators) the same visible "field" so the eye
+			// can find section boundaries without reading the labels.
+			Slayer_DrawRect( board_x + 2, cur_y, board_w - 4, row_h,
+				color_ct[0], color_ct[1], color_ct[2], 50 );
 			Q_snprintf( buf, sizeof( buf ), "Counter-Terrorists  -  %d", ct_player_count );
-			Con_DrawString( col_name_x, cur_y, buf, color_ct );
+			Con_DrawString( col_name_x, cur_y + 1, buf, color_ct );
 			cur_y += row_h;
 			// Thin separator below CT header
-			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, color_ct[0], color_ct[1], color_ct[2], 100 );
+			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, color_ct[0], color_ct[1], color_ct[2], 140 );
 			cur_y += 3;
 		}
 		else if( team == SLAYER_TEAM_T && !drawn_t_header )
@@ -1022,11 +1043,13 @@ void Slayer_Scoreboard_Draw( void )
 			drawn_t_header = 1;
 			// Spacing between teams
 			cur_y += 4;
+			Slayer_DrawRect( board_x + 2, cur_y, board_w - 4, row_h,
+				color_t[0], color_t[1], color_t[2], 50 );
 			Q_snprintf( buf, sizeof( buf ), "Terrorists  -  %d", t_player_count );
-			Con_DrawString( col_name_x, cur_y, buf, color_t );
+			Con_DrawString( col_name_x, cur_y + 1, buf, color_t );
 			cur_y += row_h;
 			// Thin separator below T header
-			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, color_t[0], color_t[1], color_t[2], 100 );
+			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, color_t[0], color_t[1], color_t[2], 140 );
 			cur_y += 3;
 		}
 		else if( team != SLAYER_TEAM_CT && team != SLAYER_TEAM_T && !drawn_spec_header )
@@ -1034,27 +1057,22 @@ void Slayer_Scoreboard_Draw( void )
 			drawn_spec_header = 1;
 			// Spacing before spectator section
 			cur_y += 4;
+			// Same tinted banner treatment as CT/T so the Spectators block is
+			// just as findable when scanning the player list.
+			Slayer_DrawRect( board_x + 2, cur_y, board_w - 4, row_h,
+				color_spec[0], color_spec[1], color_spec[2], 50 );
 			Q_snprintf( buf, sizeof( buf ), "Spectators  -  %d", spec_player_count );
-			Con_DrawString( col_name_x, cur_y, buf, color_spec );
+			Con_DrawString( col_name_x, cur_y + 1, buf, color_spec );
 			cur_y += row_h;
-			// Thin separator below Spectator header
-			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, 100, 100, 100, 80 );
+			// Thin separator below Spectator header (matched in alpha to CT/T)
+			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1,
+				color_spec[0], color_spec[1], color_spec[2], 140 );
 			cur_y += 3;
 		}
 
 		// Stop drawing if we exceed the board after team header
 		if( cur_y + row_h > board_y + board_h - 4 )
-		{
-			// === DIAG: row clipped by board height (post-team-header) ===
-			Con_Printf( "Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d (post-hdr)\n",
-				row, num_players, cur_y, board_y + board_h );
-#if XASH_ANDROID
-			__android_log_print( ANDROID_LOG_INFO, "Xash",
-				"Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d (post-hdr)",
-				row, num_players, cur_y, board_y + board_h );
-#endif
 			break;
-		}
 
 		// Alternating row backgrounds (every other row slightly lighter)
 		if( row % 2 == 0 )

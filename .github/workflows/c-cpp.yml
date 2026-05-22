@@ -1,6 +1,11 @@
 name: Build & Deploy Android APK
 on:
+  # Push only fires on master (release path: build + publish APK).
+  # Feature-branch CI is fully covered by `pull_request` below, so we don't
+  # double-build whenever a feature branch with an open PR is pushed.
   push:
+    branches:
+      - master
   pull_request:
   workflow_dispatch:
     inputs:
