@@ -163,8 +163,62 @@ static void Slayer_ParseColorString( const char *str, rgba_t out )
 // ===========================================================================
 
 static void Slayer_LoadAvatarTexture( int slot );
+static void Slayer_ParseStatusLine_Single( const char *line );
 
+// Public entry: accepts either a single line or a multi-line buffer.
+//
+// Some servers (notably ReHLDS with certain plugins, and HLDS dedicated
+// running with `+sv_log_onefile 1`-style tweaks) batch the entire output
+// of `status` into ONE svc_print message, separated by '\n'. In that
+// case the buffer looks like:
+//
+//     hostname: foo\nversion : ...\n# 1 "Player" STEAM_0:0:1...\n# 2 ...\n
+//
+// The original parser only inspected line[0]: it saw 'h' (hostname),
+// returned, and never reached any of the player rows. Avatars stayed
+// empty even though the SteamIDs were arriving on the wire.
+//
+// Split on '\n' here, hand each line to the per-line parser, and let
+// it filter out everything that does not start with '#'. A buffer that
+// is already a single line (no '\n') flows through unchanged.
 void Slayer_ParseStatusLine( const char *line )
+{
+	char        linebuf[512];
+	const char *p;
+	const char *end;
+	size_t      len;
+
+	if( !slayer_status_pending )
+		return;
+
+	if( !line || !line[0] )
+		return;
+
+	p = line;
+	while( *p )
+	{
+		end = p;
+		while( *end && *end != '\n' && *end != '\r' )
+			end++;
+
+		len = (size_t)( end - p );
+		if( len > 0 )
+		{
+			if( len >= sizeof( linebuf ) )
+				len = sizeof( linebuf ) - 1;
+			memcpy( linebuf, p, len );
+			linebuf[len] = '\0';
+			Slayer_ParseStatusLine_Single( linebuf );
+		}
+
+		// Skip the line terminator(s); '\r\n', '\n', or '\r' are all valid.
+		while( *end == '\r' || *end == '\n' )
+			end++;
+		p = end;
+	}
+}
+
+static void Slayer_ParseStatusLine_Single( const char *line )
 {
 	int userid;
 	int steam_x, steam_y;
@@ -458,6 +512,78 @@ static void Cmd_AvatarUrls_f( void )
 		Con_Printf( "Place avatar images at: avatars/<steamid64>.png\n" );
 }
 
+// Dump full per-slot avatar pipeline state to the console. Lets the user
+// answer "did the SteamID get parsed? did the texture get loaded?" without
+// pulling adb logcat. Exposed as `slayer_avatar_diag`.
+static void Cmd_AvatarDiag_f( void )
+{
+	int i;
+	int parsed = 0, has_tex = 0, pending = 0, failed = 0;
+	const char *tex_state;
+	char path[128];
+	qboolean exists;
+
+	Con_Printf( "=== Slayer3D avatar diagnostic ===\n" );
+	Con_Printf( "status: pending=%d deadline=%.2f next_send=%.2f rejects_logged=%d/8\n",
+		(int)slayer_status_pending, slayer_status_deadline,
+		slayer_status_next_time, slayer_steam_reject_count );
+	Con_Printf( "client: state=%d maxclients=%d playernum=%d\n",
+		(int)cls.state, cl.maxclients, cl.playernum );
+	Con_Printf( "%-3s %-20s %-7s %-20s %-10s %s\n",
+		"slot", "name", "userid", "steamid64", "tex", "cache" );
+
+	for( i = 0; i < MAX_CLIENTS; i++ )
+	{
+		const char *name = cl.players[i].name;
+		int userid = cl.players[i].userid;
+
+		if( name[0] == '\0' && slayer_steamid64[i] == 0 && slayer_avatar_tex[i] == 0 )
+			continue; // empty slot
+
+		if( slayer_avatar_tex[i] > 0 )      { tex_state = "LOADED"; has_tex++; }
+		else if( slayer_avatar_tex[i] < 0 ) { tex_state = "PENDING"; pending++; }
+		else                                  { tex_state = "none"; }
+
+		if( slayer_steamid64[i] != 0 )
+			parsed++;
+
+		exists = false;
+		if( slayer_steamid64[i] != 0 )
+		{
+			Q_snprintf( path, sizeof( path ), "avatars/%" PRIu64 ".png", slayer_steamid64[i] );
+			exists = FS_FileExists( path, false );
+		}
+
+		Con_Printf( "%3d  %-20s %-7d %-20" PRIu64 " %-10s %s\n",
+			i, name[0] ? name : "(empty)", userid,
+			slayer_steamid64[i], tex_state,
+			slayer_steamid64[i] == 0 ? "-" : ( exists ? "ON_DISK" : "MISSING" ) );
+	}
+
+	Con_Printf( "summary: parsed=%d has_tex=%d pending=%d (failed_logged=%d)\n",
+		parsed, has_tex, pending, failed );
+
+	if( parsed == 0 )
+	{
+		Con_Printf( S_WARN "No SteamIDs were ever parsed.\n" );
+		Con_Printf( "  - Make sure you opened the Slayer scoreboard at least once after connecting.\n" );
+		Con_Printf( "  - Some servers reject client-initiated 'status'. Try `slayer_avatar_force` to retry.\n" );
+	}
+}
+
+// Manual re-trigger: clear the throttle and resend `status` immediately.
+// Useful when 30s has not elapsed since the last attempt or when the
+// previous attempt happened before the player joined the round.
+static void Cmd_AvatarForce_f( void )
+{
+	slayer_status_next_time = 0.0;
+	slayer_status_pending   = true;
+	slayer_status_deadline  = host.realtime + 5.0;
+	slayer_steam_reject_count = 0;
+	Cbuf_AddText( "status\n" );
+	Con_Printf( "Slayer3D: forced status request, parse window 5s\n" );
+}
+
 // ===========================================================================
 // +slayer_scoreboard / -slayer_scoreboard commands
 // ===========================================================================
@@ -529,6 +655,10 @@ void Slayer_Scoreboard_Init( void )
 		"hide Slayer3D custom scoreboard" );
 	Cmd_AddCommand( "slayer_avatar_urls", Cmd_AvatarUrls_f,
 		"print Steam avatar download URLs for all players" );
+	Cmd_AddCommand( "slayer_avatar_diag", Cmd_AvatarDiag_f,
+		"dump per-slot avatar parse / texture / cache state" );
+	Cmd_AddCommand( "slayer_avatar_force", Cmd_AvatarForce_f,
+		"force-resend `status` to refetch avatars (bypasses 30s throttle)" );
 
 	Slayer_AvatarDownload_Init();
 	Slayer_SteamAPI_Init();
