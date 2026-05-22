@@ -27,6 +27,20 @@
     java.lang.String getCallingPackage();
     java.lang.String[] getAssetsList(boolean, java.lang.String);
     android.content.res.AssetManager getAssets(boolean);
+    # JNI-only entry points (Slayer3D). Without these R8 strips the methods
+    # in release builds because no Java caller references them, and the C
+    # side then sees GetStaticMethodID(...) == NULL and silently disables
+    # the corresponding feature (avatar downloads / Steam login).
+    int downloadAvatar(java.lang.String, java.lang.String);
+    void startSteamLogin(java.lang.String, java.lang.String);
+}
+
+# Slayer3D Steam Web API helper. Class + method are reached only via JNI
+# from cl_steam_api.c, so without this rule R8 removes / renames the
+# whole class in release builds and FindClass("su/xash/engine/SteamAPIHelper")
+# returns NULL.
+-keep class su.xash.engine.SteamAPIHelper {
+    int fetchBatchAvatars(java.lang.String, java.lang.String, java.lang.String);
 }
 
 -keep,includedescriptorclasses,allowoptimization class org.libsdl.app.SDLInputConnection {
