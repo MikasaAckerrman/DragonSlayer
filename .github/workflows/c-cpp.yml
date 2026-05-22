@@ -74,9 +74,12 @@ jobs:
         TITLE="Slayer3D continuous build"
         # GitHub auto-attaches "Source code (zip)" and "Source code (tar.gz)"
         # to every release based on the tag, so we don't need to upload them.
+        # Slayer3D: only ship the .apk on the Releases page. The R8 mapping
+        # tar.gz stays inside the workflow artifact bundle for crash-log
+        # de-obfuscation but does not clutter the user-facing download list.
         gh release delete "$TAG" --cleanup-tag --yes || true
         gh release create "$TAG" \
           --title "$TITLE" \
           --notes "Latest Android build from ${GITHUB_REF_NAME}. Source code archives are attached automatically by GitHub." \
           --target "$GITHUB_SHA" \
-          ./apk/*
+          ./apk/*.apk
