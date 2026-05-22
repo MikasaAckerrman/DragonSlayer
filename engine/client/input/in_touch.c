@@ -1769,6 +1769,17 @@ static void Touch_Motion( int fingerID, float x, float y, float dx, float dy )
 	}
 }
 
+static qboolean Touch_IsSlotMenuCommand( const char *cmd )
+{
+	// Detect "slot1" through "slot10"
+	if( !Q_strncmp( cmd, "slot", 4 ) && cmd[4] >= '0' && cmd[4] <= '9' )
+		return true;
+	// Detect "menuselect" commands
+	if( !Q_strncmp( cmd, "menuselect", 10 ) )
+		return true;
+	return false;
+}
+
 static qboolean Touch_ButtonPress( touchbuttonlist_t *list, touchEventType type, int fingerID, float x, float y )
 {
 	touch_button_t *button;
@@ -1807,6 +1818,13 @@ static qboolean Touch_ButtonPress( touchbuttonlist_t *list, touchEventType type,
 					touch.precision = true;
 
 				result = true;
+				// Only block look-passthrough for client/unprivileged slot buttons
+				// (e.g. the numbers popup menu from numbers.cfg). User-defined
+				// buttons that happen to run slot commands should NOT steal the
+				// finger from the look zone — the player still wants to aim.
+				if( Touch_IsSlotMenuCommand( button->command )
+					&& FBitSet( button->flags, TOUCH_FL_CLIENT ))
+					break; // slot/menu button handled, prevent passthrough
 			}
 			else if( button->type == touch_wheel )
 			{
@@ -1834,6 +1852,7 @@ static qboolean Touch_ButtonPress( touchbuttonlist_t *list, touchEventType type,
 					touch.precision = true;
 
 				result = true;
+				break; // wheel claims exclusive finger control
 			}
 			// initialize motion when player touched motion zone
 			else if( button->type == touch_move || button->type == touch_joy || button->type == touch_dpad )
@@ -2097,6 +2116,12 @@ int IN_TouchEvent( touchEventType type, int fingerID, float x, float y, float dx
 			dy = temp;
 	}
 
+	// Ensure touch config is loaded before processing events.
+	// This is safe to call on every event because Touch_InitConfig() has an
+	// internal guard (early-returns if already loaded or config not yet executed),
+	// making repeated calls cheap (just 3 comparisons).  It is needed here
+	// because IN_TouchEvent can fire before Touch_Draw() runs the first frame.
+	Touch_InitConfig();
 
 //	Con_Printf("%f %f\n", TO_SCRN_X(x), TO_SCRN_Y(y));
 	// simulate menu mouse click

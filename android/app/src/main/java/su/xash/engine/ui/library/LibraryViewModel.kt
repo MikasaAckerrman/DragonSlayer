@@ -3,7 +3,6 @@ package su.xash.engine.ui.library
 import android.app.Application
 import android.content.Context
 import android.content.SharedPreferences
-import android.os.Environment
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
@@ -37,7 +36,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 		viewModelScope.launch {
 			withContext(Dispatchers.IO) {
 				val rootPath = appPreferences.getString("game_path", null)
-					?: (Environment.getExternalStorageDirectory().absolutePath + "/xash")
+					?: run {
+						(getApplication<Application>().getExternalFilesDir(null)?.absolutePath
+							?: getApplication<Application>().filesDir.absolutePath) + "/xash"
+					}
 				val root = File(rootPath)
 
 				Nomedia.ensureNomedia(root)

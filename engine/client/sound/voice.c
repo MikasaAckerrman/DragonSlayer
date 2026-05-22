@@ -17,6 +17,7 @@ GNU General Public License for more details.
 #define CUSTOM_MODES 1 // required to correctly link with Opus Custom
 #include <opus_custom.h>
 #include <opus.h>
+#include <SKP_Silk_SDK_API.h>
 #include "common.h"
 #include "client.h"
 #include "voice.h"
@@ -33,6 +34,7 @@ static CVAR_DEFINE_AUTO( voice_maxgain, "5.0", FCVAR_PRIVILEGED | FCVAR_ARCHIVE,
 static CVAR_DEFINE_AUTO( voice_inputfromfile, "0", FCVAR_PRIVILEGED, "input voice from voice_input.wav" );
 
 static void Voice_StartChannel( uint samples, byte *data, int entnum );
+static void Voice_ShutdownSilkDecoder( void );
 
 /*
 ===============================================================================
@@ -279,6 +281,103 @@ static void Voice_ShutdownCustomMode( void )
 
 /*
 =========================
+Voice_InitSilkDecoder
+
+Initialize SILK decoders for clients
+=========================
+*/
+static qboolean Voice_InitSilkDecoder( void )
+{
+	SKP_int32 dec_size;
+	SKP_int ret;
+
+	ret = SKP_Silk_SDK_Get_Decoder_Size( &dec_size );
+	if( ret )
+	{
+		Con_Printf( S_ERROR "Can't get SILK decoder size\n" );
+		return false;
+	}
+
+	for( int i = 0; i < MAX_CLIENTS; i++ )
+	{
+		voice.silk_decoders[i] = Mem_Malloc( host.mempool, dec_size );
+		if( !voice.silk_decoders[i] )
+		{
+			Con_Printf( S_ERROR "Can't allocate SILK decoder for %i\n", i );
+			Voice_ShutdownSilkDecoder();
+			return false;
+		}
+
+		ret = SKP_Silk_SDK_InitDecoder( voice.silk_decoders[i] );
+		if( ret )
+		{
+			Con_Printf( S_ERROR "Can't init SILK decoder for %i\n", i );
+			Voice_ShutdownSilkDecoder();
+			return false;
+		}
+	}
+
+	return true;
+}
+
+/*
+=========================
+Voice_ShutdownSilkDecoder
+
+Cleanup SILK decoders
+=========================
+*/
+static void Voice_ShutdownSilkDecoder( void )
+{
+	for( int i = 0; i < MAX_CLIENTS; i++ )
+	{
+		if( voice.silk_decoders[i] )
+		{
+			Mem_Free( voice.silk_decoders[i] );
+			voice.silk_decoders[i] = NULL;
+		}
+	}
+}
+
+/*
+=========================
+Voice_Resample16to24
+
+Resample from 16000 Hz to 24000 Hz using linear interpolation
+Ratio is 2:3 (for every 2 input samples, produce 3 output samples)
+=========================
+*/
+static int Voice_Resample16to24( const int16_t *in, int in_samples, int16_t *out, int max_out_samples )
+{
+	int out_samples = (int)( (int64_t)in_samples * GS_DEFAULT_SAMPLE_RATE / GS_SILK_SAMPLE_RATE );
+	int i;
+	int32_t pos_fixed = 0;
+	// Fixed-point step: (16000 << 16) / 24000 = 43690 (approx 2/3 in 16.16 format)
+	const int32_t step_fixed = ( GS_SILK_SAMPLE_RATE << 16 ) / GS_DEFAULT_SAMPLE_RATE;
+
+	if( out_samples > max_out_samples )
+		out_samples = max_out_samples;
+
+	for( i = 0; i < out_samples; i++ )
+	{
+		int idx = pos_fixed >> 16;
+		int frac = pos_fixed & 0xFFFF;
+
+		if( idx + 1 < in_samples )
+			out[i] = (int16_t)( ( in[idx] * ( 65536 - frac ) + in[idx + 1] * frac ) >> 16 );
+		else if( idx < in_samples )
+			out[i] = in[idx];
+		else
+			out[i] = 0;
+
+		pos_fixed += step_fixed;
+	}
+
+	return out_samples;
+}
+
+/*
+=========================
 Voice_InitGoldSrcMode
 
 Initialize GoldSrc voice mode
@@ -296,6 +395,12 @@ static qboolean Voice_InitGoldSrcMode( int quality )
 	{
 		Con_Printf( S_ERROR "Can't create GoldSrc decoders, voice chat is disabled.\n" );
 		return false;
+	}
+
+	if( !Voice_InitSilkDecoder())
+	{
+		Con_Printf( S_WARN "SILK decoder init failed, SILK voice data will not be decoded.\n" );
+		// Non-fatal - continue without SILK support
 	}
 
 	if( !Voice_InitOpusEncoder( quality ))
@@ -348,6 +453,7 @@ static void Voice_ShutdownGoldSrcMode( void )
 {
 	Voice_ShutdownOpusDecoder();
 	Voice_ShutdownOpusEncoder();
+	Voice_ShutdownSilkDecoder();
 }
 
 /*
@@ -642,6 +748,9 @@ static int Voice_ProcessGSData( int ent, const uint8_t *data, uint32_t size )
 	data_len = LittleShort( *(uint16_t *)( data + offset ));
 	offset += sizeof( uint16_t );
 
+	if( offset + data_len > size - sizeof( uint32_t ))
+		return 0;
+
 	if( vpc_type == GS_VPC_VDATA_OPUS_PLC )
 	{
 		decoder = voice.gs_decoders[ent - 1];
@@ -698,6 +807,103 @@ static int Voice_ProcessGSData( int ent, const uint8_t *data, uint32_t size )
 		}
 		memset( voice.decompress_buffer, 0, silence_samples * sizeof( int16_t ));
 		samples = silence_samples;
+	}
+	else if( vpc_type == GS_VPC_VDATA_SILK )
+	{
+		void *silk_dec = voice.silk_decoders[ent - 1];
+		SKP_SILK_SDK_DecControlStruct dec_control;
+		size_t silk_offset = 0;
+		int16_t silk_buf[960]; // max SILK frame: 20ms * 24kHz = 480, but 16kHz = 320; use 960 for safety
+
+		if( !silk_dec )
+		{
+			Con_Printf( S_WARN "No SILK decoder available for entity %d\n", ent );
+			return 0;
+		}
+
+		dec_control.API_sampleRate = GS_SILK_SAMPLE_RATE;
+
+		while( silk_offset + sizeof( uint16_t ) <= data_len )
+		{
+			int16_t n_samples_out = (int16_t)( sizeof( silk_buf ) / sizeof( int16_t ) );
+			int ret;
+			int resampled;
+
+			frame_size = LittleShort( *(uint16_t *)( data + offset + silk_offset ) );
+			silk_offset += sizeof( uint16_t );
+
+			if( frame_size == 0 )
+			{
+				// silence frame
+				if( samples + VOICE_DEFAULT_SILENCE_FRAME_SIZE > GS_MAX_DECOMPRESSED_SAMPLES )
+				{
+					Con_Printf( S_WARN "Voice buffer overflow\n" );
+					return 0;
+				}
+				memset( ( (int16_t *)voice.decompress_buffer ) + samples, 0, VOICE_DEFAULT_SILENCE_FRAME_SIZE * sizeof( int16_t ) );
+				samples += VOICE_DEFAULT_SILENCE_FRAME_SIZE;
+				continue;
+			}
+
+			if( frame_size == 0xFFFF )
+			{
+				// reset decoder
+				SKP_Silk_SDK_InitDecoder( silk_dec );
+				break;
+			}
+
+			if( silk_offset + frame_size > data_len )
+			{
+				Con_Printf( S_WARN "SILK frame size exceeds data length\n" );
+				return 0;
+			}
+
+			ret = SKP_Silk_SDK_Decode( silk_dec, &dec_control, 0,
+				data + offset + silk_offset, frame_size,
+				silk_buf, &n_samples_out );
+
+			if( ret )
+			{
+				Con_Printf( S_WARN "SILK decode error: %d\n", ret );
+				silk_offset += frame_size;
+				continue;
+			}
+
+			// Resample from 16kHz to 24kHz
+			resampled = Voice_Resample16to24( silk_buf, n_samples_out,
+				( (int16_t *)voice.decompress_buffer ) + samples,
+				GS_MAX_DECOMPRESSED_SAMPLES - samples );
+
+			if( resampled <= 0 )
+			{
+				Con_Printf( S_WARN "Voice buffer overflow during SILK resample\n" );
+				return 0;
+			}
+
+			samples += resampled;
+			silk_offset += frame_size;
+
+			// Handle multiple frames per packet
+			while( dec_control.moreInternalDecoderFrames )
+			{
+				n_samples_out = (int16_t)( sizeof( silk_buf ) / sizeof( int16_t ) );
+				ret = SKP_Silk_SDK_Decode( silk_dec, &dec_control, 0,
+					data + offset + silk_offset, 0,
+					silk_buf, &n_samples_out );
+
+				if( ret )
+					break;
+
+				resampled = Voice_Resample16to24( silk_buf, n_samples_out,
+					( (int16_t *)voice.decompress_buffer ) + samples,
+					GS_MAX_DECOMPRESSED_SAMPLES - samples );
+
+				if( resampled <= 0 )
+					break;
+
+				samples += resampled;
+			}
+		}
 	}
 	else
 	{

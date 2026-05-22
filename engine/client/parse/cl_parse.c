@@ -15,12 +15,14 @@ GNU General Public License for more details.
 
 #include "common.h"
 #include "client.h"
+#include "cl_scoreboard_slayer.h"
 #include "mod_local.h"
 #include "net_encode.h"
 #include "cl_tent.h"
 #include "shake.h"
 #include "input.h"
 #include "eiface.h"
+#include "cl_view_slayer.h"
 
 #if XASH_LOW_MEMORY != 2
 int CL_UPDATE_BACKUP = SINGLEPLAYER_BACKUP;
@@ -1168,6 +1170,9 @@ void CL_ParseClientData( sizebuf_t *msg, connprotocol_t proto )
 	cl.local.pushmsec = frame->clientdata.pushmsec;
 	cl.local.weapons = frame->clientdata.weapons;
 	cl.local.health = frame->clientdata.health;
+
+	// Slayer3D: feed health to scoreboard for HP bar display
+	Slayer_OnHealthUpdate( cl.local.health );
 }
 
 /*
@@ -2334,6 +2339,21 @@ void CL_ParseUserMessage( sizebuf_t *msg, int svc_num, connprotocol_t proto )
 	// parse user message into buffer
 	MSG_ReadBytes( msg, pbuf, iSize );
 
+	// Slayer3D: peek at DeathMsg / TeamInfo / ScoreInfo / etc. before forwarding
+	// to client.dll, so we can feed our overlays (scoreboard, killsound, etc.)
+	{
+		if( !Q_strcmp( clgame.msg[i].name, "DeathMsg" ))
+			Slayer_OnDeathMsg( pbuf, iSize );
+		else if( !Q_strcmp( clgame.msg[i].name, "TeamInfo" ))
+			Slayer_OnTeamInfo( pbuf, iSize );
+		else if( !Q_strcmp( clgame.msg[i].name, "ScoreInfo" ))
+			Slayer_OnScoreInfo( pbuf, iSize );
+		else if( !Q_strcmp( clgame.msg[i].name, "ScoreAttrib" ))
+			Slayer_OnScoreAttrib( pbuf, iSize );
+		else if( !Q_strcmp( clgame.msg[i].name, "HealthInfo" ))
+			Slayer_OnHealthInfo( pbuf, iSize );
+	}
+
 	if( cl_trace_messages.value )
 	{
 		Con_Reportf( "^3USERMSG %s SIZE %i SVC_NUM %i\n",
@@ -2474,8 +2494,12 @@ qboolean CL_ParseCommonHLMessage( sizebuf_t *msg, connprotocol_t proto, int svc_
 		CL_ParseServerTime( msg, proto );
 		break;
 	case svc_print:
-		Con_Printf( "%s", MSG_ReadString( msg ));
+	{
+		const char *s_print = MSG_ReadString( msg );
+		Slayer_ParseStatusLine( s_print );
+		Con_Printf( "%s", s_print );
 		break;
+	}
 	case svc_stufftext:
 		s = MSG_ReadString( msg );
 		if( cl_trace_stufftext.value )

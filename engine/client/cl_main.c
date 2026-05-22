@@ -20,6 +20,8 @@ GNU General Public License for more details.
 #include "input.h"
 #include "vgui_draw.h"
 #include "library.h"
+#include "cl_view_slayer.h"
+#include "cl_scoreboard_slayer.h"
 #include "vid_common.h"
 #include "pm_local.h"
 #include "multi_emulator.h"
@@ -95,7 +97,7 @@ static CVAR_DEFINE_AUTO( bottomcolor, "0", FCVAR_USERINFO|FCVAR_ARCHIVE|FCVAR_FI
 CVAR_DEFINE_AUTO( rate, "25000", FCVAR_USERINFO|FCVAR_ARCHIVE|FCVAR_FILTERABLE, "player network rate" );
 
 CVAR_DEFINE_AUTO( cl_ticket_generator, "revemu2013", FCVAR_ARCHIVE, "you wouldn't steal a car" );
-static CVAR_DEFINE_AUTO( cl_advertise_engine_in_name, "1", FCVAR_ARCHIVE|FCVAR_PRIVILEGED, "add [Xash3D] to the nickname when connecting to GoldSrc servers" );
+static CVAR_DEFINE_AUTO( cl_advertise_engine_in_name, "1", FCVAR_ARCHIVE|FCVAR_PRIVILEGED, "add [Slayer3D] to the nickname when connecting to GoldSrc servers" );
 static CVAR_DEFINE_AUTO( cl_log_outofband, "0", FCVAR_ARCHIVE, "log out of band messages, can be useful for server admins and for engine debugging" );
 static CVAR_DEFINE_AUTO( cl_autorecord, "0", 0, "automatically start recording a demo after joining the server" );
 
@@ -700,6 +702,16 @@ static void CL_CreateCmd( void )
 	clgame.dllFuncs.CL_CreateMove( host.frametime, cmd, active );
 	IN_EngineAppendMove( host.frametime, cmd, active );
 
+	// Slayer3D: check RMB snap after all input is processed
+	V_SlayerCamSnapCheck( cmd );
+
+	// Slayer3D: apply movement tweaks (ducktap, autostrafe, autojump)
+	V_SlayerMovementTweaks( cmd );
+
+	// Slayer3D: while +slayer_scoreboard is held, OR IN_SCORE so the
+	// server emits svc_pings every snapshot (drives per-player ping column).
+	Slayer_Scoreboard_PatchUsercmd( cmd );
+
 	CL_PopPMStates();
 
 	if( !cls.demoplayback )
@@ -1091,8 +1103,8 @@ void CL_SendGoldSrcConnectPacket( netadr_t adr, int challenge, const void *ticke
 	Info_SetValueForKey( protinfo, "raw", "steam", sizeof( protinfo ));
 	CL_GetCDKey( protinfo, sizeof( protinfo ));
 	name = Info_ValueForKey( cls.userinfo, "name" );
-	if( cl_advertise_engine_in_name.value && Q_strnicmp( name, "[Xash3D]", 8 ))
-		Info_SetValueForKeyf( cls.userinfo, "name", sizeof( cls.userinfo ), "[Xash3D]%s", name );
+	if( cl_advertise_engine_in_name.value && Q_strnicmp( name, "[Slayer3D]", 10 ))
+		Info_SetValueForKeyf( cls.userinfo, "name", sizeof( cls.userinfo ), "[Slayer3D]%s", name );
 
 	MSG_Init( &send, "GoldSrcConnect", send_buf, sizeof( send_buf ));
 	MSG_WriteLong( &send, NET_HEADER_OUTOFBANDPACKET );
@@ -1601,6 +1613,10 @@ void CL_ClearState( void )
 
 	PM_ClearPhysEnts( clgame.pmove );
 	NetAPI_CancelAllRequests();
+
+	// Slayer3D: drop per-match state (team table) before zeroing cl,
+	// so it does not leak between maps / servers.
+	Slayer_ResetMatchState();
 
 	// wipe the entire cl structure
 	memset( &cl, 0, sizeof( cl ));
@@ -3559,6 +3575,9 @@ static void CL_InitLocal( void )
 	Cmd_AddCommand( "richpresence_update", Cmd_Null_f, "compatibility command, does nothing" );
 
 	Cmd_AddCommand( "cl_list_messages", CL_ListMessages_f, "list registered user messages" );
+
+	// Slayer3D extensions: cvar registration now handled by V_InitSlayerCvars()
+	// called from V_Init() in gamma.c — no separate init needed here.
 }
 
 //============================================================================

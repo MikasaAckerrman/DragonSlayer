@@ -1036,6 +1036,7 @@ void CL_PredictMovement( qboolean repredicting )
 	memcpy( from->weapondata, frame->weapondata, sizeof( from->weapondata ));
 	from->playerstate = frame->playerstate[cl.playernum];
 	from->client = frame->clientdata;
+
 	if( !frame->valid ) return;
 
 	time = frame->time;

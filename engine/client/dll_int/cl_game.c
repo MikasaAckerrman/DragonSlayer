@@ -37,6 +37,7 @@ GNU General Public License for more details.
 #include "vgui_draw.h"
 #include "sound.h"		// SND_STOP_LOOPING
 #include "platform/platform.h"
+#include "cl_view_slayer.h"
 
 #define MAX_LINELENGTH	80
 #define TEXT_MSGNAME	"TextMessage"
@@ -1979,9 +1980,85 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 {
 	cl_font_t *font = Con_GetFont( con_fontsize.value );
 	rgba_t color;
+	int r, g, b;
+
+	if( !string )
+		return x;
+
 	Vector4Copy( clgame.ds.textColor, color );
 	Vector4Set( clgame.ds.textColor, 255, 255, 255, 255 );
 
+	// Slayer3D: detect *strict* CS 1.6 default chat colors and apply user overrides.
+	// Loose detection would clobber plugin-set colors (clan tags, prefixes, etc.).
+	// Defaults: T = (255, 63, 63), CT ~ (153, 204, 255), msg body = (255, 178, 0).
+	{
+		qboolean is_t   = ( color[0] >= 220 && color[1] >= 30 && color[1] <= 90 &&
+		                    color[2] >= 30 && color[2] <= 90 );
+		qboolean is_ct  = ( color[0] >= 100 && color[0] <= 200 &&
+		                    color[1] >= 150 && color[1] <= 220 && color[2] >= 220 );
+		qboolean is_msg = ( color[0] >= 220 &&
+		                    color[1] >= 150 && color[1] <= 200 && color[2] <= 30 );
+
+		if( is_msg && slayer_chat_color.string[0] != '\0'
+			&& sscanf( slayer_chat_color.string, "%i %i %i", &r, &g, &b ) == 3 )
+		{
+			color[0] = (byte)bound( 0, r, 255 );
+			color[1] = (byte)bound( 0, g, 255 );
+			color[2] = (byte)bound( 0, b, 255 );
+			color[3] = 255;
+		}
+		else if( is_t && slayer_chat_color_t.string[0] != '\0'
+			&& sscanf( slayer_chat_color_t.string, "%i %i %i", &r, &g, &b ) == 3 )
+		{
+			color[0] = (byte)bound( 0, r, 255 );
+			color[1] = (byte)bound( 0, g, 255 );
+			color[2] = (byte)bound( 0, b, 255 );
+			color[3] = 255;
+		}
+		else if( is_ct && slayer_chat_color_ct.string[0] != '\0'
+			&& sscanf( slayer_chat_color_ct.string, "%i %i %i", &r, &g, &b ) == 3 )
+		{
+			color[0] = (byte)bound( 0, r, 255 );
+			color[1] = (byte)bound( 0, g, 255 );
+			color[2] = (byte)bound( 0, b, 255 );
+			color[3] = 255;
+		}
+	}
+
+	// Slayer3D: echo chat strings to console with full-string dedup (ring buffer).
+	// pfnDrawConsoleString is called every frame for each visible HUD line, so
+	// we'd otherwise see massive console spam.
+	{
+		static char ring_buf[6][256];
+		static int  ring_idx = 0;
+		int slen = Q_strlen( string );
+
+		if( slen > 2 && ( Q_strchr( string, '\n' ) != NULL || slen > 20 ) )
+		{
+			int k, dup = 0;
+
+			for( k = 0; k < 6; k++ )
+			{
+				// Compare full strings (Q_strcmp). Same content = duplicate.
+				if( ring_buf[k][0] && !Q_strcmp( ring_buf[k], string ) )
+				{
+					dup = 1;
+					break;
+				}
+			}
+
+			if( !dup )
+			{
+				Q_strncpy( ring_buf[ring_idx], string, sizeof( ring_buf[ring_idx] ) );
+				ring_idx = ( ring_idx + 1 ) % 6;
+				Con_Printf( "%s", string );
+			}
+		}
+	}
+
+	// No FONT_DRAW_FORCECOL: respects ^N color codes from server plugins
+	// (clan tags, prefixes, AMXX colorchat). Our chat_color_* overrides still
+	// apply to the base color of each segment.
 	return x + CL_DrawString( x, y, string, color, font, FONT_DRAW_UTF8 | FONT_DRAW_HUD );
 }
 

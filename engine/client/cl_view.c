@@ -21,6 +21,8 @@ GNU General Public License for more details.
 #include "sound.h"
 #include "input.h" // touch
 #include "platform/platform.h" // GL_UpdateSwapInterval
+#include "cl_view_slayer.h" // Slayer3D third-person camera
+#include "cl_scoreboard_slayer.h" // Slayer3D custom scoreboard
 
 /*
 ===============
@@ -100,6 +102,15 @@ static void V_SetupViewModel( void )
 	view->curstate.colormap = (info->topcolor & 0xFFFF)|((info->bottomcolor << 8) & 0xFFFF);
 	view->curstate.number = cl.playernum + 1;
 	view->index = cl.playernum + 1;
+
+	// Slayer3D: hide the first-person weapon model when third-person is active.
+	if( V_IsSlayerThirdPerson( ))
+	{
+		view->model = NULL;
+		view->curstate.modelindex = 0;
+		return;
+	}
+
 	view->model = CL_ModelHandle( cl.local.viewmodel );
 	view->curstate.modelindex = cl.local.viewmodel;
 	view->curstate.sequence = cl.local.weaponsequence;
@@ -236,7 +247,7 @@ static void V_RefApplyOverview( ref_viewpass_t *rvp )
 V_CalcFov
 ====================
 */
-static float V_CalcFov( float *fov_x, float width, float height )
+float V_CalcFov( float *fov_x, float width, float height )
 {
 	float	x, half_fov_y;
 
@@ -411,8 +422,10 @@ void V_RenderView( void )
 	{
 		clgame.dllFuncs.pfnCalcRefdef( &rp );
 		V_GetRefParams( &rp, &rvp );
+		V_SlayerSmoothZoom( &rvp ); // Slayer3D: smooth FOV zoom animation
 		V_RefApplyOverview( &rvp );
 		V_ApplyRefUnderwater( &rvp );
+		V_ApplySlayerThirdPerson( &rvp ); // Slayer3D: orbit camera around the player
 
 		if( viewnum == 0 && FBitSet( rvp.flags, RF_ONLY_CLIENTDRAW ))
 		{
@@ -565,6 +578,7 @@ void V_PostRender( void )
 		CL_DrawHUD( CL_CHANGELEVEL );
 		ref.dllFuncs.R_ShowTextures();
 		R_ShowTree();
+		Slayer_Scoreboard_Draw();
 		Con_DrawConsole();
 		UI_UpdateMenu( host.realtime );
 		Con_DrawVersion();
