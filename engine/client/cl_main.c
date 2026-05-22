@@ -211,6 +211,11 @@ static void CL_CheckClientState( void )
 	if(( cls.state == ca_connected || cls.state == ca_validate ) && ( cls.signon == SIGNONS ))
 	{
 		cls.state = ca_active;
+		// Pre-warm Slayer scoreboard avatars: pump 'status' (STEAM_IDs +
+		// per-player avatar downloads) and the Steam Web API batch path.
+		// Hooked here so avatars start fetching the moment we're in-game,
+		// not when the user first holds the scoreboard key.
+		Slayer_Scoreboard_OnConnected();
 		cls.changelevel = false;		// changelevel is done
 		cls.changedemo = false;		// changedemo is done
 		cl.first_frame = true;		// first rendering frame

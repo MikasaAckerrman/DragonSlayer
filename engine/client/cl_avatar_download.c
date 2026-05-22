@@ -35,7 +35,7 @@ Other platforms: Uses non-blocking HTTP sockets (port 80, no TLS).
 // Configuration
 // ---------------------------------------------------------------------------
 
-#define AVD_MAX_CONCURRENT  2
+#define AVD_MAX_CONCURRENT  4
 #define AVD_RETRY_DELAY     60.0
 
 // Slot result values (written by worker thread, read by Frame)
@@ -456,7 +456,7 @@ qboolean Slayer_AvatarDownload_Frame( void )
 // Configuration
 // ===========================================================================
 
-#define AVATAR_MAX_CONCURRENT  2       // max simultaneous active downloads
+#define AVATAR_MAX_CONCURRENT  4       // max simultaneous active downloads
 #define AVATAR_TIMEOUT         15.0    // seconds before giving up
 #define AVATAR_RETRY_DELAY     60.0    // seconds before retrying a failed download
 #define AVATAR_MAX_RESPONSE    65536   // max XML profile response (~20KB typical)

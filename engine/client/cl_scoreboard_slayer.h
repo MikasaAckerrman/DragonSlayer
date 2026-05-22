@@ -67,4 +67,12 @@ void Slayer_Scoreboard_PatchUsercmd( struct usercmd_s *cmd );
 // Used by killsound to detect teamkills.
 int Slayer_GetPlayerTeam( int slot );
 
+// Called from cl_main.c right after cls.state transitions to ca_active.
+// Pre-warms the avatar pipeline (issues "status" so the server reply seeds
+// per-player STEAM_IDs and starts avatar downloads, and pings the Steam Web
+// API batch path which is a no-op without slayer_steam_apikey). With this
+// hook the scoreboard already has avatars in cache the first time the user
+// holds the tab key.
+void Slayer_Scoreboard_OnConnected( void );
+
 #endif // CL_SCOREBOARD_SLAYER_H

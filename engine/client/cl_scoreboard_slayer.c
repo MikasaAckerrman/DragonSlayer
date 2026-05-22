@@ -393,19 +393,29 @@ static void Cmd_AvatarUrls_f( void )
 // +slayer_scoreboard / -slayer_scoreboard commands
 // ===========================================================================
 
+// Throttled "status" request used by both the keybind path and the
+// auto-warm-on-connect path. Sends "status" at most once every 30s and
+// arms a 5s parse window in Slayer_ParseStatusLine so stray svc_print
+// lines that happen later cannot accidentally match the #N STEAM_X:Y:Z
+// regex.
+static void Slayer_RequestStatus( void )
+{
+	if( host.realtime < slayer_status_next_time )
+		return;
+
+	Cbuf_AddText( "status\n" );
+	slayer_status_next_time = host.realtime + 30.0;
+	slayer_status_pending = true;
+	slayer_status_deadline = host.realtime + 5.0; // 5s parse window
+	slayer_steam_reject_count = 0;                 // reset debounce per request
+}
+
 static void Cmd_ScoreboardDown_f( void )
 {
 	slayer_scoreboard_active = true;
 
 	// Request status to get SteamIDs (throttled to once per 30 seconds)
-	if( host.realtime >= slayer_status_next_time )
-	{
-		Cbuf_AddText( "status\n" );
-		slayer_status_next_time = host.realtime + 30.0;
-		slayer_status_pending = true;
-		slayer_status_deadline = host.realtime + 5.0; // 5s parse window
-		slayer_steam_reject_count = 0; // reset debounce per request
-	}
+	Slayer_RequestStatus();
 
 	// Trigger batch avatar fetch via Steam Web API (if API key is set)
 	Slayer_SteamAPI_RequestBatch( slayer_steamid64, MAX_CLIENTS );
@@ -414,6 +424,22 @@ static void Cmd_ScoreboardDown_f( void )
 static void Cmd_ScoreboardUp_f( void )
 {
 	slayer_scoreboard_active = false;
+}
+
+// Pre-warm the avatar pipeline as soon as we're in-game, before the user
+// ever touches the scoreboard key. Called from CL_CheckClientState in
+// cl_main.c right after cls.state = ca_active. Slayer_RequestStatus is
+// throttled so a quick map change / reconnect doesn't spam the server,
+// and Slayer_SteamAPI_RequestBatch short-circuits cleanly when the API
+// key cvar is empty or no STEAM_IDs are known yet (it gets re-issued on
+// the next scoreboard open if needed).
+void Slayer_Scoreboard_OnConnected( void )
+{
+	if( cls.state != ca_active )
+		return;
+
+	Slayer_RequestStatus();
+	Slayer_SteamAPI_RequestBatch( slayer_steamid64, MAX_CLIENTS );
 }
 
 // ===========================================================================
@@ -955,8 +981,18 @@ void Slayer_Scoreboard_Draw( void )
 
 	cur_y = board_y;
 
-	// Column layout (percentage of board width)
-	col_name_x   = board_x + (int)( board_w * 0.04f );
+	// Column layout (percentage of board width). col_name_x is bumped right
+	// so a square avatar (row_h x row_h) plus a small gap fits to the LEFT
+	// of the name column without crossing the rounded board edge. The name
+	// itself is drawn at col_name_x for *every* row regardless of whether
+	// an avatar is present, so names line up cleanly even when some players
+	// haven't broadcast a STEAM_ID.
+	col_name_x = board_x + (int)( board_w * 0.04f );
+	{
+		int min_name_x = board_x + 8 + row_h + 4;
+		if( col_name_x < min_name_x )
+			col_name_x = min_name_x;
+	}
 	col_health_x = board_x + (int)( board_w * 0.45f );
 	col_frags_x  = board_x + (int)( board_w * 0.58f );
 	col_deaths_x = board_x + (int)( board_w * 0.70f );
@@ -1106,19 +1142,19 @@ void Slayer_Scoreboard_Draw( void )
 			row_alpha = 128;
 		}
 
-		// Draw avatar if available
+		// Draw avatar (if available) in the reserved strip to the LEFT of
+		// the name column. The name's X never depends on whether the row
+		// has an avatar, so all names line up regardless.
 		{
-			int name_x_offset = 0;
-
 			if( slayer_avatar_tex[pidx] > 0 )
 			{
+				int avatar_x = col_name_x - row_h - 4;
 				ref.dllFuncs.GL_SetRenderMode( kRenderTransTexture );
 				ref.dllFuncs.Color4ub( 255, 255, 255, row_alpha );
-				ref.dllFuncs.R_DrawStretchPic( col_name_x, cur_y, row_h, row_h, 0, 0, 1, 1, slayer_avatar_tex[pidx] );
-				name_x_offset = row_h + 4;
+				ref.dllFuncs.R_DrawStretchPic( avatar_x, cur_y, row_h, row_h, 0, 0, 1, 1, slayer_avatar_tex[pidx] );
 			}
 
-			Con_DrawString( col_name_x + name_x_offset, cur_y + 2, name, name_color );
+			Con_DrawString( col_name_x, cur_y + 2, name, name_color );
 		}
 
 		// Frags
