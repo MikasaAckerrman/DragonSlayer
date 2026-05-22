@@ -17,6 +17,8 @@ GNU General Public License for more details.
 #include "client.h"
 #include "cl_view_slayer.h"
 #include "cl_scoreboard_slayer.h"
+#include "cl_hud_slayer.h"
+#include "cl_sgs_slayer.h"
 
 // ===========================================================================
 // Cvars - Third-person camera
@@ -179,6 +181,12 @@ void V_InitSlayerCvars( void )
 	// Scoreboard
 	Slayer_Scoreboard_Init();
 
+	// HUD damage indicator
+	Slayer_HUD_Init();
+
+	// Side-Game Strafe (mobile auto-strafer)
+	Slayer_SGS_Init();
+
 	Con_Printf( "Slayer3D: cvars initialized\n" );
 }
 
@@ -338,6 +346,12 @@ void Slayer_ResetMatchState( void )
 
 	// Clear scoreboard score data
 	Slayer_Scoreboard_Reset();
+
+	// Clear HUD damage indicator events
+	Slayer_HUD_Reset();
+
+	// Clear SGS phase / swipe timestamp / held flag
+	Slayer_SGS_Reset();
 }
 
 // ===========================================================================
