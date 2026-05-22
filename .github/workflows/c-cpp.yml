@@ -1,6 +1,12 @@
 name: Build & Deploy Android APK
 on:
+  # Run on direct pushes to master only - this is the release path that
+  # publishes the "continuous" tag below.
   push:
+    branches: [master]
+  # For feature branches, CI runs through pull_request events. This avoids
+  # the duplicate-build problem where pushing to a branch with an open PR
+  # would otherwise fire BOTH push and pull_request triggers.
   pull_request:
   workflow_dispatch:
     inputs:
