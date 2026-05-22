@@ -27,7 +27,24 @@
     java.lang.String getCallingPackage();
     java.lang.String[] getAssetsList(boolean, java.lang.String);
     android.content.res.AssetManager getAssets(boolean);
+    int downloadAvatar(java.lang.String, java.lang.String);
+    void startSteamLogin(java.lang.String, java.lang.String);
+    void nativeSteamLoginResult(long);
 }
+
+# Slayer3D Steam Web API helper — invoked from C via FindClass +
+# GetStaticMethodID. Without this keep rule R8 strips/renames the class
+# in release builds and FindClass returns NULL at runtime, silently
+# disabling batch avatar fetch.
+-keep class su.xash.engine.SteamAPIHelper {
+    int fetchBatchAvatars(java.lang.String, java.lang.String, java.lang.String);
+}
+
+# Slayer3D Steam OpenID login activity — launched by Intent from
+# XashActivity.startSteamLogin(). Intent uses string class lookup,
+# so keep the class itself (members reachable via standard Activity
+# lifecycle don't need explicit listing).
+-keep class su.xash.engine.SteamLoginActivity
 
 -keep,includedescriptorclasses,allowoptimization class org.libsdl.app.SDLInputConnection {
     void nativeCommitText(java.lang.String, int);
