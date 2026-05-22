@@ -303,6 +303,18 @@ public class XashActivity extends SDLActivity {
 				return 2;
 			}
 
+			// Slayer3D: Steam serves a stock silhouette ("?"-looking head)
+			// for accounts that never set an avatar. Detect by the well-known
+			// content hash in the URL and refuse to cache it, so the scoreboard
+			// shows nothing for those slots (per user request: "если у игрока
+			// нет купленной Steam, не показывать аватарку"). Same hash is
+			// reused for all default-avatar variants (medium/full/small).
+			if( avatarUrl.contains( "fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb" ) )
+			{
+				Log.d( TAG, "downloadAvatar: Steam default-avatar silhouette for " + steamid64 + ", skipping" );
+				return 2;
+			}
+
 			Log.d( TAG, "downloadAvatar: downloading image from " + avatarUrl );
 
 			// Phase 3 - Download the avatar image

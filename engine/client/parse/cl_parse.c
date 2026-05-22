@@ -2241,6 +2241,96 @@ static void CL_ParseExec( sizebuf_t *msg )
 
 /*
 ==============
+CL_MirrorChatToConsole
+
+Slayer3D: dump SayText/SayText2 user message contents to the console so
+players can scrollback chat history without having to open the in-game HUD.
+The CS 1.6 game DLL still renders chat on screen; this only adds a console
+mirror. Robust against malformed packets: walks pbuf looking for printable
+null-terminated strings and joins them on a single console line.
+
+SayText  format (cstrike):  byte client_idx | localization_key \0 | arg1 \0 | arg2 \0 ...
+SayText2 format (cstrike):  byte client_idx | byte msg_dest      | template \0 | arg \0 ...
+
+We don't try to expand the localization template — just print all visible
+strings concatenated, which yields readable "[chat] PlayerName Message" output.
+==============
+*/
+static void CL_MirrorChatToConsole( const char *pszName, int iSize, const void *pbuf )
+{
+	char         line[512];
+	const byte  *p;
+	int          remaining, written;
+	qboolean     have_anything = false;
+
+	if( !pbuf || iSize < 2 )
+		return;
+
+	p = (const byte *)pbuf;
+
+	// Skip the leading client_idx byte (always present in SayText/SayText2).
+	// SayText2 has an extra "msg_dest" byte but we don't need it for display,
+	// and walking past zero-length strings is harmless.
+	p++;
+	remaining = iSize - 1;
+	written = 0;
+
+	while( remaining > 0 )
+	{
+		size_t slen = 0;
+
+		// Length of next null-terminated string (clamped to remaining bytes).
+		while( slen < (size_t)remaining && p[slen] != '\0' )
+			slen++;
+
+		if( slen > 0 )
+		{
+			// Filter to printable / common whitespace only. CS 1.6 chat
+			// strings are UTF-8 these days so we keep bytes >= 0x20 and
+			// the tab/newline/cr controls; anything else is a binary
+			// padding byte.
+			size_t i;
+			for( i = 0; i < slen && written < (int)sizeof( line ) - 2; i++ )
+			{
+				byte c = p[i];
+				if( c >= 0x20 || c == '\t' )
+				{
+					line[written++] = (char)c;
+					have_anything = true;
+				}
+			}
+
+			if( written < (int)sizeof( line ) - 2 )
+				line[written++] = ' ';
+		}
+
+		// Step past the string + its terminator. If the buffer wasn't
+		// null-terminated (malformed) we still advance by one to make
+		// progress and avoid infinite loops.
+		{
+			size_t step = slen + 1;
+			if( step > (size_t)remaining )
+				step = (size_t)remaining;
+			p += step;
+			remaining -= (int)step;
+		}
+	}
+
+	if( !have_anything )
+		return;
+
+	// Trim trailing space + newline.
+	while( written > 0 && line[written - 1] == ' ' )
+		written--;
+	line[written] = '\0';
+
+	// Use ^3 (yellow) tag for the chat-mirror prefix so it is visually
+	// distinct from server prints in the console scrollback.
+	Con_Printf( "^3[chat]^7 %s (%s)\n", line, pszName );
+}
+
+/*
+==============
 CL_DispatchUserMessage
 
 Dispatch user message by engine request
@@ -2252,6 +2342,12 @@ qboolean CL_DispatchUserMessage( const char *pszName, int iSize, void *pbuf )
 
 	if( COM_StringEmptyOrNULL( pszName ))
 		return false;
+
+	// Slayer3D: mirror chat usermsgs to the console BEFORE dispatching to
+	// the game DLL, so the engine console accumulates a scrollable chat log
+	// without breaking the on-screen HUD chat panel rendered by client.dll.
+	if( !Q_strcmp( pszName, "SayText" ) || !Q_strcmp( pszName, "SayText2" ))
+		CL_MirrorChatToConsole( pszName, iSize, pbuf );
 
 	for( i = 0; i < MAX_USER_MESSAGES; i++ )
 	{

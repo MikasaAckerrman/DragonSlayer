@@ -11,6 +11,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.net.ssl.HttpsURLConnection;
 
@@ -75,18 +81,29 @@ public class SteamAPIHelper
 
 			Log.d( TAG, "fetchBatchAvatars: got response (" + json.length() + " chars)" );
 
-			// Step 2: Parse JSON and download each avatar
-			int downloaded = 0;
+			// Step 2: Parse JSON, collect (steamid, url) pairs, then download
+			// in parallel. Sequential downloads were the dominant latency on a
+			// full server (8-32 players × ~150 ms RTT each); a small fixed pool
+			// gives us ~4x speedup without overwhelming Valve's image CDN or
+			// the local socket pool.
+			final int PARALLEL_WORKERS = 4;
+
+			class FetchTask
+			{
+				final String url;
+				final String savePath;
+				FetchTask( String u, String p ) { url = u; savePath = p; }
+			}
+
+			List<FetchTask> tasks = new ArrayList<FetchTask>();
 			int searchFrom = 0;
 
 			while( true )
 			{
-				// Find next player object by looking for "steamid"
 				int sidIdx = json.indexOf( "\"steamid\"", searchFrom );
 				if( sidIdx == -1 )
 					break;
 
-				// Extract steamid value
 				String steamid = extractJsonString( json, sidIdx );
 				if( steamid == null )
 				{
@@ -94,8 +111,6 @@ public class SteamAPIHelper
 					continue;
 				}
 
-				// Extract avatar URL (prefer avatarmedium)
-				// Search within a reasonable range after steamid
 				int objEnd = json.indexOf( "}", sidIdx );
 				if( objEnd == -1 )
 					objEnd = json.length();
@@ -116,16 +131,62 @@ public class SteamAPIHelper
 
 				if( avatarUrl != null && !avatarUrl.isEmpty() )
 				{
-					String savePath = basePath + "/" + steamid + ".png";
-					if( downloadAvatarImage( avatarUrl, savePath ) )
-						downloaded++;
+					// Slayer3D: skip Steam's default silhouette avatar (the
+					// "?" head shown for accounts that never set a picture).
+					// Same fef49e7f... hash is reused across medium/full/small
+					// variants, so a substring check is enough.
+					if( avatarUrl.contains( "fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb" ) )
+					{
+						Log.d( TAG, "fetchBatchAvatars: default-avatar silhouette for " + steamid + ", skipping" );
+					}
+					else
+					{
+						tasks.add( new FetchTask( avatarUrl, basePath + "/" + steamid + ".png" ) );
+					}
 				}
 
 				searchFrom = objEnd;
 			}
 
-			Log.i( TAG, "fetchBatchAvatars: downloaded " + downloaded + " avatars" );
-			return downloaded;
+			final AtomicInteger downloaded = new AtomicInteger( 0 );
+
+			if( !tasks.isEmpty() )
+			{
+				ExecutorService pool = Executors.newFixedThreadPool(
+					Math.min( PARALLEL_WORKERS, tasks.size() ) );
+
+				for( final FetchTask t : tasks )
+				{
+					pool.submit( new Runnable() {
+						@Override public void run()
+						{
+							if( downloadAvatarImage( t.url, t.savePath ) )
+								downloaded.incrementAndGet();
+						}
+					} );
+				}
+
+				pool.shutdown();
+				try
+				{
+					// Generous total deadline: per-image fetch already has its
+					// own 15s connect/read timeouts, so 60s for the whole batch
+					// covers up to 4 sequential retries inside the pool.
+					if( !pool.awaitTermination( 60, TimeUnit.SECONDS ) )
+					{
+						Log.w( TAG, "fetchBatchAvatars: parallel pool timed out, forcing shutdown" );
+						pool.shutdownNow();
+					}
+				}
+				catch( InterruptedException ie )
+				{
+					Thread.currentThread().interrupt();
+					pool.shutdownNow();
+				}
+			}
+
+			Log.i( TAG, "fetchBatchAvatars: downloaded " + downloaded.get() + " avatars (parallel x" + PARALLEL_WORKERS + ")" );
+			return downloaded.get();
 		}
 		catch( Exception e )
 		{

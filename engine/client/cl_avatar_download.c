@@ -35,7 +35,11 @@ Other platforms: Uses non-blocking HTTP sockets (port 80, no TLS).
 // Configuration
 // ---------------------------------------------------------------------------
 
-#define AVD_MAX_CONCURRENT  4
+// Slayer3D: bumped from 4 to 6 — Java JNI worker threads are light
+// (mostly socket-blocked) and 6 parallel HTTPS reqs to Steam are still
+// well under any rate limit while shaving wall-clock latency on a full
+// scoreboard with 16-32 players.
+#define AVD_MAX_CONCURRENT  6
 #define AVD_RETRY_DELAY     60.0
 
 // Slot result values (written by worker thread, read by Frame)
@@ -319,7 +323,7 @@ static qboolean AVD_BindJNI( void )
 	Q_strncpy( avd_init_reason, "OK", sizeof( avd_init_reason ) );
 	__android_log_print( ANDROID_LOG_INFO, "Xash",
 		"AvatarDL: JNI bind succeeded (slot count %d)", MAX_CLIENTS );
-	Con_Printf( "Slayer3D: avatar JNI bind OK (slot count %d)\n", MAX_CLIENTS );
+	Con_DPrintf( "Slayer3D: avatar JNI bind OK (slot count %d)\n", MAX_CLIENTS );
 	return true;
 }
 
@@ -1347,7 +1351,7 @@ void Slayer_AvatarDownload_Init( void )
 	memset( avd_slot_state, 0, sizeof( avd_slot_state ) );
 	memset( avd_slot_id, 0, sizeof( avd_slot_id ) );
 	memset( avd_slot_fail_time, 0, sizeof( avd_slot_fail_time ) );
-	Con_Printf( "Slayer3D: avatar HTTP downloader initialized\n" );
+	Con_DPrintf( "Slayer3D: avatar HTTP downloader initialized\n" );
 }
 
 void Slayer_AvatarDownload_Shutdown( void )

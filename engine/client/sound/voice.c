@@ -31,7 +31,22 @@ static CVAR_DEFINE_AUTO( voice_scale, "1.0", FCVAR_PRIVILEGED | FCVAR_ARCHIVE, "
 static CVAR_DEFINE_AUTO( voice_transmit_scale, "1.0", FCVAR_PRIVILEGED | FCVAR_ARCHIVE, "outcoming voice volume scale" );
 static CVAR_DEFINE_AUTO( voice_avggain, "0.5", FCVAR_PRIVILEGED | FCVAR_ARCHIVE, "automatic voice gain control (average)" );
 static CVAR_DEFINE_AUTO( voice_maxgain, "5.0", FCVAR_PRIVILEGED | FCVAR_ARCHIVE, "automatic voice gain control (maximum)" );
+static CVAR_DEFINE_AUTO( voice_enable, "1", FCVAR_PRIVILEGED | FCVAR_ARCHIVE, "enable voice chat" );
+CVAR_DEFINE_AUTO( voice_loopback, "0", FCVAR_PRIVILEGED, "loopback voice back to the speaker" );
+static CVAR_DEFINE_AUTO( voice_scale, "1.0", FCVAR_PRIVILEGED | FCVAR_ARCHIVE, "incoming voice volume scale" );
+static CVAR_DEFINE_AUTO( voice_transmit_scale, "1.0", FCVAR_PRIVILEGED | FCVAR_ARCHIVE, "outcoming voice volume scale" );
+static CVAR_DEFINE_AUTO( voice_avggain, "0.5", FCVAR_PRIVILEGED | FCVAR_ARCHIVE, "automatic voice gain control (average)" );
+static CVAR_DEFINE_AUTO( voice_maxgain, "5.0", FCVAR_PRIVILEGED | FCVAR_ARCHIVE, "automatic voice gain control (maximum)" );
 static CVAR_DEFINE_AUTO( voice_inputfromfile, "0", FCVAR_PRIVILEGED, "input voice from voice_input.wav" );
+
+// Slayer3D: hard sample-domain amplification on incoming voice. voice_scale
+// only feeds the S_RawEntSamples API gain (capped at 255 internally), so
+// values above 1.0 there top out and cannot make voice actually louder.
+// voice_amplify multiplies decoded int16 PCM by this factor with a SHRT
+// clamp before the mixer call, giving real gain at the cost of clipping
+// when set too high. Default 2.0 = +6 dB, which is what most CS 1.6
+// players want (vanilla voice is too quiet on Android).
+static CVAR_DEFINE_AUTO( voice_amplify, "2.0", FCVAR_PRIVILEGED | FCVAR_ARCHIVE, "Slayer3D: PCM-domain incoming voice gain (1.0=off, >1.0 amplifies, clamps to int16)" );
 
 static void Voice_StartChannel( uint samples, byte *data, int entnum );
 static void Voice_ShutdownSilkDecoder( void );
@@ -1150,6 +1165,22 @@ static void Voice_StartChannel( uint samples, byte *data, int entnum )
 	}
 
 	SND_ForceInitMouth( entnum );
+
+	// Slayer3D: PCM-domain pre-amplification before the engine mixer.
+	// S_RawEntSamples internally caps gain at 255, so voice_scale > 1.0
+	// can't push past the original recording level. Multiplying samples
+	// here gives real loudness boost. Skip when amplify <= 1.0 to avoid
+	// pointless work and rounding error on the no-op path.
+	if( voice_amplify.value > 1.0f && samples > 0 && data != NULL )
+	{
+		int16_t *s = (int16_t *)data;
+		uint     i, n = samples * VOICE_PCM_CHANNELS;
+		float    gain = voice_amplify.value;
+
+		for( i = 0; i < n; i++ )
+			s[i] = bound( SHRT_MIN, (int)( s[i] * gain ), SHRT_MAX );
+	}
+
 	S_RawEntSamples( entnum, samples, voice.samplerate, voice.width, VOICE_PCM_CHANNELS, data, bound( 0, 255 * voice_scale.value, 255 ), ATTN_NONE );
 	Voice_Status( entnum, true );
 }
@@ -1295,6 +1326,7 @@ void Voice_RegisterCvars( void )
 	Cvar_RegisterVariable( &voice_avggain );
 	Cvar_RegisterVariable( &voice_maxgain );
 	Cvar_RegisterVariable( &voice_inputfromfile );
+	Cvar_RegisterVariable( &voice_amplify );
 }
 
 /*

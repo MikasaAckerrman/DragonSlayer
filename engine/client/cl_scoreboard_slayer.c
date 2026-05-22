@@ -325,7 +325,7 @@ void Slayer_ParseStatusLine( const char *line )
 	slayer_steamid64[i] = steamid64;
 	slayer_avatar_tex[i] = 0; // reset so texture will be reloaded
 
-	Con_Printf( "Slayer: parsed steamid %"PRIu64" for slot %d\n", steamid64, slot );
+	Con_DPrintf( "Slayer: parsed steamid %"PRIu64" for slot %d\n", steamid64, slot );
 #if XASH_ANDROID
 	__android_log_print( ANDROID_LOG_INFO, "Xash",
 		"Slayer: parsed steamid %"PRIu64" for slot %d", steamid64, slot );
@@ -369,7 +369,7 @@ static void Slayer_LoadAvatarTexture( int slot )
 		// fresh download via Slayer_AvatarDownload_Request.
 		FS_Delete( path );
 		slayer_avatar_tex[slot] = 0;
-		Con_Printf( S_WARN "Slayer: avatar load failed for steamid=%" PRIu64 " path=%s, cache invalidated\n",
+		Con_DPrintf( S_WARN "Slayer: avatar load failed for steamid=%" PRIu64 " path=%s, cache invalidated\n",
 			slayer_steamid64[slot], path );
 #if XASH_ANDROID
 		__android_log_print( ANDROID_LOG_ERROR, "Xash",
@@ -380,7 +380,7 @@ static void Slayer_LoadAvatarTexture( int slot )
 	}
 
 	slayer_avatar_tex[slot] = texid;
-	Con_Printf( "Slayer: avatar loaded for steamid=%" PRIu64 " texid=%d path=%s\n",
+	Con_DPrintf( "Slayer: avatar loaded for steamid=%" PRIu64 " texid=%d path=%s\n",
 		slayer_steamid64[slot], texid, path );
 #if XASH_ANDROID
 	__android_log_print( ANDROID_LOG_INFO, "Xash",
@@ -471,13 +471,14 @@ static void Cmd_AvatarDiag_f( void )
 		cls.state == ca_active ? "yes" : "no",
 		clgame.mapname[0] ? clgame.mapname : "(none)" );
 
-	Slayer_DiagLine( f, "\n--- Players (slot: name | team | frags | steamid64 | tex | cache) ---\n" );
+	Slayer_DiagLine( f, "\n--- Players (slot: name | team | frags | steamid64 | tex | cache | profile) ---\n" );
 	for( i = 0; i < MAX_CLIENTS; i++ )
 	{
 		const char *name = cl.players[i].name;
 		qboolean    has_name = name && name[0] != '\0';
 		qboolean    has_id   = slayer_steamid64[i] != 0;
 		qboolean    cached;
+		const char *profile_kind;
 
 		if( !has_name && !has_id && !slayer_scores[i].connected )
 			continue;
@@ -488,15 +489,29 @@ static void Cmd_AvatarDiag_f( void )
 			"avatars/%" PRIu64 ".png", slayer_steamid64[i] );
 		cached = has_id ? FS_FileExists( file_path, false ) : false;
 
+		// Slayer3D: classify each slot so users can tell from one glance
+		// whether a missing avatar is a real Steam player who blocked
+		// avatar download, or someone whose 'status' line never reached
+		// us with a STEAM_X:Y:Z (BOT, LAN, pirate, HLTV, ...).
+		if( !has_id )
+			profile_kind = "no-steamid (BOT/LAN/pirate/HLTV)";
+		else if( slayer_avatar_tex[i] > 0 )
+			profile_kind = "real-steam (avatar OK)";
+		else if( slayer_avatar_tex[i] == -1 )
+			profile_kind = "real-steam (downloading or default-avatar)";
+		else
+			profile_kind = "real-steam (not yet processed)";
+
 		Slayer_DiagLine( f,
-			"  slot %2d: name=%-20s team=%-4s frags=%3d steamid=%" PRIu64 " tex=%-3d cache=%s\n",
+			"  slot %2d: name=%-20s team=%-4s frags=%3d steamid=%" PRIu64 " tex=%-3d cache=%s  %s\n",
 			i,
 			has_name ? name : "(empty)",
 			Slayer_TeamName( slayer_scores[i].team_id ),
 			slayer_scores[i].frags,
 			slayer_steamid64[i],
 			slayer_avatar_tex[i],
-			cached ? "HIT" : "miss" );
+			cached ? "HIT" : "miss",
+			profile_kind );
 	}
 	if( players == 0 )
 		Slayer_DiagLine( f, "  (no players known - open scoreboard to fetch info)\n" );
@@ -632,7 +647,7 @@ void Slayer_Scoreboard_Init( void )
 	Slayer_SteamAPI_Init();
 	Slayer_SteamLogin_Init();
 
-	Con_Printf( "Slayer3D: scoreboard initialized\n" );
+	Con_DPrintf( "Slayer3D: scoreboard initialized\n" );
 }
 
 void Slayer_Scoreboard_Reset( void )
@@ -868,7 +883,7 @@ void Slayer_Scoreboard_Draw( void )
 					// sticking on -1.
 					FS_Delete( avpath );
 					slayer_avatar_tex[i] = 0;
-					Con_Printf( S_WARN "Slayer: post-download avatar load failed for steamid=%" PRIu64 " path=%s, cache invalidated\n",
+					Con_DPrintf( S_WARN "Slayer: post-download avatar load failed for steamid=%" PRIu64 " path=%s, cache invalidated\n",
 						slayer_steamid64[i], avpath );
 #if XASH_ANDROID
 					__android_log_print( ANDROID_LOG_ERROR, "Xash",
@@ -879,7 +894,7 @@ void Slayer_Scoreboard_Draw( void )
 				else
 				{
 					slayer_avatar_tex[i] = texid;
-					Con_Printf( "Slayer: post-download avatar loaded for steamid=%" PRIu64 " texid=%d path=%s\n",
+					Con_DPrintf( "Slayer: post-download avatar loaded for steamid=%" PRIu64 " texid=%d path=%s\n",
 						slayer_steamid64[i], texid, avpath );
 #if XASH_ANDROID
 					__android_log_print( ANDROID_LOG_INFO, "Xash",
