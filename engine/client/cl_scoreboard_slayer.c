@@ -74,6 +74,14 @@ static double          slayer_status_next_time;       // throttle: next allowed 
 static double          slayer_status_deadline;        // until: parse # lines from svc_print
 static qboolean        slayer_status_pending;          // true while we expect status reply
 static int             slayer_steam_reject_count;     // debounce: non-STEAM lines logged per session (reset on map change)
+// Pending Steam Web API batch fetch trigger. Set by Slayer_RequestStatus()
+// to host.realtime + ~1.5s; the per-frame top of Slayer_Scoreboard_Draw
+// fires the batch when this deadline elapses (by which time most svc_print
+// status lines have been parsed and slayer_steamid64[] is populated).
+// Zero means "no pending batch". Slayer_SteamAPI_RequestBatch is itself a
+// no-op when slayer_steam_apikey is empty, so this is safe even without
+// the API key configured.
+static double          slayer_pending_batch_at;
 
 // Cached parsed cvar colors (re-parsed only when cvar string changes)
 static char   cached_bg_str[64] = "";
@@ -506,6 +514,36 @@ static void Cmd_AvatarDiag_f( void )
 }
 
 // ===========================================================================
+// Status request helper (shared by +slayer_scoreboard and OnConnected)
+// ===========================================================================
+
+// Issue a "status" command to the server (rate-limited to once per 30s),
+// open a 5s parse window for SteamID lines from svc_print, and arm a
+// deferred Steam Web API batch fetch ~1.5s out (so by then svc_print
+// replies are parsed and slayer_steamid64[] is populated).
+static void Slayer_RequestStatus( void )
+{
+	if( host.realtime < slayer_status_next_time )
+		return; // throttled
+
+	Cbuf_AddText( "status\n" );
+	slayer_status_next_time = host.realtime + 30.0;
+	slayer_status_pending = true;
+	slayer_status_deadline = host.realtime + 5.0; // 5s parse window
+	slayer_steam_reject_count = 0; // reset debounce per request
+
+	// Schedule the Steam Web API batch fetch. Single batch beats N
+	// individual XML scrapes when slayer_steam_apikey is configured.
+	slayer_pending_batch_at = host.realtime + 1.5;
+
+#if XASH_ANDROID
+	__android_log_print( ANDROID_LOG_INFO, "Xash",
+		"Slayer SB: status request queued, parse window 5s, batch in 1.5s" );
+#endif
+	Con_DPrintf( "Slayer SB: status request queued, parse window 5s, batch in 1.5s\n" );
+}
+
+// ===========================================================================
 // +slayer_scoreboard / -slayer_scoreboard commands
 // ===========================================================================
 
@@ -513,28 +551,31 @@ static void Cmd_ScoreboardDown_f( void )
 {
 	slayer_scoreboard_active = true;
 
-	// Request status to get SteamIDs (throttled to once per 30 seconds)
-	if( host.realtime >= slayer_status_next_time )
-	{
-		Cbuf_AddText( "status\n" );
-		slayer_status_next_time = host.realtime + 30.0;
-		slayer_status_pending = true;
-		slayer_status_deadline = host.realtime + 5.0; // 5s parse window
-		slayer_steam_reject_count = 0; // reset debounce per request
-#if XASH_ANDROID
-		__android_log_print( ANDROID_LOG_INFO, "Xash",
-			"Slayer SB: status request queued, parse window 5s" );
-#endif
-		Con_DPrintf( "Slayer SB: status request queued, parse window 5s\n" );
-	}
+	Slayer_RequestStatus();
 
-	// Trigger batch avatar fetch via Steam Web API (if API key is set)
+	// Best-effort immediate batch fetch with whatever IDs we already
+	// have in hand from a previous status reply. The deferred batch
+	// scheduled by Slayer_RequestStatus() will refire ~1.5s later with
+	// the freshly parsed list.
 	Slayer_SteamAPI_RequestBatch( slayer_steamid64, MAX_CLIENTS );
 }
 
 static void Cmd_ScoreboardUp_f( void )
 {
 	slayer_scoreboard_active = false;
+}
+
+// ===========================================================================
+// OnConnected hook (auto-prefetch avatars before player opens scoreboard)
+// ===========================================================================
+
+void Slayer_Scoreboard_OnConnected( void )
+{
+	// Slayer_ResetMatchState() already cleared slot tables on the
+	// previous disconnect/changelevel, so we just need to kick off
+	// the status request now. By the time the player first opens
+	// the scoreboard, most/all avatars will already be on disk.
+	Slayer_RequestStatus();
 }
 
 // ===========================================================================
@@ -596,6 +637,7 @@ void Slayer_Scoreboard_Reset( void )
 	slayer_status_next_time = 0.0;   // allow immediate re-fetch on next connect
 	slayer_status_deadline = 0.0;
 	slayer_steam_reject_count = 0;
+	slayer_pending_batch_at = 0.0;
 
 	Slayer_AvatarDownload_Reset();
 	Slayer_SteamAPI_Reset();
@@ -777,6 +819,16 @@ void Slayer_Scoreboard_Draw( void )
 
 	// Pump Steam Web API batch requests
 	Slayer_SteamAPI_Frame();
+
+	// Fire the deferred Steam Web API batch fetch if its trigger time
+	// has elapsed. This runs whether or not the scoreboard is visible,
+	// so prefetch armed by Slayer_Scoreboard_OnConnected() works while
+	// the player is still walking around the map.
+	if( slayer_pending_batch_at > 0.0 && host.realtime >= slayer_pending_batch_at )
+	{
+		slayer_pending_batch_at = 0.0;
+		Slayer_SteamAPI_RequestBatch( slayer_steamid64, MAX_CLIENTS );
+	}
 
 	// Pump avatar downloads every frame (even when scoreboard hidden)
 	if( Slayer_AvatarDownload_Frame() )
@@ -1194,19 +1246,22 @@ void Slayer_Scoreboard_Draw( void )
 			row_alpha = 128;
 		}
 
-		// Draw avatar if available
+		// Avatar slot (always reserved so the name X is constant for
+		// every player row, whether or not we have a downloaded avatar).
+		// The avatar itself sits at col_name_x and the name starts
+		// avatar_w + avatar_pad to the right of it.
 		{
-			int name_x_offset = 0;
+			const int avatar_w   = row_h; // square, equal to row height
+			const int avatar_pad = 4;
 
 			if( slayer_avatar_tex[pidx] > 0 )
 			{
 				ref.dllFuncs.GL_SetRenderMode( kRenderTransTexture );
 				ref.dllFuncs.Color4ub( 255, 255, 255, row_alpha );
-				ref.dllFuncs.R_DrawStretchPic( col_name_x, cur_y, row_h, row_h, 0, 0, 1, 1, slayer_avatar_tex[pidx] );
-				name_x_offset = row_h + 4;
+				ref.dllFuncs.R_DrawStretchPic( col_name_x, cur_y, avatar_w, avatar_w, 0, 0, 1, 1, slayer_avatar_tex[pidx] );
 			}
 
-			Con_DrawString( col_name_x + name_x_offset, cur_y + 2, name, name_color );
+			Con_DrawString( col_name_x + avatar_w + avatar_pad, cur_y + 2, name, name_color );
 		}
 
 		// Frags

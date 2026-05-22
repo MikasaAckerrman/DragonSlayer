@@ -215,6 +215,12 @@ static void CL_CheckClientState( void )
 		cls.changedemo = false;		// changedemo is done
 		cl.first_frame = true;		// first rendering frame
 
+		// Slayer3D: kick off avatar prefetch as soon as we are fully
+		// connected, so by the time the player first opens the scoreboard
+		// most/all SteamID lookups are already complete and PNGs are on
+		// disk. This is what makes the "tab is instant" UX work.
+		Slayer_Scoreboard_OnConnected();
+
 		SCR_MakeLevelShot();		// make levelshot if needs
 		Cvar_SetValue( "scr_loading", 0.0f );	// reset progress bar
 		Netchan_ReportFlow( &cls.netchan );

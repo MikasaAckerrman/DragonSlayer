@@ -30,6 +30,12 @@ void Slayer_Scoreboard_Draw( void );
 // Called from Slayer_ResetMatchState() on map change/disconnect.
 void Slayer_Scoreboard_Reset( void );
 
+// Hook for client connection complete (entered ca_active).
+// Triggers an early "status" request and pending Steam Web API batch
+// fetch so avatars are pre-downloaded before the player first opens
+// the scoreboard. Called from CL_CheckClientState in cl_main.c.
+void Slayer_Scoreboard_OnConnected( void );
+
 // Hook for server-sent "ScoreInfo" user message.
 //   pbuf  - raw payload bytes
 //   iSize - payload length
