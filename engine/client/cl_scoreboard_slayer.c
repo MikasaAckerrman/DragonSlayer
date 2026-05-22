@@ -418,7 +418,6 @@ static void Cmd_AvatarUrls_f( void )
 static void Cmd_ScoreboardDown_f( void )
 {
 	qboolean recovery_force = false;
-	int i;
 
 	slayer_scoreboard_active = true;
 
@@ -429,6 +428,7 @@ static void Cmd_ScoreboardDown_f( void )
 	// stuck staring at avatar-less rows for the full throttle.
 	if( host.realtime < slayer_status_next_time )
 	{
+		int i;
 		int harvested = 0;
 		for( i = 0; i < MAX_CLIENTS; i++ )
 		{

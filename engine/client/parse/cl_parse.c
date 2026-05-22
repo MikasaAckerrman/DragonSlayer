@@ -16,6 +16,7 @@ GNU General Public License for more details.
 #include "common.h"
 #include "client.h"
 #include "cl_scoreboard_slayer.h"
+#include "cl_hud_slayer.h"
 #include "mod_local.h"
 #include "net_encode.h"
 #include "cl_tent.h"
@@ -2352,6 +2353,11 @@ void CL_ParseUserMessage( sizebuf_t *msg, int svc_num, connprotocol_t proto )
 			Slayer_OnScoreAttrib( pbuf, iSize );
 		else if( !Q_strcmp( clgame.msg[i].name, "HealthInfo" ))
 			Slayer_OnHealthInfo( pbuf, iSize );
+
+		// Damage indicator probes a list of common server-side hit-feedback
+		// message names internally; safe to call unconditionally for every
+		// usermsg, no-op when the name is not recognized.
+		Slayer_HUD_OnDamageMessage( clgame.msg[i].name, pbuf, iSize );
 	}
 
 	if( cl_trace_messages.value )
