@@ -21,6 +21,8 @@ GNU General Public License for more details.
 #include "client.h"
 #include "cl_scoreboard_slayer.h"
 #include "cl_avatar_download.h"
+#include "cl_steam_api.h"
+#include "cl_steam_login.h"
 
 #if XASH_ANDROID
 #include <android/log.h>
@@ -421,6 +423,9 @@ static void Cmd_ScoreboardDown_f( void )
 #endif
 		Con_DPrintf( "Slayer SB: status request queued, parse window 5s\n" );
 	}
+
+	// Trigger batch avatar fetch via Steam Web API (if API key is set)
+	Slayer_SteamAPI_RequestBatch( slayer_steamid64, MAX_CLIENTS );
 }
 
 static void Cmd_ScoreboardUp_f( void )
@@ -469,6 +474,8 @@ void Slayer_Scoreboard_Init( void )
 		"print Steam avatar download URLs for all players" );
 
 	Slayer_AvatarDownload_Init();
+	Slayer_SteamAPI_Init();
+	Slayer_SteamLogin_Init();
 
 	Con_Printf( "Slayer3D: scoreboard initialized\n" );
 }
@@ -485,6 +492,7 @@ void Slayer_Scoreboard_Reset( void )
 	slayer_steam_reject_count = 0;
 
 	Slayer_AvatarDownload_Reset();
+	Slayer_SteamAPI_Reset();
 }
 
 void Slayer_OnHealthUpdate( int hp )
@@ -660,6 +668,9 @@ void Slayer_Scoreboard_Draw( void )
 	rgba_t       color_bg;
 	int          global_opacity;
 	cl_font_t   *font;
+
+	// Pump Steam Web API batch requests
+	Slayer_SteamAPI_Frame();
 
 	// Pump avatar downloads every frame (even when scoreboard hidden)
 	if( Slayer_AvatarDownload_Frame() )

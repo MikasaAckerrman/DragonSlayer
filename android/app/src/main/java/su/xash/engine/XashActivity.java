@@ -425,4 +425,40 @@ public class XashActivity extends SDLActivity {
 
 		return content;
 	}
+
+	// =========================================================================
+	// Steam OpenID Login - launches SteamLoginActivity WebView
+	// =========================================================================
+
+	/**
+	 * Start the Steam OpenID login WebView Activity.
+	 * Called from native C via JNI.
+	 *
+	 * @param realm    OpenID realm URL
+	 * @param returnTo OpenID return_to URL
+	 */
+	public static void startSteamLogin( String realm, String returnTo )
+	{
+		android.content.Context ctx = SDLActivity.getContext();
+		if( ctx == null )
+		{
+			Log.e( TAG, "startSteamLogin: no context" );
+			return;
+		}
+
+		android.content.Intent intent = new android.content.Intent( ctx, SteamLoginActivity.class );
+		intent.putExtra( "realm", realm );
+		intent.putExtra( "returnTo", returnTo );
+		intent.addFlags( android.content.Intent.FLAG_ACTIVITY_NEW_TASK );
+		ctx.startActivity( intent );
+		Log.i( TAG, "startSteamLogin: launched SteamLoginActivity" );
+	}
+
+	/**
+	 * Native callback for Steam login result.
+	 * Called by SteamLoginActivity when login completes or fails.
+	 *
+	 * @param steamid64 The SteamID64, or -1 if login failed/cancelled
+	 */
+	public static native void nativeSteamLoginResult( long steamid64 );
 }
