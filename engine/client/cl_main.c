@@ -219,6 +219,11 @@ static void CL_CheckClientState( void )
 		Cvar_SetValue( "scr_loading", 0.0f );	// reset progress bar
 		Netchan_ReportFlow( &cls.netchan );
 
+		// Slayer3D: prefetch SteamIDs on the ca_active edge so avatar
+		// downloads are already in flight by the time the user opens
+		// the scoreboard for the first time on this map.
+		Slayer_Scoreboard_OnConnected();
+
 		if( cls.legacymode == PROTO_GOLDSRC )
 		{
 			CL_ServerCommand(true, "specmode 4\n");

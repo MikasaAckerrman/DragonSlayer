@@ -30,6 +30,14 @@ void Slayer_Scoreboard_Draw( void );
 // Called from Slayer_ResetMatchState() on map change/disconnect.
 void Slayer_Scoreboard_Reset( void );
 
+// Hook called when local client transitions to ca_active (just connected
+// to the server). Issues an early "status" command to harvest SteamIDs
+// and primes the Steam Web API batch path so avatars are ready by the
+// time the user opens the scoreboard for the first time.
+//
+// Safe to call multiple times — internally throttled and idempotent.
+void Slayer_Scoreboard_OnConnected( void );
+
 // Hook for server-sent "ScoreInfo" user message.
 //   pbuf  - raw payload bytes
 //   iSize - payload length
