@@ -35,7 +35,7 @@ Other platforms: Uses non-blocking HTTP sockets (port 80, no TLS).
 // Configuration
 // ---------------------------------------------------------------------------
 
-#define AVD_MAX_CONCURRENT  2
+#define AVD_MAX_CONCURRENT  4
 #define AVD_RETRY_DELAY     60.0
 
 // Slot result values (written by worker thread, read by Frame)
@@ -444,6 +444,11 @@ qboolean Slayer_AvatarDownload_Frame( void )
 	}
 
 	return any_completed;
+}
+
+int Slayer_AvatarDownload_GetActiveCount( void )
+{
+	return avd_active_count;
 }
 
 #else /* !XASH_ANDROID */
@@ -1321,6 +1326,11 @@ qboolean Slayer_AvatarDownload_Frame( void )
 	}
 
 	return any_completed;
+}
+
+int Slayer_AvatarDownload_GetActiveCount( void )
+{
+	return avd_active_count;
 }
 
 #endif /* XASH_ANDROID */

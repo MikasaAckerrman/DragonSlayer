@@ -38,4 +38,10 @@ qboolean Slayer_AvatarDownload_Frame( void );
 // Reset all download state (on disconnect/map change).
 void Slayer_AvatarDownload_Reset( void );
 
+// Diagnostic: number of worker threads currently in flight (Android) or
+// active sockets (non-Android). Useful for `slayer_avatar_diag` to surface
+// when the AVD_MAX_CONCURRENT throttle is the reason scoreboard slots are
+// stuck on PENDING.
+int Slayer_AvatarDownload_GetActiveCount( void );
+
 #endif // CL_AVATAR_DOWNLOAD_H

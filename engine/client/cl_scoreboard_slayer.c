@@ -556,6 +556,8 @@ static void Cmd_AvatarDiag_f( void )
 		slayer_status_next_time, slayer_steam_reject_count );
 	Con_Printf( "client: state=%d maxclients=%d playernum=%d\n",
 		(int)cls.state, cl.maxclients, cl.playernum );
+	Con_Printf( "downloader: active_workers=%d (cap 4)\n",
+		Slayer_AvatarDownload_GetActiveCount() );
 	if( slayer_status_first_reject[0] != '\0' )
 		Con_Printf( "first rejected '#' line: %s\n", slayer_status_first_reject );
 	Con_Printf( "%-3s %-20s %-7s %-20s %-10s %s\n",
@@ -904,7 +906,17 @@ void Slayer_Scoreboard_Draw( void )
 
 				Q_snprintf( avpath, sizeof( avpath ), "avatars/%" PRIu64 ".png", slayer_steamid64[i] );
 				if( !FS_FileExists( avpath, false ) )
+				{
+					// File still not on disk — typically because the worker queue
+					// was full when this slot was first queued (AVD_MAX_CONCURRENT).
+					// Now that another download just completed there is at least
+					// one free slot, so re-fire the request. Slayer_AvatarDownload_Request
+					// is idempotent: it no-ops on slots already IN_PROGRESS, queues fresh
+					// ones, and silently drops anything still over the concurrent limit
+					// — those will be retried on the next Frame() completion.
+					Slayer_AvatarDownload_Request( slayer_steamid64[i], i );
 					continue;
+				}
 
 				texid = ref.dllFuncs.GL_LoadTexture( avpath, NULL, 0, TF_IMAGE );
 				if( texid == 0 )
