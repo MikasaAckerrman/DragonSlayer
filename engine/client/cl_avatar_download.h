@@ -38,4 +38,9 @@ qboolean Slayer_AvatarDownload_Frame( void );
 // Reset all download state (on disconnect/map change).
 void Slayer_AvatarDownload_Reset( void );
 
+// Dump internal downloader state to console and (if non-NULL) to a file.
+// Used by the slayer_avatar_diag console command.
+struct file_s;
+void Slayer_AvatarDownload_Diag( struct file_s *f );
+
 #endif // CL_AVATAR_DOWNLOAD_H

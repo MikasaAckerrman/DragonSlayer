@@ -446,6 +446,67 @@ qboolean Slayer_AvatarDownload_Frame( void )
 	return any_completed;
 }
 
+// ---------------------------------------------------------------------------
+// Diagnostic dump
+// ---------------------------------------------------------------------------
+
+static const char *AVD_ResultName( int r )
+{
+	switch( r )
+	{
+	case AVD_RESULT_IDLE:        return "IDLE";
+	case AVD_RESULT_IN_PROGRESS: return "IN_PROGRESS";
+	case AVD_RESULT_SUCCESS:     return "SUCCESS";
+	case AVD_RESULT_FAIL:        return "FAIL";
+	case AVD_RESULT_DONE:        return "DONE";
+	default:                     return "?";
+	}
+}
+
+static void AVD_DiagLine( file_t *f, const char *fmt, ... )
+{
+	char buf[1024];
+	va_list ap;
+
+	va_start( ap, fmt );
+	Q_vsnprintf( buf, sizeof( buf ), fmt, ap );
+	va_end( ap );
+
+	Con_Printf( "%s", buf );
+	if( f )
+		FS_Print( f, buf );
+}
+
+void Slayer_AvatarDownload_Diag( file_t *f )
+{
+	int i, busy = 0;
+
+	AVD_DiagLine( f, "  cvar slayer_avatar_download = %g\n",
+		slayer_avatar_download.value );
+	AVD_DiagLine( f, "  JNI: jvm=%s class=%s method=%s\n",
+		avd_jvm ? "OK" : "NULL",
+		avd_activity_class ? "OK" : "NULL",
+		avd_download_method ? "OK" : "NULL" );
+	AVD_DiagLine( f, "  active_count = %d / %d\n",
+		avd_active_count, AVD_MAX_CONCURRENT );
+
+	__sync_synchronize();
+	for( i = 0; i < MAX_CLIENTS; i++ )
+	{
+		int r = avd_slot_result[i];
+		if( r == AVD_RESULT_IDLE && avd_slot_id[i] == 0 )
+			continue;
+		busy++;
+		AVD_DiagLine( f,
+			"  slot %2d: result=%-11s steamid=%" PRIu64 " fail_age=%.1fs\n",
+			i, AVD_ResultName( r ), avd_slot_id[i],
+			avd_slot_fail_time[i] > 0.0 ? host.realtime - avd_slot_fail_time[i] : 0.0 );
+	}
+
+	if( busy == 0 )
+		AVD_DiagLine( f, "  (no downloader slots in use)\n" );
+}
+
 #else /* !XASH_ANDROID */
 // ===========================================================================
 // NON-ANDROID IMPLEMENTATION - HTTP sockets (original)
@@ -1321,6 +1382,91 @@ qboolean Slayer_AvatarDownload_Frame( void )
 	}
 
 	return any_completed;
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostic dump
+// ---------------------------------------------------------------------------
+
+static const char *AVD_SlotStateName( avd_slot_state_t s )
+{
+	switch( s )
+	{
+	case AVD_SLOT_NONE:   return "NONE";
+	case AVD_SLOT_QUEUED: return "QUEUED";
+	case AVD_SLOT_ACTIVE: return "ACTIVE";
+	case AVD_SLOT_DONE:   return "DONE";
+	case AVD_SLOT_FAILED: return "FAILED";
+	default:              return "?";
+	}
+}
+
+static const char *AVD_StateName( avd_state_t s )
+{
+	switch( s )
+	{
+	case AVD_STATE_RESOLVE:     return "RESOLVE";
+	case AVD_STATE_CONNECT:     return "CONNECT";
+	case AVD_STATE_SEND:        return "SEND";
+	case AVD_STATE_RECV_HEADER: return "RECV_HEADER";
+	case AVD_STATE_RECV_BODY:   return "RECV_BODY";
+	case AVD_STATE_DONE:        return "DONE";
+	default:                    return "?";
+	}
+}
+
+static void AVD_DiagLine( file_t *f, const char *fmt, ... )
+{
+	char buf[1024];
+	va_list ap;
+
+	va_start( ap, fmt );
+	Q_vsnprintf( buf, sizeof( buf ), fmt, ap );
+	va_end( ap );
+
+	Con_Printf( "%s", buf );
+	if( f )
+		FS_Print( f, buf );
+}
+
+void Slayer_AvatarDownload_Diag( file_t *f )
+{
+	avd_request_t *req;
+	int i, busy = 0, in_flight = 0;
+
+	AVD_DiagLine( f, "  cvar slayer_avatar_download = %g\n",
+		slayer_avatar_download.value );
+	AVD_DiagLine( f, "  active_count = %d / %d, resolving = %s\n",
+		avd_active_count, AVATAR_MAX_CONCURRENT,
+		avd_resolving ? "yes" : "no" );
+
+	for( i = 0; i < MAX_CLIENTS; i++ )
+	{
+		if( avd_slot_state[i] == AVD_SLOT_NONE && avd_slot_id[i] == 0 )
+			continue;
+		busy++;
+		AVD_DiagLine( f,
+			"  slot %2d: state=%-7s steamid=%" PRIu64 " fail_age=%.1fs\n",
+			i, AVD_SlotStateName( avd_slot_state[i] ), avd_slot_id[i],
+			avd_slot_fail_time[i] > 0.0 ? host.realtime - avd_slot_fail_time[i] : 0.0 );
+	}
+
+	if( busy == 0 )
+		AVD_DiagLine( f, "  (no downloader slots in use)\n" );
+
+	for( req = avd_active; req; req = req->next )
+	{
+		in_flight++;
+		AVD_DiagLine( f,
+			"  active req: slot=%d steamid=%" PRIu64 " phase=%s state=%s redirects=%d host=%s path=%s age=%.1fs\n",
+			req->slot, req->steamid64,
+			req->phase == AVD_PHASE_XML ? "XML" : "IMAGE",
+			AVD_StateName( req->state ),
+			req->redirect_count, req->target_host, req->target_path,
+			host.realtime - req->start_time );
+	}
+	if( in_flight == 0 )
+		AVD_DiagLine( f, "  (no in-flight HTTP requests)\n" );
 }
 
 #endif /* XASH_ANDROID */

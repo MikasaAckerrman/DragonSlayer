@@ -401,6 +401,110 @@ static void Cmd_AvatarUrls_f( void )
 		Con_Printf( "Place avatar images at: avatars/<steamid64>.png\n" );
 }
 
+// ---------------------------------------------------------------------------
+// slayer_avatar_diag - dump scoreboard + avatar download state to console
+// AND mirror everything into avatars/diag.txt inside the gamedir, so the
+// user can grab it from a file manager on Android (no PC/adb required).
+// ---------------------------------------------------------------------------
+
+static const char *Slayer_TeamName( int team_id )
+{
+	switch( team_id )
+	{
+	case SLAYER_TEAM_T:         return "T";
+	case SLAYER_TEAM_CT:        return "CT";
+	case SLAYER_TEAM_SPECTATOR: return "SPEC";
+	case SLAYER_TEAM_UNASSIGNED:
+	default:                    return "-";
+	}
+}
+
+static void Slayer_DiagLine( file_t *f, const char *fmt, ... )
+{
+	char buf[1024];
+	va_list ap;
+
+	va_start( ap, fmt );
+	Q_vsnprintf( buf, sizeof( buf ), fmt, ap );
+	va_end( ap );
+
+	Con_Printf( "%s", buf );
+	if( f )
+		FS_Print( f, buf );
+}
+
+static void Cmd_AvatarDiag_f( void )
+{
+	file_t *f;
+	int     i, players = 0;
+	char    file_path[128];
+
+	// Open file in current gamedir as avatars/diag.txt. This is the same
+	// directory the downloader writes <steamid64>.png into, so the user
+	// can find both side-by-side from their file manager.
+	f = FS_Open( "avatars/diag.txt", "w", false );
+	if( !f )
+	{
+		Con_Printf( S_WARN "slayer_avatar_diag: could not open avatars/diag.txt for write (continuing with console-only output)\n" );
+	}
+
+	Slayer_DiagLine( f, "=== Slayer3D avatar diagnostic dump ===\n" );
+	Slayer_DiagLine( f, "Time: %s   Realtime: %.2fs\n",
+		Q_timestamp( TIME_FULL ), host.realtime );
+	Slayer_DiagLine( f, "Connected: %s   Map: %s\n",
+		cls.state == ca_active ? "yes" : "no",
+		clgame.mapname[0] ? clgame.mapname : "(none)" );
+
+	Slayer_DiagLine( f, "\n--- Players (slot: name | team | frags | steamid64 | tex | cache) ---\n" );
+	for( i = 0; i < MAX_CLIENTS; i++ )
+	{
+		const char *name = cl.players[i].name;
+		qboolean    has_name = name && name[0] != '\0';
+		qboolean    has_id   = slayer_steamid64[i] != 0;
+		qboolean    cached;
+
+		if( !has_name && !has_id && !slayer_scores[i].connected )
+			continue;
+
+		players++;
+
+		Q_snprintf( file_path, sizeof( file_path ),
+			"avatars/%" PRIu64 ".png", slayer_steamid64[i] );
+		cached = has_id ? FS_FileExists( file_path, false ) : false;
+
+		Slayer_DiagLine( f,
+			"  slot %2d: name=%-20s team=%-4s frags=%3d steamid=%" PRIu64 " tex=%-3d cache=%s\n",
+			i,
+			has_name ? name : "(empty)",
+			Slayer_TeamName( slayer_scores[i].team_id ),
+			slayer_scores[i].frags,
+			slayer_steamid64[i],
+			slayer_avatar_tex[i],
+			cached ? "HIT" : "miss" );
+	}
+	if( players == 0 )
+		Slayer_DiagLine( f, "  (no players known - open scoreboard to fetch info)\n" );
+
+	Slayer_DiagLine( f, "\n--- Scoreboard state ---\n" );
+	Slayer_DiagLine( f, "  active=%s  status_pending=%s  next_status_in=%.1fs  parse_window_left=%.1fs  steam_rejects=%d\n",
+		slayer_scoreboard_active ? "yes" : "no",
+		slayer_status_pending ? "yes" : "no",
+		slayer_status_next_time > host.realtime ? slayer_status_next_time - host.realtime : 0.0,
+		slayer_status_deadline > host.realtime ? slayer_status_deadline - host.realtime : 0.0,
+		slayer_steam_reject_count );
+
+	Slayer_DiagLine( f, "\n--- Avatar downloader ---\n" );
+	Slayer_AvatarDownload_Diag( f );
+
+	Slayer_DiagLine( f, "\n=== end of dump ===\n" );
+
+	if( f )
+	{
+		FS_Close( f );
+		Con_Printf( "slayer_avatar_diag: written to avatars/diag.txt in your gamedir\n" );
+	}
+}
+
 // ===========================================================================
 // +slayer_scoreboard / -slayer_scoreboard commands
 // ===========================================================================
@@ -472,6 +576,8 @@ void Slayer_Scoreboard_Init( void )
 		"hide Slayer3D custom scoreboard" );
 	Cmd_AddCommand( "slayer_avatar_urls", Cmd_AvatarUrls_f,
 		"print Steam avatar download URLs for all players" );
+	Cmd_AddCommand( "slayer_avatar_diag", Cmd_AvatarDiag_f,
+		"dump avatar/scoreboard state to console and avatars/diag.txt" );
 
 	Slayer_AvatarDownload_Init();
 	Slayer_SteamAPI_Init();
