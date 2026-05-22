@@ -1,7 +1,18 @@
 name: Build & Deploy Android APK
+# Slayer3D: triggers are intentionally narrow.
+#   * push           - fires on every push to any branch in this repo,
+#                      which is how feature branches and master alike
+#                      get their continuous APK rebuilt.
+#   * workflow_dispatch - manual run from the Actions tab, with the
+#                      build_mode selector (full / quick).
+# We deliberately do NOT subscribe to `pull_request`. Every commit
+# pushed to a branch that already has an open PR would otherwise fire
+# BOTH push and pull_request:synchronize events, building the APK
+# twice and racing on the `continuous` release tag. The push event
+# alone covers all in-repo branches; external fork PRs (which push
+# does not trigger) are not part of this fork's workflow today.
 on:
   push:
-  pull_request:
   workflow_dispatch:
     inputs:
       build_mode:
@@ -12,6 +23,14 @@ on:
         options:
           - full
           - quick
+
+# Cancel an in-flight build if a newer commit lands on the same ref.
+# Without this, three rapid pushes (typical when iterating) would queue
+# three back-to-back ~30-minute builds and only the last one's APK
+# would ever ship - the earlier two just burn minutes.
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
 
 # Slayer3D: only Android APK is built and released. All desktop, console
 # and Flatpak targets are intentionally disabled - they're not needed for
