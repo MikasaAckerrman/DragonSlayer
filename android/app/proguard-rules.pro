@@ -21,12 +21,26 @@
 #-renamesourcefileattribute SourceFile
 
 -keep class su.xash.engine.XashActivity {
+    # Instance methods called from native code via JNI (existing).
     java.lang.String loadAndroidID();
     java.lang.String getAndroidID();
     void saveAndroidID(java.lang.String);
     java.lang.String getCallingPackage();
     java.lang.String[] getAssetsList(boolean, java.lang.String);
     android.content.res.AssetManager getAssets(boolean);
+
+    # Slayer3D: static methods called from JNI by the engine
+    # (downloadAvatar, startSteamLogin, ...). Keep ALL public statics
+    # so future additions don't silently fail at runtime with
+    # GetStaticMethodID returning NULL on release/continuous builds.
+    public static *;
+}
+
+# Slayer3D: SteamAPIHelper.fetchBatchAvatars is called from JNI by the
+# engine's cl_steam_api.c. Same pragmatic rule: keep all public statics
+# in this helper class so JNI lookups don't fail after R8 minification.
+-keep class su.xash.engine.SteamAPIHelper {
+    public static *;
 }
 
 -keep,includedescriptorclasses,allowoptimization class org.libsdl.app.SDLInputConnection {
