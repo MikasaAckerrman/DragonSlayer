@@ -100,6 +100,12 @@
 				<action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
 			</intent-filter>
 		</activity>
+
+		<activity
+			android:name=".SteamLoginActivity"
+			android:configChanges="orientation|screenSize"
+			android:exported="false"
+			android:theme="@android:style/Theme.NoTitleBar" />
 	</application>
 	<queries>
 		<intent>
