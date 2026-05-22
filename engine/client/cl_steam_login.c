@@ -127,8 +127,6 @@ void Slayer_SteamLogin_Init( void )
 	jobject activity;
 	jclass cls;
 
-	slogin_initialized = false;
-
 	Cmd_AddCommand( "slayer_steam_login", Cmd_SteamLogin_f,
 		"Start Steam OpenID login via WebView" );
 	Cmd_AddCommand( "slayer_steam_logout", Cmd_SteamLogout_f,
@@ -138,17 +136,24 @@ void Slayer_SteamLogin_Init( void )
 
 	SLogin_LoadSavedID();
 
+	// Always mark as initialized so commands work (login/logout/status).
+	// The WebView JNI path is optional — if startSteamLogin method is not
+	// found (old APK without new Java class), Start() will print an error.
+	slogin_initialized = true;
+	slogin_start_method = NULL;
+	slogin_activity_class = NULL;
+
 	env = (JNIEnv *)SDL_AndroidGetJNIEnv();
 	if( !env )
 	{
-		Con_Printf( S_WARN "SteamLogin: failed to get JNIEnv\n" );
+		Con_Printf( S_WARN "SteamLogin: JNI not available, WebView login disabled\n" );
 		return;
 	}
 
 	activity = (jobject)SDL_AndroidGetActivity();
 	if( !activity )
 	{
-		Con_Printf( S_WARN "SteamLogin: failed to get activity\n" );
+		Con_Printf( S_WARN "SteamLogin: no activity, WebView login disabled\n" );
 		return;
 	}
 
@@ -156,19 +161,13 @@ void Slayer_SteamLogin_Init( void )
 	(*env)->DeleteLocalRef( env, activity );
 
 	if( !cls )
-	{
-		Con_Printf( S_WARN "SteamLogin: GetObjectClass failed\n" );
 		return;
-	}
 
 	slogin_activity_class = (*env)->NewGlobalRef( env, cls );
 	(*env)->DeleteLocalRef( env, cls );
 
 	if( !slogin_activity_class )
-	{
-		Con_Printf( S_WARN "SteamLogin: NewGlobalRef failed\n" );
 		return;
-	}
 
 	// Method: static void startSteamLogin(String realm, String returnTo)
 	slogin_start_method = (*env)->GetStaticMethodID( env, slogin_activity_class,
@@ -182,13 +181,14 @@ void Slayer_SteamLogin_Init( void )
 			(*env)->ExceptionDescribe( env );
 			(*env)->ExceptionClear( env );
 		}
-		Con_Printf( S_WARN "SteamLogin: startSteamLogin method not found\n" );
+		// Method not found — old APK without new Java class.
+		// Login commands still work (status/logout), just Start() won't open WebView.
+		Con_Printf( "Slayer3D: Steam login init OK (WebView unavailable — rebuild APK)\n" );
 		(*env)->DeleteGlobalRef( env, slogin_activity_class );
 		slogin_activity_class = NULL;
 		return;
 	}
 
-	slogin_initialized = true;
 	Con_Printf( "Slayer3D: Steam login init OK (Android/WebView)\n" );
 }
 
@@ -198,9 +198,11 @@ void Slayer_SteamLogin_Start( void )
 	JNIEnv *env;
 	jstring j_realm, j_return_to;
 
-	if( !slogin_initialized || !slogin_start_method )
+	if( !slogin_start_method || !slogin_activity_class )
 	{
-		Con_Printf( S_ERROR "SteamLogin: not initialized\n" );
+		Con_Printf( S_WARN "SteamLogin: WebView not available.\n" );
+		Con_Printf( "  Rebuild APK with new Java classes, or set SteamID manually:\n" );
+		Con_Printf( "  Create file 'slayer_steamid.cfg' with your SteamID64.\n" );
 		return;
 	}
 
