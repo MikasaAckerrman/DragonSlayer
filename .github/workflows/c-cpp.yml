@@ -52,7 +52,11 @@ jobs:
     name: "Publish APK to Releases"
     runs-on: ubuntu-latest
     needs: [build]
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+    # Slayer3D: publish the 'continuous' release on every push, regardless
+    # of branch, so feature branches (slayer3d/*) can be smoke-tested on
+    # device without merging to master first. The tag is overwritten in
+    # place, so master pushes always win the final slot.
+    if: ${{ github.event_name == 'push' }}
     steps:
     - name: Checkout
       uses: actions/checkout@v6
@@ -73,6 +77,6 @@ jobs:
         gh release delete "$TAG" --cleanup-tag --yes || true
         gh release create "$TAG" \
           --title "$TITLE" \
-          --notes "Latest Android build from master. Source code archives are attached automatically by GitHub." \
+          --notes "Latest Android build from ${GITHUB_REF_NAME}. Source code archives are attached automatically by GitHub." \
           --target "$GITHUB_SHA" \
           ./apk/*

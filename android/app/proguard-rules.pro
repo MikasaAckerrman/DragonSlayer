@@ -29,6 +29,30 @@
     android.content.res.AssetManager getAssets(boolean);
 }
 
+# Slayer3D: JNI bridge methods called from native code. R8 cannot see the
+# JNI call sites in libxash.so, so without these explicit keeps it strips
+# the methods (release build) and the native loader logs:
+#   "AvatarDL: failed to find downloadAvatar method"
+# Effect on the user: avatars never download, scoreboard stays empty.
+-keep class su.xash.engine.XashActivity {
+    public static int downloadAvatar(java.lang.String, java.lang.String);
+    public static void startSteamLogin(java.lang.String, java.lang.String);
+    public static native void nativeSteamLoginResult(long);
+}
+
+# Slayer3D Steam Web API helper - called via JNI from cl_steam_api.c.
+# Keep class + every public/static method we resolve from native side.
+-keep class su.xash.engine.SteamAPIHelper {
+    public static int fetchBatchAvatars(java.lang.String, java.lang.String, java.lang.String);
+    *;
+}
+
+# Slayer3D OpenID WebView login Activity - launched via Intent from
+# XashActivity.startSteamLogin and reflected by name in AndroidManifest.
+-keep class su.xash.engine.SteamLoginActivity {
+    *;
+}
+
 -keep,includedescriptorclasses,allowoptimization class org.libsdl.app.SDLInputConnection {
     void nativeCommitText(java.lang.String, int);
     void nativeGenerateScancodeForUnichar(char);
