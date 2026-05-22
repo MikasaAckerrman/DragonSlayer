@@ -74,6 +74,7 @@ static double          slayer_status_next_time;       // throttle: next allowed 
 static double          slayer_status_deadline;        // until: parse # lines from svc_print
 static qboolean        slayer_status_pending;          // true while we expect status reply
 static int             slayer_steam_reject_count;     // debounce: non-STEAM lines logged per session (reset on map change)
+static char            slayer_status_first_reject[256]; // first '#'-line that the parser could not extract STEAM_ from (diag aid)
 
 // Cached parsed cvar colors (re-parsed only when cvar string changes)
 static char   cached_bg_str[64] = "";
@@ -305,33 +306,59 @@ static void Slayer_ParseStatusLine_Single( const char *line )
 	while( *p == ' ' || *p == '\t' )
 		p++;
 
-	// Parse STEAM_X:Y:Z
-	if( Q_strncmp( p, "STEAM_", 6 ) != 0 )
+	// Find STEAM_X:Y:Z anywhere in the rest of the line.
+	//
+	// The naive approach (require STEAM_ to start exactly here) breaks on
+	// real CS servers because ReGameDLL builds and AMX-based stat plugins
+	// add an extra column between the quoted name and the SteamID. Common
+	// variants observed in the wild:
+	//
+	//     # 1 "Player" STEAM_0:0:1   ...                  vanilla HLDS
+	//     # 1 "Player" 12 STEAM_0:0:1   ...               ReHLDS w/ frag column
+	//     # 1 "Player" "STEAM_0:0:1"   ...                quoted uniqueid (some plugins)
+	//     # 1 "Player" 0 5 00:31 STEAM_0:0:1 ...          plugin-mangled order
+	//
+	// The user's first session showed rejects_logged=8/8 with parsed=0
+	// — i.e. every single '#' line was rejected because STEAM_ was not
+	// in the slot we hardcoded. Forward-scan instead: the SteamID's own
+	// shape (STEAM_<digit>:<digit>:<digits>) is unambiguous enough that
+	// matching the literal "STEAM_" anywhere on the row is safe.
 	{
+		const char *steam_at = Q_strstr( p, "STEAM_" );
+		if( !steam_at )
+		{
+			// Capture the first rejected raw line so the user can inspect
+			// the actual server format via `slayer_avatar_diag` without
+			// pulling adb logcat.
+			if( slayer_status_first_reject[0] == '\0' )
+				Q_strncpy( slayer_status_first_reject, line, sizeof( slayer_status_first_reject ) );
+
 		// Non-STEAM row (BOT, STEAM_ID_LAN, STEAM_ID_BOT, HLTV, VALVE_ID_LAN, ...)
 		// is silently rejected because there is no Steam avatar to fetch. Log
 		// the first 8 rejections per session at DEBUG so the user can confirm
 		// from 'adb logcat -s Xash *:D' why no avatars appear in single-player
 		// or LAN games.
-		if( slayer_steam_reject_count < 8 )
-		{
-			char prefix[17];
-			int  k;
-			for( k = 0; k < 16 && p[k] != '\0' && p[k] != ' ' && p[k] != '\t' && p[k] != '\r' && p[k] != '\n'; k++ )
-				prefix[k] = p[k];
-			prefix[k] = '\0';
-			slayer_steam_reject_count++;
+			if( slayer_steam_reject_count < 8 )
+			{
+				char prefix[17];
+				int  k;
+				for( k = 0; k < 16 && p[k] != '\0' && p[k] != ' ' && p[k] != '\t' && p[k] != '\r' && p[k] != '\n'; k++ )
+					prefix[k] = p[k];
+				prefix[k] = '\0';
+				slayer_steam_reject_count++;
 #if XASH_ANDROID
-			__android_log_print( ANDROID_LOG_DEBUG, "Xash",
-				"Slayer: status line userid=%d name='%s' has no real STEAM_ id (got '%s'), no avatar (skip %d/8)",
-				userid, namebuf, prefix, slayer_steam_reject_count );
+				__android_log_print( ANDROID_LOG_DEBUG, "Xash",
+					"Slayer: status line userid=%d name='%s' has no real STEAM_ id (got '%s'), no avatar (skip %d/8)",
+					userid, namebuf, prefix, slayer_steam_reject_count );
 #endif
-			Con_DPrintf( "Slayer: status line userid=%d name='%s' has no real STEAM_ id (got '%s'), no avatar (skip %d/8)\n",
-				userid, namebuf, prefix, slayer_steam_reject_count );
+				Con_DPrintf( "Slayer: status line userid=%d name='%s' has no real STEAM_ id (got '%s'), no avatar (skip %d/8)\n",
+					userid, namebuf, prefix, slayer_steam_reject_count );
+			}
+			return;
 		}
-		return;
+		// Re-anchor parser past the STEAM_ literal — the X:Y:Z digits start here.
+		p = steam_at + 6;
 	}
-	p += 6;
 
 	// X
 	steam_x = 0;
@@ -529,6 +556,8 @@ static void Cmd_AvatarDiag_f( void )
 		slayer_status_next_time, slayer_steam_reject_count );
 	Con_Printf( "client: state=%d maxclients=%d playernum=%d\n",
 		(int)cls.state, cl.maxclients, cl.playernum );
+	if( slayer_status_first_reject[0] != '\0' )
+		Con_Printf( "first rejected '#' line: %s\n", slayer_status_first_reject );
 	Con_Printf( "%-3s %-20s %-7s %-20s %-10s %s\n",
 		"slot", "name", "userid", "steamid64", "tex", "cache" );
 
@@ -580,6 +609,7 @@ static void Cmd_AvatarForce_f( void )
 	slayer_status_pending   = true;
 	slayer_status_deadline  = host.realtime + 5.0;
 	slayer_steam_reject_count = 0;
+	slayer_status_first_reject[0] = '\0';
 	Cbuf_AddText( "status\n" );
 	Con_Printf( "Slayer3D: forced status request, parse window 5s\n" );
 }
@@ -600,6 +630,7 @@ static void Cmd_ScoreboardDown_f( void )
 		slayer_status_pending = true;
 		slayer_status_deadline = host.realtime + 5.0; // 5s parse window
 		slayer_steam_reject_count = 0; // reset debounce per request
+		slayer_status_first_reject[0] = '\0'; // arm the diag capture
 #if XASH_ANDROID
 		__android_log_print( ANDROID_LOG_INFO, "Xash",
 			"Slayer SB: status request queued, parse window 5s" );
@@ -677,6 +708,7 @@ void Slayer_Scoreboard_Reset( void )
 	slayer_status_next_time = 0.0;   // allow immediate re-fetch on next connect
 	slayer_status_deadline = 0.0;
 	slayer_steam_reject_count = 0;
+	slayer_status_first_reject[0] = '\0';
 
 	Slayer_AvatarDownload_Reset();
 	Slayer_SteamAPI_Reset();
