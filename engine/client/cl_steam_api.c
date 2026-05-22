@@ -613,6 +613,32 @@ static void SAPI_ParseResponse( void )
 
 		if( avatar_val && avatar_len > 10 )
 		{
+			// Slayer3D: skip the stock Steam "no avatar" silhouette so we
+			// don't render the default head for accounts without a profile
+			// picture (and for pirate connections that arrive via the
+			// community XML under the same default hash).
+			qboolean is_default = false;
+			{
+				const char *needle = "fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb";
+				const int   nlen   = 40;
+				const char *p, *p_end;
+				p_end = avatar_val + ( avatar_len - nlen );
+				for( p = avatar_val; p <= p_end; p++ )
+				{
+					if( Q_strncmp( p, needle, nlen ) == 0 )
+					{
+						is_default = true;
+						break;
+					}
+				}
+			}
+			if( is_default )
+			{
+				Con_DPrintf( "SteamAPI: skipping default Steam silhouette for %" PRIu64 "\n",
+					steamid64 );
+				goto next_obj;
+			}
+
 			// We got the avatar URL! Log it.
 			// The non-Android path cannot download HTTPS images directly.
 			// But if the URL happens to be HTTP or we add a per-image

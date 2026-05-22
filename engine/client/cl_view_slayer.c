@@ -474,6 +474,12 @@ void Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 			if( vol > 0.0f )
 				S_StartLocalSound( snd, vol, false );
 		}
+
+		// Slayer3D: feed the crosshair damage indicator a synthetic
+		// "you dealt this much" event on every confirmed kill, since
+		// most stock servers don't broadcast per-shot dealt-damage
+		// usermsgs that Slayer_HUD_OnDamageDealtMsg could pick up.
+		Slayer_HUD_OnLocalKill();
 	}
 
 	(void)weapon_str; // used by killsound path only for future extensions

@@ -45,4 +45,11 @@ void Slayer_HUD_OnDamageMsg( const byte *pbuf, int iSize );
 //   iSize - payload length
 void Slayer_HUD_OnDamageDealtMsg( const byte *pbuf, int iSize );
 
+// Fallback hook for damage dealt: called from Slayer_OnDeathMsg when the
+// LOCAL player is the killer. Registers a synthetic "+kill_amount" event
+// so the indicator still fires on stock servers that don't broadcast
+// per-shot dealt-damage usermsgs. Controlled by
+// slayer_damage_indicator_kill_amount (0 = disabled).
+void Slayer_HUD_OnLocalKill( void );
+
 #endif // CL_HUD_SLAYER_H

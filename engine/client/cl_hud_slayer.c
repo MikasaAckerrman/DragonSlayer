@@ -53,6 +53,29 @@ static CVAR_DEFINE_AUTO( slayer_damage_indicator_scale,      "1.0",
 	FCVAR_ARCHIVE,
 	"Slayer3D: damage indicator text scale (1.0 = console font size)" );
 
+// Sound feedback: play a sound when the registered damage event exceeds a
+// threshold. Useful as a "big-hit" cue separate from the kill sound, e.g.
+// confirming a body shot that took the enemy below 50 HP. Empty path = off.
+static CVAR_DEFINE_AUTO( slayer_damage_indicator_sound,        "",
+	FCVAR_ARCHIVE,
+	"Slayer3D: sound path played on big damage events (empty = off, e.g. 'weapons/zoom.wav')" );
+
+static CVAR_DEFINE_AUTO( slayer_damage_indicator_sound_thr,    "50",
+	FCVAR_ARCHIVE,
+	"Slayer3D: minimum damage amount that triggers slayer_damage_indicator_sound" );
+
+static CVAR_DEFINE_AUTO( slayer_damage_indicator_sound_volume, "0.7",
+	FCVAR_ARCHIVE,
+	"Slayer3D: volume for slayer_damage_indicator_sound, 0..1" );
+
+// Damage-dealt fallback: when no server-mod custom usermsg is broadcast,
+// approximate dealt damage from the DeathMsg. When the local player is the
+// killer, register slayer_damage_indicator_kill_amount points so the
+// crosshair indicator still shows "+N" on a kill. Set to 0 to disable.
+static CVAR_DEFINE_AUTO( slayer_damage_indicator_kill_amount,  "100",
+	FCVAR_ARCHIVE,
+	"Slayer3D: synthetic damage value shown on a kill when the server does not broadcast dealt-damage usermsgs (0 = off)" );
+
 // Damage events arriving within this window are merged into one number so
 // a multi-pellet shotgun hit reads as the total instead of flickering.
 #define SLAYER_DMG_GROUP_WINDOW 0.25
@@ -143,6 +166,32 @@ static float Slayer_HUD_EventAlpha( const slayer_dmg_event_t *ev )
 	return (float)( 1.0 - ( age - hold ) / fade );
 }
 
+// Play the configured big-damage sound when the just-registered amount
+// crosses the threshold. Only fires for damage DEALT (the more useful
+// "I just landed a heavy hit" cue) -- damage taken already has its own
+// HUD pain feedback from the game DLL.
+static void Slayer_HUD_TryPlaySound( int amount )
+{
+	const char *path = slayer_damage_indicator_sound.string;
+	float       vol;
+	int         threshold;
+
+	if( COM_StringEmptyOrNULL( path ))
+		return;
+
+	threshold = (int)slayer_damage_indicator_sound_thr.value;
+	if( threshold < 1 ) threshold = 1;
+
+	if( amount < threshold )
+		return;
+
+	vol = bound( 0.0f, slayer_damage_indicator_sound_volume.value, 1.0f );
+	if( vol <= 0.0f )
+		return;
+
+	S_StartLocalSound( path, vol, false );
+}
+
 // Draw a single event line offset vertically by line_offset_y pixels.
 // color_str is the RGBA cvar string. Format: "-N" for taken, "+N" for dealt.
 static void Slayer_HUD_DrawEvent( slayer_dmg_event_t *ev, const char *color_str,
@@ -201,6 +250,10 @@ void Slayer_HUD_Init( void )
 	Cvar_RegisterVariable( &slayer_damage_indicator_time );
 	Cvar_RegisterVariable( &slayer_damage_indicator_offset );
 	Cvar_RegisterVariable( &slayer_damage_indicator_scale );
+	Cvar_RegisterVariable( &slayer_damage_indicator_sound );
+	Cvar_RegisterVariable( &slayer_damage_indicator_sound_thr );
+	Cvar_RegisterVariable( &slayer_damage_indicator_sound_volume );
+	Cvar_RegisterVariable( &slayer_damage_indicator_kill_amount );
 
 	Slayer_HUD_Reset();
 }
@@ -255,6 +308,24 @@ void Slayer_HUD_OnDamageDealtMsg( const byte *pbuf, int iSize )
 		return;
 
 	Slayer_HUD_AccumulateEvent( &s_dmg_dealt, amount );
+	Slayer_HUD_TryPlaySound( amount );
+}
+
+void Slayer_HUD_OnLocalKill( void )
+{
+	int mode;
+	int amount;
+
+	mode = (int)slayer_damage_indicator.value;
+	if( mode != 2 && mode != 3 )
+		return;
+
+	amount = (int)slayer_damage_indicator_kill_amount.value;
+	if( amount <= 0 )
+		return;
+
+	Slayer_HUD_AccumulateEvent( &s_dmg_dealt, amount );
+	Slayer_HUD_TryPlaySound( amount );
 }
 
 void Slayer_HUD_Draw( void )
