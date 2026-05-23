@@ -224,14 +224,13 @@ void Slayer_AvatarDownload_Init( void )
 	env = (JNIEnv *)SDL_AndroidGetJNIEnv();
 	if( !env )
 	{
-		Con_Printf( S_WARN "AvatarDL: failed to get JNIEnv\n" );
+		// (file log only — no console spam)
 		return;
 	}
 
 	// Cache JavaVM for worker threads
 	if( (*env)->GetJavaVM( env, &avd_jvm ) != 0 )
 	{
-		Con_Printf( S_WARN "AvatarDL: failed to get JavaVM\n" );
 		return;
 	}
 
@@ -239,7 +238,6 @@ void Slayer_AvatarDownload_Init( void )
 	activity = (jobject)SDL_AndroidGetActivity();
 	if( !activity )
 	{
-		Con_Printf( S_WARN "AvatarDL: failed to get activity\n" );
 		return;
 	}
 
@@ -254,7 +252,6 @@ void Slayer_AvatarDownload_Init( void )
 		if( cls ) (*env)->DeleteLocalRef( env, cls );
 		(*env)->DeleteLocalRef( env, activity );
 		avd_activity_class = NULL;
-		Con_Printf( S_WARN "AvatarDL: GetObjectClass threw exception\n" );
 		return;
 	}
 
@@ -267,7 +264,6 @@ void Slayer_AvatarDownload_Init( void )
 	{
 		if( (*env)->ExceptionCheck( env ) )
 			(*env)->ExceptionClear( env );
-		Con_Printf( S_WARN "AvatarDL: NewGlobalRef returned NULL\n" );
 		return;
 	}
 
@@ -291,13 +287,11 @@ void Slayer_AvatarDownload_Init( void )
 			(*env)->ExceptionDescribe( env );
 			(*env)->ExceptionClear( env );
 		}
-		Con_Printf( S_WARN "AvatarDL: failed to find downloadAvatar method\n" );
 		(*env)->DeleteGlobalRef( env, avd_activity_class );
 		avd_activity_class = NULL;
 		return;
 	}
 
-	Con_Printf( "Slayer3D: avatar JNI init OK (method=%p)\n", (void *)avd_download_method );
 	__android_log_print( ANDROID_LOG_INFO, "Xash",
 		"AvatarDL: JNI init SUCCESS — avd_jvm=%p class=%p method=%p",
 		(void *)avd_jvm, (void *)avd_activity_class, (void *)avd_download_method );
@@ -340,7 +334,16 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 
 	if( !avd_download_method )
 	{
-		Con_Printf( S_ERROR "AvatarDL: BLOCKED slot=%d — downloadAvatar method is NULL (R8 stripped?)\n", slot );
+		// File log only — no console spam
+		{
+			file_t *logf = FS_Open( "avatars/status_log.txt", "a", false );
+			if( logf )
+			{
+				FS_Printf( logf, "[%.1f] DL_BLOCKED slot=%d id=%" PRIu64 " (method=NULL, R8 stripped?)\n",
+					host.realtime, slot, steamid64 );
+				FS_Close( logf );
+			}
+		}
 		__android_log_print( ANDROID_LOG_ERROR, "Xash",
 			"AvatarDL: BLOCKED slot=%d steamid=%" PRIu64 " — avd_download_method is NULL (JNI init failed or R8 stripped method)",
 			slot, steamid64 );
@@ -415,7 +418,15 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 	__android_log_print( ANDROID_LOG_INFO, "Xash",
 		"AvatarDL: queued slot=%d steamid=%" PRIu64 " (active=%d)",
 		slot, steamid64, avd_active_count );
-	Con_DPrintf( "AvatarDL: started download for slot %d (%" PRIu64 ")\n", slot, steamid64 );
+	{
+		file_t *logf = FS_Open( "avatars/status_log.txt", "a", false );
+		if( logf )
+		{
+			FS_Printf( logf, "[%.1f] DL_QUEUED slot=%d id=%" PRIu64 " active=%d\n",
+				host.realtime, slot, steamid64, avd_active_count );
+			FS_Close( logf );
+		}
+	}
 }
 
 qboolean Slayer_AvatarDownload_Frame( void )
@@ -438,7 +449,15 @@ qboolean Slayer_AvatarDownload_Frame( void )
 			any_completed = true;
 			__android_log_print( ANDROID_LOG_INFO, "Xash",
 				"AvatarDL: download complete for slot %d", i );
-			Con_DPrintf( "AvatarDL: download complete for slot %d\n", i );
+			{
+				file_t *logf = FS_Open( "avatars/status_log.txt", "a", false );
+				if( logf )
+				{
+					FS_Printf( logf, "[%.1f] DL_OK slot=%d id=%" PRIu64 "\n",
+						host.realtime, i, avd_slot_id[i] );
+					FS_Close( logf );
+				}
+			}
 		}
 		else if( avd_slot_result[i] == AVD_RESULT_FAIL )
 		{
@@ -448,7 +467,15 @@ qboolean Slayer_AvatarDownload_Frame( void )
 				avd_active_count--;
 			__android_log_print( ANDROID_LOG_ERROR, "Xash",
 				"AvatarDL: download failed for slot %d", i );
-			Con_DPrintf( "AvatarDL: download failed for slot %d\n", i );
+			{
+				file_t *logf = FS_Open( "avatars/status_log.txt", "a", false );
+				if( logf )
+				{
+					FS_Printf( logf, "[%.1f] DL_FAIL slot=%d id=%" PRIu64 "\n",
+						host.realtime, i, avd_slot_id[i] );
+					FS_Close( logf );
+				}
+			}
 		}
 	}
 
