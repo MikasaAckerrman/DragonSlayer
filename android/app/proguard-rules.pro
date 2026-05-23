@@ -20,16 +20,24 @@
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
 
--keep class su.xash.engine.XashActivity {
+-keep,allowoptimization class su.xash.engine.XashActivity {
     java.lang.String loadAndroidID();
     java.lang.String getAndroidID();
     void saveAndroidID(java.lang.String);
     java.lang.String getCallingPackage();
     java.lang.String[] getAssetsList(boolean, java.lang.String);
     android.content.res.AssetManager getAssets(boolean);
-    static int downloadAvatar(java.lang.String, java.lang.String);
-    static void startSteamLogin(java.lang.String, java.lang.String);
-    static void nativeSteamLoginResult(long);
+    public static int downloadAvatar(java.lang.String, java.lang.String);
+    public static void startSteamLogin(java.lang.String, java.lang.String);
+    public static void nativeSteamLoginResult(long);
+}
+
+# Belt-and-suspenders: keepclassmembers forces R8 full-mode to retain
+# JNI-called methods even if tree shaker deems them unreachable
+-keepclassmembers class su.xash.engine.XashActivity {
+    public static int downloadAvatar(java.lang.String, java.lang.String);
+    public static void startSteamLogin(java.lang.String, java.lang.String);
+    public static void nativeSteamLoginResult(long);
 }
 
 # Slayer3D Steam Web API helper — invoked from C via FindClass +
