@@ -87,7 +87,7 @@ qboolean Slayer_Loading_Draw( void )
 	int panel_x, panel_y;
 	int cur_y;
 	int bar_x, bar_w, bar_h;
-	int text_w, text_h;
+	int text_w;
 	byte bg_r, bg_g, bg_b, bg_a;
 	float overall_pct, file_pct;
 	char buf[256];
