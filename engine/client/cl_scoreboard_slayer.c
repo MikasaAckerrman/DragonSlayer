@@ -831,6 +831,40 @@ void Slayer_Scoreboard_Draw( void )
 		}
 	}
 
+	// Re-trigger downloads for slots stuck at -1 (download failed, cooldown elapsed)
+	{
+		static double slayer_avatar_retry_time = 0.0;
+		if( host.realtime >= slayer_avatar_retry_time )
+		{
+			slayer_avatar_retry_time = host.realtime + 10.0; // check every 10s
+			for( i = 0; i < MAX_CLIENTS; i++ )
+			{
+				if( slayer_avatar_tex[i] == -1 && slayer_steamid64[i] != 0 )
+				{
+					char retry_path[128];
+					Q_snprintf( retry_path, sizeof( retry_path ), "avatars/%" PRIu64 ".png", slayer_steamid64[i] );
+					if( FS_FileExists( retry_path, false ) )
+					{
+						// File appeared (maybe batch download succeeded) - try loading
+						int texid = ref.dllFuncs.GL_LoadTexture( retry_path, NULL, 0, TF_IMAGE );
+						if( texid > 0 )
+							slayer_avatar_tex[i] = texid;
+						else
+						{
+							FS_Delete( retry_path );
+							slayer_avatar_tex[i] = 0; // reset to re-queue
+						}
+					}
+					else
+					{
+						// No file yet - reset to 0 so Slayer_LoadAvatarTexture re-queues download
+						slayer_avatar_tex[i] = 0;
+					}
+				}
+			}
+		}
+	}
+
 	if( !slayer_scoreboard_active )
 		return;
 
