@@ -47,7 +47,7 @@ Slayer_OnChatMessage
 Mirror SayText/SayText2 player chat to engine console with color codes stripped.
 ==================
 */
-static void Slayer_OnChatMessage( const byte *pbuf, int iSize )
+static void Slayer_OnChatMessage( const byte *pbuf, int iSize, qboolean is_saytext2 )
 {
 	static convar_t *cv_chat = NULL;
 	char clean[256];
@@ -64,6 +64,13 @@ static void Slayer_OnChatMessage( const byte *pbuf, int iSize )
 	// Skip client_index byte
 	pbuf++;
 	iSize--;
+
+	// SayText2 has an extra msg_dest byte after client_index
+	if( is_saytext2 && iSize > 1 )
+	{
+		pbuf++;
+		iSize--;
+	}
 
 	// Walk the null-terminated string, stripping color codes (0x01-0x05)
 	dst = 0;
@@ -2398,8 +2405,10 @@ void CL_ParseUserMessage( sizebuf_t *msg, int svc_num, connprotocol_t proto )
 			Slayer_OnScoreAttrib( pbuf, iSize );
 		else if( !Q_strcmp( clgame.msg[i].name, "HealthInfo" ))
 			Slayer_OnHealthInfo( pbuf, iSize );
-		else if( !Q_strcmp( clgame.msg[i].name, "SayText" ) || !Q_strcmp( clgame.msg[i].name, "SayText2" ))
-			Slayer_OnChatMessage( pbuf, iSize );
+		else if( !Q_strcmp( clgame.msg[i].name, "SayText" ))
+			Slayer_OnChatMessage( pbuf, iSize, false );
+		else if( !Q_strcmp( clgame.msg[i].name, "SayText2" ))
+			Slayer_OnChatMessage( pbuf, iSize, true );
 
 		// Damage indicator probes a list of common server-side hit-feedback
 		// message names internally; safe to call unconditionally for every
