@@ -533,6 +533,10 @@ void Slayer_HUD_OnBloodImpact( vec3_t pos, int count )
 	if( host.realtime - slayer_last_plugin_hit_time < 0.1 )
 		return;
 
+	// Guard: some mods send TE_BLOOD with count=0 for non-damage effects.
+	if( count <= 0 )
+		return;
+
 	// Compute player eye position.
 	eye[0] = cl.simorg[0] + cl.viewheight[0];
 	eye[1] = cl.simorg[1] + cl.viewheight[1];
