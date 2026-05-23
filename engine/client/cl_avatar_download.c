@@ -208,7 +208,6 @@ static void *AVD_WorkerThread( void *arg )
 void Slayer_AvatarDownload_Init( void )
 {
 	JNIEnv *env;
-	jobject activity;
 	jclass cls;
 
 	Cvar_RegisterVariable( &slayer_avatar_download );
@@ -234,30 +233,23 @@ void Slayer_AvatarDownload_Init( void )
 		return;
 	}
 
-	// Get XashActivity class
-	activity = (jobject)SDL_AndroidGetActivity();
-	if( !activity )
+	// Find XashActivity class by name (not via GetObjectClass) to ensure
+	// we get the correct class even if SDL returns a different object type.
+	cls = (*env)->FindClass( env, "su/xash/engine/XashActivity" );
+	if( !cls || (*env)->ExceptionCheck( env ) )
 	{
-		return;
-	}
-
-	cls = (*env)->GetObjectClass( env, activity );
-
-	// Defensive: GetObjectClass should not throw, but if it did on some quirky
-	// Android build, surface the exception and bail rather than carry it forward.
-	if( (*env)->ExceptionCheck( env ) )
-	{
-		(*env)->ExceptionDescribe( env );
-		(*env)->ExceptionClear( env );
+		if( (*env)->ExceptionCheck( env ) )
+		{
+			(*env)->ExceptionDescribe( env );
+			(*env)->ExceptionClear( env );
+		}
 		if( cls ) (*env)->DeleteLocalRef( env, cls );
-		(*env)->DeleteLocalRef( env, activity );
 		avd_activity_class = NULL;
 		return;
 	}
 
 	avd_activity_class = (*env)->NewGlobalRef( env, cls );
 	(*env)->DeleteLocalRef( env, cls );
-	(*env)->DeleteLocalRef( env, activity );
 
 	// NewGlobalRef returns NULL if the JVM is out of memory or the local ref was NULL.
 	if( !avd_activity_class )
