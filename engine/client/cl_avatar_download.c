@@ -208,7 +208,6 @@ static void *AVD_WorkerThread( void *arg )
 void Slayer_AvatarDownload_Init( void )
 {
 	JNIEnv *env;
-	jclass cls;
 
 	Cvar_RegisterVariable( &slayer_avatar_download );
 	memset( (void *)avd_slot_result, 0, sizeof( avd_slot_result ) );
@@ -219,18 +218,57 @@ void Slayer_AvatarDownload_Init( void )
 	avd_activity_class = NULL;
 	avd_download_method = NULL;
 
-	// Get JNI env from SDL (only valid on main thread)
+	// Get JNI env from SDL (only valid on main thread).
+	// SDL is already initialized at this point, so this is safe.
 	env = (JNIEnv *)SDL_AndroidGetJNIEnv();
 	if( !env )
-	{
-		// (file log only — no console spam)
 		return;
-	}
 
 	// Cache JavaVM for worker threads
 	if( (*env)->GetJavaVM( env, &avd_jvm ) != 0 )
 	{
+		avd_jvm = NULL;
 		return;
+	}
+
+	// NOTE: FindClass and GetStaticMethodID are deferred to the first
+	// Slayer_AvatarDownload_Request() call via AVD_EnsureJNI(). This avoids
+	// the DL_BLOCKED issue where the Java classloader has not yet fully
+	// loaded XashActivity during native lib static init.
+}
+
+// ---------------------------------------------------------------------------
+// Lazy JNI class/method lookup (called on first Request)
+// ---------------------------------------------------------------------------
+
+static qboolean AVD_EnsureJNI( void )
+{
+	JNIEnv *env;
+	jclass cls;
+
+	// Fast path: already initialized
+	if( avd_download_method != NULL )
+		return true;
+
+	// Get JNI env
+	env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+	if( !env )
+	{
+		__android_log_print( ANDROID_LOG_ERROR, "Xash",
+			"AvatarDL: AVD_EnsureJNI failed - SDL_AndroidGetJNIEnv returned NULL" );
+		return false;
+	}
+
+	// Cache JavaVM if not yet done (e.g. Init was called before SDL was ready)
+	if( !avd_jvm )
+	{
+		if( (*env)->GetJavaVM( env, &avd_jvm ) != 0 )
+		{
+			__android_log_print( ANDROID_LOG_ERROR, "Xash",
+				"AvatarDL: AVD_EnsureJNI failed - GetJavaVM returned error" );
+			avd_jvm = NULL;
+			return false;
+		}
 	}
 
 	// Find XashActivity class by name (not via GetObjectClass) to ensure
@@ -244,8 +282,9 @@ void Slayer_AvatarDownload_Init( void )
 			(*env)->ExceptionClear( env );
 		}
 		if( cls ) (*env)->DeleteLocalRef( env, cls );
-		avd_activity_class = NULL;
-		return;
+		__android_log_print( ANDROID_LOG_ERROR, "Xash",
+			"AvatarDL: AVD_EnsureJNI failed - FindClass(XashActivity) returned NULL" );
+		return false;
 	}
 
 	avd_activity_class = (*env)->NewGlobalRef( env, cls );
@@ -256,7 +295,9 @@ void Slayer_AvatarDownload_Init( void )
 	{
 		if( (*env)->ExceptionCheck( env ) )
 			(*env)->ExceptionClear( env );
-		return;
+		__android_log_print( ANDROID_LOG_ERROR, "Xash",
+			"AvatarDL: AVD_EnsureJNI failed - NewGlobalRef returned NULL" );
+		return false;
 	}
 
 	// Clear any stale pending exception before the next JNI call.
@@ -281,12 +322,15 @@ void Slayer_AvatarDownload_Init( void )
 		}
 		(*env)->DeleteGlobalRef( env, avd_activity_class );
 		avd_activity_class = NULL;
-		return;
+		__android_log_print( ANDROID_LOG_ERROR, "Xash",
+			"AvatarDL: AVD_EnsureJNI failed - GetStaticMethodID(downloadAvatar) returned NULL" );
+		return false;
 	}
 
 	__android_log_print( ANDROID_LOG_INFO, "Xash",
-		"AvatarDL: JNI init SUCCESS — avd_jvm=%p class=%p method=%p",
+		"AvatarDL: lazy JNI init SUCCESS - avd_jvm=%p class=%p method=%p",
 		(void *)avd_jvm, (void *)avd_activity_class, (void *)avd_download_method );
+	return true;
 }
 
 void Slayer_AvatarDownload_Shutdown( void )
@@ -324,20 +368,20 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 	if( slot < 0 || slot >= MAX_CLIENTS || steamid64 == 0 )
 		return;
 
-	if( !avd_download_method )
+	if( !AVD_EnsureJNI() )
 	{
-		// File log only — no console spam
+		// File log only - no console spam
 		{
 			file_t *logf = FS_Open( "avatars/status_log.txt", "a", false );
 			if( logf )
 			{
-				FS_Printf( logf, "[%.1f] DL_BLOCKED slot=%d id=%" PRIu64 " (method=NULL, R8 stripped?)\n",
+				FS_Printf( logf, "[%.1f] DL_BLOCKED slot=%d id=%" PRIu64 " (lazy JNI init failed)\n",
 					host.realtime, slot, steamid64 );
 				FS_Close( logf );
 			}
 		}
 		__android_log_print( ANDROID_LOG_ERROR, "Xash",
-			"AvatarDL: BLOCKED slot=%d steamid=%" PRIu64 " — avd_download_method is NULL (JNI init failed or R8 stripped method)",
+			"AvatarDL: BLOCKED slot=%d steamid=%" PRIu64 " - lazy JNI init failed",
 			slot, steamid64 );
 		return;  // JNI not initialized
 	}
