@@ -560,7 +560,7 @@ void Slayer_HUD_OnBloodImpact( vec3_t pos, int count )
 
 	// Geometric validation: blood must be roughly in front of us.
 	dot = DotProduct( dir, forward );
-	if( dot < 0.7f )
+	if( dot < 0.5f )
 		return;
 
 	// Damage calculation.
