@@ -42,6 +42,51 @@ static int CL_UserMsgStub( const char *pszName, int iSize, void *pbuf )
 
 /*
 ==================
+Slayer_OnChatMessage
+
+Mirror SayText/SayText2 player chat to engine console with color codes stripped.
+==================
+*/
+static void Slayer_OnChatMessage( const byte *pbuf, int iSize )
+{
+	static convar_t *cv_chat = NULL;
+	char clean[256];
+	int src, dst;
+
+	if( !cv_chat )
+		cv_chat = Cvar_FindVar( "slayer_chat_console" );
+
+	if( cv_chat && cv_chat->value == 0.0f )
+		return;
+
+	if( iSize < 3 ) return; // at minimum: byte + one char + null
+
+	// Skip client_index byte
+	pbuf++;
+	iSize--;
+
+	// Walk the null-terminated string, stripping color codes (0x01-0x05)
+	dst = 0;
+	for( src = 0; src < iSize - 1 && pbuf[src] != '\0' && dst < (int)sizeof( clean ) - 2; src++ )
+	{
+		byte ch = pbuf[src];
+		if( ch >= 0x20 || ch == '\t' ) // printable or tab
+			clean[dst++] = (char)ch;
+	}
+
+	// Don't print empty messages
+	if( dst == 0 ) return;
+
+	// Ensure newline at end
+	if( clean[dst - 1] != '\n' )
+		clean[dst++] = '\n';
+	clean[dst] = '\0';
+
+	Con_Printf( "%s", clean );
+}
+
+/*
+==================
 CL_ParseViewEntity
 
 ==================
@@ -2353,6 +2398,8 @@ void CL_ParseUserMessage( sizebuf_t *msg, int svc_num, connprotocol_t proto )
 			Slayer_OnScoreAttrib( pbuf, iSize );
 		else if( !Q_strcmp( clgame.msg[i].name, "HealthInfo" ))
 			Slayer_OnHealthInfo( pbuf, iSize );
+		else if( !Q_strcmp( clgame.msg[i].name, "SayText" ) || !Q_strcmp( clgame.msg[i].name, "SayText2" ))
+			Slayer_OnChatMessage( pbuf, iSize );
 
 		// Damage indicator probes a list of common server-side hit-feedback
 		// message names internally; safe to call unconditionally for every
@@ -2507,8 +2554,87 @@ qboolean CL_ParseCommonHLMessage( sizebuf_t *msg, connprotocol_t proto, int svc_
 	case svc_print:
 	{
 		const char *s_print = MSG_ReadString( msg );
+
+		// Always feed to status parser (needed for avatar SteamID extraction)
 		Slayer_ParseStatusLine( s_print );
-		Con_Printf( "%s", s_print );
+
+		// Slayer3D: filter server plugin spam from console
+		{
+			static convar_t *cv_filter = NULL;
+			qboolean suppress = false;
+
+			if( !cv_filter )
+				cv_filter = Cvar_FindVar( "slayer_console_filter" );
+
+			if( cv_filter && cv_filter->value != 0.0f )
+			{
+				const char *p = s_print;
+
+				// Empty line (just newline or nothing)
+				if( p[0] == '\0' || ( p[0] == '\n' && p[1] == '\0' ) )
+					suppress = true;
+
+				// Lines starting with '[' followed by uppercase/alphanumeric and ']'
+				// e.g. [AMX], [ADMIN], [MapManager], [VIP]
+				if( !suppress && p[0] == '[' )
+				{
+					const char *c = p + 1;
+					while( *c && *c != ']' && *c != '\n' ) c++;
+					if( *c == ']' )
+						suppress = true;
+				}
+
+				// Lines starting with '*' followed by ' DEAD' or ' SPEC'
+				if( !suppress && p[0] == '*' )
+				{
+					if( !Q_strncmp( p + 1, " DEAD", 5 ) || !Q_strncmp( p + 1, " SPEC", 5 ) )
+						suppress = true;
+				}
+
+				// Lines containing 'amx_' or 'AMX'
+				if( !suppress )
+				{
+					if( Q_strstr( s_print, "amx_" ) || Q_strstr( s_print, "AMX" ) )
+						suppress = true;
+				}
+
+				// Lines that are ONLY dashes, equals, or underscores (separator spam)
+				if( !suppress )
+				{
+					const char *c = p;
+					qboolean all_sep = true;
+					while( *c && *c != '\n' )
+					{
+						if( *c != '-' && *c != '=' && *c != '_' && *c != ' ' )
+						{
+							all_sep = false;
+							break;
+						}
+						c++;
+					}
+					if( all_sep && c != p )
+						suppress = true;
+				}
+
+				// ALWAYS let through status response lines
+				if( suppress )
+				{
+					if( p[0] == '#' )
+						suppress = false;
+					else if( Q_strstr( s_print, "hostname:" ) || Q_strstr( s_print, "version:" ) ||
+					         Q_strstr( s_print, "map:" ) || Q_strstr( s_print, "players:" ) ||
+					         Q_strstr( s_print, "tcp/ip:" ) )
+						suppress = false;
+				}
+
+				// Let through server log lines (start with 'L ')
+				if( suppress && p[0] == 'L' && p[1] == ' ' )
+					suppress = false;
+			}
+
+			if( !suppress )
+				Con_Printf( "%s", s_print );
+		}
 		break;
 	}
 	case svc_stufftext:

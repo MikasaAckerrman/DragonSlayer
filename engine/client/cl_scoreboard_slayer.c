@@ -40,6 +40,8 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_t_color, "255 100 80", FCVAR_ARCHIVE,
 // Border alpha lowered from 200 -> 150 (lighter visual weight, less stair-stepping)
 static CVAR_DEFINE_AUTO( slayer_scoreboard_border_color, "255 255 255 150", FCVAR_ARCHIVE, "Slayer3D: scoreboard border RGBA" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_opacity, "220", FCVAR_ARCHIVE, "Slayer3D: overall scoreboard opacity (0-255)" );
+static CVAR_DEFINE_AUTO( slayer_console_filter, "1", FCVAR_ARCHIVE, "Slayer3D: filter server plugin spam from console (0=show all)" );
+static CVAR_DEFINE_AUTO( slayer_chat_console, "1", FCVAR_ARCHIVE, "Slayer3D: mirror player chat (SayText) to engine console (0=off)" );
 
 // ===========================================================================
 // Types
@@ -561,6 +563,8 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_scoreboard_t_color );
 	Cvar_RegisterVariable( &slayer_scoreboard_border_color );
 	Cvar_RegisterVariable( &slayer_scoreboard_opacity );
+	Cvar_RegisterVariable( &slayer_console_filter );
+	Cvar_RegisterVariable( &slayer_chat_console );
 
 	Cmd_AddCommand( "+slayer_scoreboard", Cmd_ScoreboardDown_f,
 		"show Slayer3D custom scoreboard" );
