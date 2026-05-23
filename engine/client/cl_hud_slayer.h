@@ -53,4 +53,14 @@ void Slayer_HUD_OnDamageMessage( const char *msgname, const byte *pbuf, int iSiz
 // future filtering, currently unused).
 void Slayer_HUD_OnHudTextDamage( const char *pMessage, float x, float y );
 
+// Hook invoked when a TE_BLOOD tempentity is parsed. Performs geometric
+// validation (is the blood along our forward vector?), calculates damage
+// using the CS 1.6 weapon formula, and registers a damage indicator entry.
+// Falls back to count*10 if weapon is unknown.
+void Slayer_HUD_OnBloodImpact( vec3_t pos, int count );
+
+// Hook invoked when the "CurWeapon" usermsg is received. Stores the
+// current weapon ID for damage calculation in OnBloodImpact.
+void Slayer_HUD_OnCurWeapon( int weapon_id );
+
 #endif // CL_HUD_SLAYER_H
