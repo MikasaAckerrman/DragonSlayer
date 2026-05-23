@@ -245,10 +245,15 @@ static qboolean AVD_EnsureJNI( void )
 {
 	JNIEnv *env;
 	jclass cls;
+	static qboolean avd_jni_attempted = false;
 
 	// Fast path: already initialized
 	if( avd_download_method != NULL )
 		return true;
+
+	// Already tried and failed - don't retry
+	if( avd_jni_attempted )
+		return false;
 
 	// Get JNI env
 	env = (JNIEnv *)SDL_AndroidGetJNIEnv();
@@ -270,6 +275,8 @@ static qboolean AVD_EnsureJNI( void )
 			return false;
 		}
 	}
+
+	avd_jni_attempted = true;
 
 	// Find XashActivity class by name (not via GetObjectClass) to ensure
 	// we get the correct class even if SDL returns a different object type.

@@ -147,7 +147,6 @@ static void *SAPI_WorkerThread( void *arg )
 void Slayer_SteamAPI_Init( void )
 {
 	JNIEnv *env;
-	jclass cls;
 
 	Cvar_RegisterVariable( &slayer_steam_apikey );
 	sapi_initialized = false;
@@ -159,27 +158,64 @@ void Slayer_SteamAPI_Init( void )
 
 	env = (JNIEnv *)SDL_AndroidGetJNIEnv();
 	if( !env )
-	{
-		Con_Printf( S_WARN "SteamAPI: failed to get JNIEnv\n" );
 		return;
-	}
 
 	if( (*env)->GetJavaVM( env, &sapi_jvm ) != 0 )
+		sapi_jvm = NULL;
+}
+
+// ---------------------------------------------------------------------------
+// Lazy JNI class/method lookup (called on first RequestBatch)
+// ---------------------------------------------------------------------------
+
+static qboolean SAPI_EnsureJNI( void )
+{
+	JNIEnv *env;
+	jclass cls;
+	static qboolean sapi_jni_attempted = false;
+
+	// Fast path: already initialized
+	if( sapi_initialized )
+		return true;
+
+	// Already tried and failed - don't retry
+	if( sapi_jni_attempted )
+		return false;
+
+	sapi_jni_attempted = true;
+
+	env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+	if( !env )
 	{
-		Con_Printf( S_WARN "SteamAPI: failed to get JavaVM\n" );
-		return;
+		__android_log_print( ANDROID_LOG_ERROR, "Xash",
+			"SteamAPI: SAPI_EnsureJNI failed - SDL_AndroidGetJNIEnv returned NULL" );
+		return false;
+	}
+
+	// Cache JavaVM if not yet done
+	if( !sapi_jvm )
+	{
+		if( (*env)->GetJavaVM( env, &sapi_jvm ) != 0 )
+		{
+			__android_log_print( ANDROID_LOG_ERROR, "Xash",
+				"SteamAPI: SAPI_EnsureJNI failed - GetJavaVM returned error" );
+			sapi_jvm = NULL;
+			return false;
+		}
 	}
 
 	cls = (*env)->FindClass( env, "su/xash/engine/SteamAPIHelper" );
-	if( !cls )
+	if( !cls || (*env)->ExceptionCheck( env ) )
 	{
 		if( (*env)->ExceptionCheck( env ) )
 		{
 			(*env)->ExceptionDescribe( env );
 			(*env)->ExceptionClear( env );
 		}
-		Con_Printf( S_WARN "SteamAPI: SteamAPIHelper class not found\n" );
-		return;
+		if( cls ) (*env)->DeleteLocalRef( env, cls );
+		__android_log_print( ANDROID_LOG_ERROR, "Xash",
+			"SteamAPI: SAPI_EnsureJNI failed - FindClass(SteamAPIHelper) returned NULL" );
+		return false;
 	}
 
 	sapi_helper_class = (*env)->NewGlobalRef( env, cls );
@@ -187,8 +223,17 @@ void Slayer_SteamAPI_Init( void )
 
 	if( !sapi_helper_class )
 	{
-		Con_Printf( S_WARN "SteamAPI: NewGlobalRef failed\n" );
-		return;
+		if( (*env)->ExceptionCheck( env ) )
+			(*env)->ExceptionClear( env );
+		__android_log_print( ANDROID_LOG_ERROR, "Xash",
+			"SteamAPI: SAPI_EnsureJNI failed - NewGlobalRef returned NULL" );
+		return false;
+	}
+
+	if( (*env)->ExceptionCheck( env ) )
+	{
+		(*env)->ExceptionDescribe( env );
+		(*env)->ExceptionClear( env );
 	}
 
 	sapi_fetch_method = (*env)->GetStaticMethodID( env, sapi_helper_class,
@@ -202,14 +247,18 @@ void Slayer_SteamAPI_Init( void )
 			(*env)->ExceptionDescribe( env );
 			(*env)->ExceptionClear( env );
 		}
-		Con_Printf( S_WARN "SteamAPI: fetchBatchAvatars method not found\n" );
 		(*env)->DeleteGlobalRef( env, sapi_helper_class );
 		sapi_helper_class = NULL;
-		return;
+		__android_log_print( ANDROID_LOG_ERROR, "Xash",
+			"SteamAPI: SAPI_EnsureJNI failed - GetStaticMethodID(fetchBatchAvatars) returned NULL" );
+		return false;
 	}
 
 	sapi_initialized = true;
-	Con_Printf( "Slayer3D: Steam Web API init OK (Android/JNI)\n" );
+	__android_log_print( ANDROID_LOG_INFO, "Xash",
+		"SteamAPI: lazy JNI init SUCCESS - jvm=%p class=%p method=%p",
+		(void *)sapi_jvm, (void *)sapi_helper_class, (void *)sapi_fetch_method );
+	return true;
 }
 
 
@@ -228,7 +277,7 @@ void Slayer_SteamAPI_RequestBatch( const uint64_t *steamids, int count )
 	int i, written;
 	char *p;
 
-	if( !sapi_initialized || !sapi_fetch_method )
+	if( !SAPI_EnsureJNI() )
 		return;
 
 	if( sapi_batch_in_progress )
