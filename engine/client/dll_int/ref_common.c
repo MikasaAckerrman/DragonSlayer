@@ -17,6 +17,7 @@ GNU General Public License for more details.
 #include "client.h"
 #include "library.h"
 #include "cl_tent.h"
+#include "cl_view_slayer.h"
 #include "platform/platform.h"
 #include "vid_common.h"
 #include "imagelib.h"
@@ -300,6 +301,7 @@ static void pfnDrawNormalTriangles( void )
 static void pfnDrawTransparentTriangles( void )
 {
 	clgame.dllFuncs.pfnDrawTransparentTriangles();
+	Slayer_GrenadeTrajectoryDraw();
 }
 
 static screenfade_t *pfnRefGetScreenFade( void )
