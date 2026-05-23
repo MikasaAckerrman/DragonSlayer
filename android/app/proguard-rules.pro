@@ -20,25 +20,10 @@
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
 
--keep,allowoptimization class su.xash.engine.XashActivity {
-    java.lang.String loadAndroidID();
-    java.lang.String getAndroidID();
-    void saveAndroidID(java.lang.String);
-    java.lang.String getCallingPackage();
-    java.lang.String[] getAssetsList(boolean, java.lang.String);
-    android.content.res.AssetManager getAssets(boolean);
-    public static int downloadAvatar(java.lang.String, java.lang.String);
-    public static void startSteamLogin(java.lang.String, java.lang.String);
-    public static void nativeSteamLoginResult(long);
-}
-
-# Belt-and-suspenders: keepclassmembers forces R8 full-mode to retain
-# JNI-called methods even if tree shaker deems them unreachable
--keepclassmembers class su.xash.engine.XashActivity {
-    public static int downloadAvatar(java.lang.String, java.lang.String);
-    public static void startSteamLogin(java.lang.String, java.lang.String);
-    public static void nativeSteamLoginResult(long);
-}
+# Keep ALL members of XashActivity — many are called from native C via JNI
+# (FindClass + GetStaticMethodID). R8 full-mode strips them despite selective
+# keep rules because it cannot trace JNI call graphs. Nuclear option required.
+-keep class su.xash.engine.XashActivity { *; }
 
 # Slayer3D Steam Web API helper — invoked from C via FindClass +
 # GetStaticMethodID. Without this keep rule R8 strips/renames the class
