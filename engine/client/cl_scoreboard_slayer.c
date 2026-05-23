@@ -66,6 +66,7 @@ typedef struct
 
 static slayer_score_t  slayer_scores[MAX_CLIENTS];
 static qboolean        slayer_scoreboard_active = false;
+static qboolean        slayer_scoreboard_auto_activated = false;
 
 // Avatar state: SteamID64 per player slot and cached texture handles
 static uint64_t        slayer_steamid64[MAX_CLIENTS];
@@ -505,6 +506,7 @@ static void Cmd_ScoreboardDown_f( void )
 static void Cmd_ScoreboardUp_f( void )
 {
 	slayer_scoreboard_active = false;
+	slayer_scoreboard_auto_activated = false;
 }
 
 // ===========================================================================
@@ -524,6 +526,26 @@ void Slayer_Scoreboard_PatchUsercmd( struct usercmd_s *cmd )
 		return;
 
 	cmd->buttons |= IN_SCORE;
+}
+
+// ===========================================================================
+// Public API - IsEnabled / Activate
+// ===========================================================================
+
+qboolean Slayer_Scoreboard_IsEnabled( void )
+{
+	return ( slayer_scoreboard.value != 0.0f );
+}
+
+qboolean Slayer_Scoreboard_IsActive( void )
+{
+	return ( slayer_scoreboard.value != 0.0f && slayer_scoreboard_active );
+}
+
+void Slayer_Scoreboard_Activate( void )
+{
+	slayer_scoreboard_active = true;
+	slayer_scoreboard_auto_activated = true;
 }
 
 // ===========================================================================
@@ -560,6 +582,7 @@ void Slayer_Scoreboard_Reset( void )
 	memset( slayer_steamid64, 0, sizeof( slayer_steamid64 ) );
 	memset( slayer_avatar_tex, 0, sizeof( slayer_avatar_tex ) );
 	slayer_scoreboard_active = false;
+	slayer_scoreboard_auto_activated = false;
 	slayer_status_pending = false;
 	slayer_status_next_time = 0.0;   // allow immediate re-fetch on next connect
 	slayer_status_deadline = 0.0;
@@ -863,6 +886,24 @@ void Slayer_Scoreboard_Draw( void )
 				}
 			}
 		}
+	}
+
+	// Auto-activate on intermission (map change) so the Slayer scoreboard
+	// replaces the default GoldSrc tab during end-of-map.
+	if( cl.intermission && slayer_scoreboard.value != 0.0f )
+	{
+		slayer_scoreboard_active = true;
+		slayer_scoreboard_auto_activated = true;
+	}
+
+	// Auto-deactivate when the condition that triggered auto-activation is
+	// no longer true (e.g. player respawned after death, intermission ended).
+	if( slayer_scoreboard_auto_activated && cl.intermission == 0
+		&& cl.playernum >= 0 && cl.playernum < MAX_CLIENTS
+		&& !( slayer_scores[cl.playernum].flags & 1 ) )
+	{
+		slayer_scoreboard_active = false;
+		slayer_scoreboard_auto_activated = false;
 	}
 
 	if( !slayer_scoreboard_active )
