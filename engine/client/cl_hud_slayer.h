@@ -46,4 +46,11 @@ void Slayer_HUD_Draw( void );
 //   iSize   - payload length in bytes
 void Slayer_HUD_OnDamageMessage( const char *msgname, const byte *pbuf, int iSize );
 
+// Hook for TE_TEXTMESSAGE path (AmxModX "damager" plugin sends damage as
+// a HUD text message via set_hudmessage/show_hudmessage). If pMessage is
+// purely numeric [1..255], registers a damage halo entry.
+// x/y are the normalized screen coords from the text message (reserved for
+// future filtering, currently unused).
+void Slayer_HUD_OnHudTextDamage( const char *pMessage, float x, float y );
+
 #endif // CL_HUD_SLAYER_H
