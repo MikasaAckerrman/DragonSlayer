@@ -2358,6 +2358,11 @@ void CL_ParseUserMessage( sizebuf_t *msg, int svc_num, connprotocol_t proto )
 		// message names internally; safe to call unconditionally for every
 		// usermsg, no-op when the name is not recognized.
 		Slayer_HUD_OnDamageMessage( clgame.msg[i].name, pbuf, iSize );
+
+		// Also catch "HudText" messages that contain purely-numeric text
+		// (damage numbers from AmxModX plugins that send HudText directly).
+		if( !Q_strcmp( clgame.msg[i].name, "HudText" ) && iSize > 1 )
+			Slayer_HUD_OnHudTextDamage( (const char *)pbuf, -1.0f, -1.0f );
 	}
 
 	if( cl_trace_messages.value )
