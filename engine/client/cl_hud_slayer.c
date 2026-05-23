@@ -296,6 +296,11 @@ void Slayer_HUD_OnHudTextDamage( const char *pMessage, float x, float y )
 
 	Con_DPrintf( "Slayer HUD: dmg %d via TE_TEXTMESSAGE, halo=%d slot=%d\n",
 		damage, slayer_dmg_entries[slot].halo_slot, slot );
+#if XASH_ANDROID
+	__android_log_print( ANDROID_LOG_INFO, "Xash",
+		"Slayer HUD: dmg %d via TE_TEXTMESSAGE (text='%s'), halo=%d",
+		damage, pMessage, slayer_dmg_entries[slot].halo_slot );
+#endif
 }
 
 void Slayer_HUD_Draw( void )
