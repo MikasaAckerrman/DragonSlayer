@@ -411,7 +411,7 @@ void Slayer_HUD_OnHudTextDamage( const char *pMessage, float x, float y )
 
 void Slayer_HUD_OnCurWeapon( int weapon_id )
 {
-	if( weapon_id >= 0 && weapon_id <= 30 )
+	if( weapon_id >= 0 )
 		slayer_cur_weapon_id = weapon_id;
 }
 

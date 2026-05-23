@@ -69,6 +69,7 @@ typedef struct
 static slayer_score_t  slayer_scores[MAX_CLIENTS];
 static qboolean        slayer_scoreboard_active = false;
 static qboolean        slayer_scoreboard_auto_activated = false;
+static double          slayer_scoreboard_auto_time = 0.0;
 
 // Avatar state: SteamID64 per player slot and cached texture handles
 static uint64_t        slayer_steamid64[MAX_CLIENTS];
@@ -548,6 +549,7 @@ void Slayer_Scoreboard_Activate( void )
 {
 	slayer_scoreboard_active = true;
 	slayer_scoreboard_auto_activated = true;
+	slayer_scoreboard_auto_time = host.realtime;
 }
 
 // ===========================================================================
@@ -587,6 +589,7 @@ void Slayer_Scoreboard_Reset( void )
 	memset( slayer_avatar_tex, 0, sizeof( slayer_avatar_tex ) );
 	slayer_scoreboard_active = false;
 	slayer_scoreboard_auto_activated = false;
+	slayer_scoreboard_auto_time = 0.0;
 	slayer_status_pending = false;
 	slayer_status_next_time = 0.0;   // allow immediate re-fetch on next connect
 	slayer_status_deadline = 0.0;
@@ -896,6 +899,8 @@ void Slayer_Scoreboard_Draw( void )
 	// replaces the default GoldSrc tab during end-of-map.
 	if( cl.intermission && slayer_scoreboard.value != 0.0f )
 	{
+		if( !slayer_scoreboard_auto_activated )
+			slayer_scoreboard_auto_time = host.realtime;
 		slayer_scoreboard_active = true;
 		slayer_scoreboard_auto_activated = true;
 	}
@@ -904,7 +909,8 @@ void Slayer_Scoreboard_Draw( void )
 	// no longer true (e.g. player respawned after death, intermission ended).
 	if( slayer_scoreboard_auto_activated && cl.intermission == 0
 		&& cl.playernum >= 0 && cl.playernum < MAX_CLIENTS
-		&& !( slayer_scores[cl.playernum].flags & 1 ) )
+		&& !( slayer_scores[cl.playernum].flags & 1 )
+		&& ( host.realtime - slayer_scoreboard_auto_time ) >= 5.0 )
 	{
 		slayer_scoreboard_active = false;
 		slayer_scoreboard_auto_activated = false;
