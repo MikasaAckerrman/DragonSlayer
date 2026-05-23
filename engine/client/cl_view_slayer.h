@@ -92,4 +92,16 @@ void Slayer_OnTeamInfo( const byte *pbuf, int iSize );
 // Called when the engine clears client state (disconnect / map change).
 void Slayer_ResetMatchState( void );
 
+// ---------------------------------------------------------------------------
+// Grenade visual effects
+// ---------------------------------------------------------------------------
+
+// Apply CS:GO-style pitch spin to a grenade entity in flight.
+// Called from CL_LinkPacketEntities after interpolation is done.
+void Slayer_GrenadeSpin( cl_entity_t *ent );
+
+// Draw predicted trajectory lines for all in-flight grenades.
+// Called from pfnDrawTransparentTriangles (ref_common.c).
+void Slayer_GrenadeTrajectoryDraw( void );
+
 #endif // CL_VIEW_SLAYER_H

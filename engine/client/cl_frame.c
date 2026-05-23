@@ -1249,6 +1249,9 @@ static void CL_LinkPacketEntities( frame_t *frame )
 			}
 		}
 
+		// Slayer3D: apply grenade spin after all interpolation is done
+		Slayer_GrenadeSpin( ent );
+
 		if( !FBitSet( state->entityType, ENTITY_NORMAL ))
 		{
 			CL_LinkCustomEntity( ent, state );

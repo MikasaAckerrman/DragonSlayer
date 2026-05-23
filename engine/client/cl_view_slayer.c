@@ -58,6 +58,23 @@ static CVAR_DEFINE_AUTO( slayer_autojump,   "0", FCVAR_ARCHIVE, "Slayer3D: enabl
 static CVAR_DEFINE_AUTO( slayer_sgs,        "0", FCVAR_ARCHIVE, "Slayer3D: enable SGS combo (bhop + ducktap + autostrafe at once)" );
 
 // ===========================================================================
+// Cvars - Grenade spin
+// ===========================================================================
+
+static CVAR_DEFINE_AUTO( slayer_grenade_spin, "1", FCVAR_ARCHIVE, "Slayer3D: enable CS:GO-style grenade spin in flight (0 = off)" );
+static CVAR_DEFINE_AUTO( slayer_grenade_spin_speed, "4.0", FCVAR_ARCHIVE, "Slayer3D: grenade spin speed multiplier" );
+
+// ===========================================================================
+// Cvars - Grenade trajectory
+// ===========================================================================
+
+static CVAR_DEFINE_AUTO( slayer_grenade_trajectory, "1", FCVAR_ARCHIVE, "Slayer3D: draw predicted trajectory line for grenades in flight (0 = off)" );
+static CVAR_DEFINE_AUTO( slayer_grenade_trajectory_r, "0", FCVAR_ARCHIVE, "Slayer3D: trajectory line red (0..255)" );
+static CVAR_DEFINE_AUTO( slayer_grenade_trajectory_g, "255", FCVAR_ARCHIVE, "Slayer3D: trajectory line green (0..255)" );
+static CVAR_DEFINE_AUTO( slayer_grenade_trajectory_b, "0", FCVAR_ARCHIVE, "Slayer3D: trajectory line blue (0..255)" );
+static CVAR_DEFINE_AUTO( slayer_grenade_trajectory_a, "200", FCVAR_ARCHIVE, "Slayer3D: trajectory line alpha (0..255)" );
+
+// ===========================================================================
 // Cvars - Smooth zoom
 // ===========================================================================
 
@@ -200,6 +217,15 @@ void V_InitSlayerCvars( void )
 		"begin SGS combo (bhop + ducktap + autostrafe at once)" );
 	Cmd_AddCommand( "-slayer_sgs", Cmd_SgsUp_f,
 		"stop SGS combo" );
+
+	// Grenade visual effects
+	Cvar_RegisterVariable( &slayer_grenade_spin );
+	Cvar_RegisterVariable( &slayer_grenade_spin_speed );
+	Cvar_RegisterVariable( &slayer_grenade_trajectory );
+	Cvar_RegisterVariable( &slayer_grenade_trajectory_r );
+	Cvar_RegisterVariable( &slayer_grenade_trajectory_g );
+	Cvar_RegisterVariable( &slayer_grenade_trajectory_b );
+	Cvar_RegisterVariable( &slayer_grenade_trajectory_a );
 
 	// Smooth zoom
 	Cvar_RegisterVariable( &slayer_smooth_zoom );
@@ -666,4 +692,156 @@ void V_SlayerSmoothZoom( ref_viewpass_t *rvp )
 
 	rvp->fov_x = smooth_fov;
 	rvp->fov_y = V_CalcFov( &rvp->fov_x, clgame.viewport[2], clgame.viewport[3] );
+}
+
+
+// ===========================================================================
+// Grenade spin - CS:GO-style rotation in flight
+// ===========================================================================
+
+// Per-entity accumulated spin angle. Indexed by ent->index (0..2047).
+#define SLAYER_SPIN_MAX_ENTS 2048
+static float slayer_grenade_spin_angle[SLAYER_SPIN_MAX_ENTS];
+
+void Slayer_GrenadeSpin( cl_entity_t *ent )
+{
+	float speed, spin_rate;
+	vec3_t velocity;
+	int idx;
+
+	if( slayer_grenade_spin.value == 0.0f )
+		return;
+	if( !ent || !ent->model )
+		return;
+	if( !FBitSet( ent->model->flags, STUDIO_GRENADE ))
+		return;
+
+	idx = ent->index;
+	if( idx < 0 || idx >= SLAYER_SPIN_MAX_ENTS )
+		return;
+
+	// Estimate velocity from position history (current - previous origin).
+	VectorSubtract( ent->curstate.origin, ent->prevstate.origin, velocity );
+
+	// The delta is per-server-frame; normalize to get speed in units/sec
+	// is not needed — we just need magnitude for the threshold check.
+	speed = VectorLength( velocity );
+
+	// Stop spinning when nearly stationary (grenade has landed).
+	if( speed < 5.0f )
+	{
+		// Don't reset angle — grenade stays at its last rotation.
+		return;
+	}
+
+	spin_rate = speed * slayer_grenade_spin_speed.value * host.frametime;
+	slayer_grenade_spin_angle[idx] += spin_rate;
+
+	// Wrap to avoid float overflow on very long flights.
+	if( slayer_grenade_spin_angle[idx] > 3600.0f )
+		slayer_grenade_spin_angle[idx] -= 3600.0f;
+	if( slayer_grenade_spin_angle[idx] < -3600.0f )
+		slayer_grenade_spin_angle[idx] += 3600.0f;
+
+	ent->angles[PITCH] += slayer_grenade_spin_angle[idx];
+}
+
+// ===========================================================================
+// Grenade trajectory prediction line
+// ===========================================================================
+
+void Slayer_GrenadeTrajectoryDraw( void )
+{
+	int i;
+	float gravity;
+	float dt = 0.05f;
+	int max_steps = 120;
+	float r, g, b, a;
+
+	if( slayer_grenade_trajectory.value == 0.0f )
+		return;
+	if( cls.state != ca_active )
+		return;
+
+	gravity = clgame.movevars.gravity;
+	if( gravity <= 0.0f )
+		gravity = 800.0f;
+
+	r = bound( 0.0f, slayer_grenade_trajectory_r.value / 255.0f, 1.0f );
+	g = bound( 0.0f, slayer_grenade_trajectory_g.value / 255.0f, 1.0f );
+	b = bound( 0.0f, slayer_grenade_trajectory_b.value / 255.0f, 1.0f );
+	a = bound( 0.0f, slayer_grenade_trajectory_a.value / 255.0f, 1.0f );
+
+	for( i = 0; i < cl.frames[cl.parsecountmod].num_entities; i++ )
+	{
+		entity_state_t *state = &cls.packet_entities[(cl.frames[cl.parsecountmod].first_entity + i) % cls.num_client_entities];
+		cl_entity_t *ent = CL_GetEntityByIndex( state->number );
+		vec3_t vel, pos, next_pos;
+		float speed;
+		int step;
+		pmtrace_t *tr;
+
+		if( !ent || !ent->model )
+			continue;
+		if( !FBitSet( ent->model->flags, STUDIO_GRENADE ))
+			continue;
+
+		// Estimate velocity from position delta.
+		VectorSubtract( ent->curstate.origin, ent->prevstate.origin, vel );
+		speed = VectorLength( vel );
+		if( speed < 5.0f )
+			continue; // already landed
+
+		// Scale velocity to units/sec (delta is per server frame ~0.1s).
+		// Use msg_time difference for accuracy.
+		{
+			float frame_dt = ent->curstate.msg_time - ent->prevstate.msg_time;
+			if( frame_dt > 0.001f && frame_dt < 1.0f )
+			{
+				vel[0] /= frame_dt;
+				vel[1] /= frame_dt;
+				vel[2] /= frame_dt;
+			}
+			else
+			{
+				// Fallback: assume 10Hz update rate
+				vel[0] *= 10.0f;
+				vel[1] *= 10.0f;
+				vel[2] *= 10.0f;
+			}
+		}
+
+		VectorCopy( ent->origin, pos );
+
+		ref.dllFuncs.TriRenderMode( kRenderTransAdd );
+		ref.dllFuncs.Color4f( r, g, b, a );
+		ref.dllFuncs.Begin( TRI_LINES );
+
+		for( step = 0; step < max_steps; step++ )
+		{
+			// Advance simulation
+			next_pos[0] = pos[0] + vel[0] * dt;
+			next_pos[1] = pos[1] + vel[1] * dt;
+			next_pos[2] = pos[2] + vel[2] * dt;
+			vel[2] -= gravity * dt;
+
+			// Check for collision
+			tr = PM_CL_TraceLine( pos, next_pos, PM_TRACELINE_PHYSENTSONLY, 2, -1 );
+			if( tr->fraction < 1.0f )
+			{
+				// Draw segment up to impact point and stop.
+				ref.dllFuncs.Vertex3f( pos[0], pos[1], pos[2] );
+				ref.dllFuncs.Vertex3f( tr->endpos[0], tr->endpos[1], tr->endpos[2] );
+				break;
+			}
+
+			// Draw this segment
+			ref.dllFuncs.Vertex3f( pos[0], pos[1], pos[2] );
+			ref.dllFuncs.Vertex3f( next_pos[0], next_pos[1], next_pos[2] );
+
+			VectorCopy( next_pos, pos );
+		}
+
+		ref.dllFuncs.End();
+	}
 }
