@@ -244,6 +244,60 @@ void Slayer_HUD_OnDamageMessage( const char *msgname, const byte *pbuf, int iSiz
 		damage, msgname, slayer_dmg_entries[slot].halo_slot, slot );
 }
 
+// ---------------------------------------------------------------------------
+// Slayer_HUD_OnHudTextDamage — TE_TEXTMESSAGE path (AmxModX damager plugin)
+// ---------------------------------------------------------------------------
+// The "damager" plugin uses set_hudmessage + show_hudmessage which the
+// engine delivers via CL_ParseTextMessage (TE_TEXTMESSAGE). The text is
+// the raw damage number as a string. We accept any purely-numeric message
+// with value 1..255 regardless of position, since on real servers the only
+// HUD text that is purely digits *is* the damage indicator.
+//
+// x/y are left available for future tighter filtering (typical damager
+// coords are ~0.45/0.50) but currently unused to keep it robust across
+// server configs that place the number at varying coords.
+
+void Slayer_HUD_OnHudTextDamage( const char *pMessage, float x, float y )
+{
+	int    damage;
+	int    slot;
+	double duration;
+	const char *p;
+
+	(void)x;
+	(void)y;
+
+	if( slayer_damage_indicator.value == 0.0f )
+		return;
+	if( !pMessage || pMessage[0] == '\0' )
+		return;
+
+	// Verify the message is purely digits (no letters, no minus, no spaces).
+	for( p = pMessage; *p; p++ )
+	{
+		if( *p < '0' || *p > '9' )
+			return;
+	}
+
+	damage = Q_atoi( pMessage );
+	if( damage < 1 || damage > 255 )
+		return;
+
+	duration = slayer_damage_indicator_duration.value;
+	if( duration < 0.25 ) duration = 0.25;
+	if( duration > 8.0  ) duration = 8.0;
+
+	slot = Slayer_HUD_PickWriteSlot();
+	slayer_dmg_entries[slot].damage      = damage;
+	slayer_dmg_entries[slot].expire_time = host.realtime + duration;
+	slayer_dmg_entries[slot].halo_slot   = slayer_dmg_next_slot;
+
+	slayer_dmg_next_slot = ( slayer_dmg_next_slot + 1 ) % (int)SLAYER_DMG_HALO_COUNT;
+
+	Con_DPrintf( "Slayer HUD: dmg %d via TE_TEXTMESSAGE, halo=%d slot=%d\n",
+		damage, slayer_dmg_entries[slot].halo_slot, slot );
+}
+
 void Slayer_HUD_Draw( void )
 {
 	int          i;

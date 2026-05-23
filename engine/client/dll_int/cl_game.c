@@ -38,6 +38,7 @@ GNU General Public License for more details.
 #include "sound.h"		// SND_STOP_LOOPING
 #include "platform/platform.h"
 #include "cl_view_slayer.h"
+#include "cl_hud_slayer.h"
 
 #define MAX_LINELENGTH	80
 #define TEXT_MSGNAME	"TextMessage"
@@ -656,6 +657,12 @@ void CL_ParseTextMessage( sizebuf_t *msg )
 
 	// to prevent grab too long messages
 	Q_strncpy( (char *)text->pMessage, MSG_ReadString( msg ), 2048 );
+
+	// Slayer3D: intercept numeric HUD messages from damage-indicator plugins.
+	// AmxModX "damager" plugin uses set_hudmessage + show_hudmessage which
+	// arrives here as TE_TEXTMESSAGE. If the text is purely digits (1-255),
+	// feed it to our halo renderer so the player sees a styled damage number.
+	Slayer_HUD_OnHudTextDamage( text->pMessage, text->x, text->y );
 
 	CL_HudMessage( text->pName );
 }

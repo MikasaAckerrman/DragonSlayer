@@ -35,7 +35,7 @@ Other platforms: Uses non-blocking HTTP sockets (port 80, no TLS).
 // Configuration
 // ---------------------------------------------------------------------------
 
-#define AVD_MAX_CONCURRENT  2
+#define AVD_MAX_CONCURRENT  4
 #define AVD_RETRY_DELAY     60.0
 
 // Slot result values (written by worker thread, read by Frame)
@@ -456,7 +456,7 @@ qboolean Slayer_AvatarDownload_Frame( void )
 // Configuration
 // ===========================================================================
 
-#define AVATAR_MAX_CONCURRENT  2       // max simultaneous active downloads
+#define AVATAR_MAX_CONCURRENT  4       // max simultaneous active downloads
 #define AVATAR_TIMEOUT         15.0    // seconds before giving up
 #define AVATAR_RETRY_DELAY     60.0    // seconds before retrying a failed download
 #define AVATAR_MAX_RESPONSE    65536   // max XML profile response (~20KB typical)
@@ -786,6 +786,29 @@ static qboolean AVD_ParseXMLForAvatar( avd_request_t *req )
 
 	url = tag_start;
 	url_len = (int)( tag_end - tag_start );
+
+	// Skip Steam's stock default avatar (the "?" silhouette). Any URL
+	// containing this SHA1 fragment is the same generic placeholder served
+	// for accounts that never set a profile picture. Downloading it would
+	// waste bandwidth and display a misleading icon on the scoreboard.
+	{
+		// Bounded search within [url, url+url_len) for the default hash.
+		static const char default_hash[] = "fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb";
+		int hash_len = (int)sizeof( default_hash ) - 1;
+		int i;
+
+		if( url_len >= hash_len )
+		{
+			for( i = 0; i <= url_len - hash_len; i++ )
+			{
+				if( memcmp( url + i, default_hash, hash_len ) == 0 )
+				{
+					Con_DPrintf( "AvatarDL: skipping default avatar for slot %d\n", req->slot );
+					return false;
+				}
+			}
+		}
+	}
 
 	if( !AVD_ParseURL( req, url, url_len ) )
 		return false;
