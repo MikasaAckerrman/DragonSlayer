@@ -27,9 +27,9 @@
     java.lang.String getCallingPackage();
     java.lang.String[] getAssetsList(boolean, java.lang.String);
     android.content.res.AssetManager getAssets(boolean);
-    int downloadAvatar(java.lang.String, java.lang.String);
-    void startSteamLogin(java.lang.String, java.lang.String);
-    void nativeSteamLoginResult(long);
+    static int downloadAvatar(java.lang.String, java.lang.String);
+    static void startSteamLogin(java.lang.String, java.lang.String);
+    static void nativeSteamLoginResult(long);
 }
 
 # Slayer3D Steam Web API helper — invoked from C via FindClass +
@@ -37,7 +37,7 @@
 # in release builds and FindClass returns NULL at runtime, silently
 # disabling batch avatar fetch.
 -keep class su.xash.engine.SteamAPIHelper {
-    int fetchBatchAvatars(java.lang.String, java.lang.String, java.lang.String);
+    static int fetchBatchAvatars(java.lang.String, java.lang.String, java.lang.String);
 }
 
 # Slayer3D Steam OpenID login activity — launched by Intent from
