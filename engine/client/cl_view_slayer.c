@@ -18,6 +18,7 @@ GNU General Public License for more details.
 #include "cl_view_slayer.h"
 #include "cl_scoreboard_slayer.h"
 #include "cl_hud_slayer.h"
+#include "cl_dmg_replay_slayer.h"
 
 // ===========================================================================
 // Cvars - Third-person camera
@@ -213,6 +214,10 @@ void V_InitSlayerCvars( void )
 	// Crosshair-area HUD overlay (damage indicator)
 	Slayer_HUD_Init();
 
+	// Plugin-independent damage model (exact hitbox + sound-based
+	// armor detect). Drives Slayer_HUD_OnBloodImpact accuracy.
+	Slayer_DmgReplay_Init();
+
 	Con_Printf( "Slayer3D: cvars initialized\n" );
 }
 
@@ -376,6 +381,9 @@ void Slayer_ResetMatchState( void )
 
 	// Clear in-flight damage indicators so old hits don't survive map change
 	Slayer_HUD_Reset();
+
+	// Clear per-victim armor/helmet flags from prior map
+	Slayer_DmgReplay_Reset();
 }
 
 // ===========================================================================

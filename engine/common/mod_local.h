@@ -197,6 +197,7 @@ hull_t *Mod_HullForStudio( model_t *m, float frame, int seq, vec3_t ang, vec3_t 
 void *R_StudioGetAnim( studiohdr_t *m_pStudioHeader, model_t *m_pSubModel, mstudioseqdesc_t *pseqdesc );
 void Mod_SwapStudioSeqGroupAnims( studiohdr_t *phdr, mstudioseqdesc_t *pseq, byte *buf );
 int Mod_HitgroupForStudioHull( int index );
+qboolean Mod_StudioPointInHitbox( int index, const vec3_t world_pt );
 void Mod_ClearStudioCache( void );
 
 //

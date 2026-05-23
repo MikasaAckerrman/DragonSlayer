@@ -37,6 +37,7 @@ GNU General Public License for more details.
 #include "common.h"
 #include "client.h"
 #include "cl_hud_slayer.h"
+#include "cl_dmg_replay_slayer.h"
 
 #if XASH_ANDROID
 #include <android/log.h>
@@ -57,6 +58,15 @@ static CVAR_DEFINE_AUTO( slayer_damage_indicator_color,
 static CVAR_DEFINE_AUTO( slayer_damage_indicator_duration,
 	"1.5", FCVAR_ARCHIVE,
 	"Slayer3D: damage indicator total visible time (seconds, fades over the last 0.5s)" );
+
+// Per-victim hue rotation. With this on, every enemy gets a distinct,
+// stable color for their damage numbers — close-quarters fights against
+// two or three opponents become readable at a glance instead of a wall
+// of identical red digits. The base slayer_damage_indicator_color cvar
+// is used only when a hit cannot be attributed to a specific victim.
+static CVAR_DEFINE_AUTO( slayer_damage_indicator_per_victim_color,
+	"1", FCVAR_ARCHIVE,
+	"Slayer3D: rotate hue per victim so adjacent enemies have distinct numbers (0 = single color)" );
 
 // =============================================================================
 // Halo offsets
@@ -89,6 +99,7 @@ typedef struct
 	int    damage;       // 0 = empty slot
 	double expire_time;  // host.realtime when this entry must vanish
 	int    halo_slot;    // index into slayer_dmg_halo
+	int    victim_idx;   // 1..32 player entindex, 0 = unknown / generic
 } slayer_dmg_entry_t;
 
 // Ring of in-flight hits. SLAYER_DMG_HALO_COUNT also bounds the ring so
@@ -111,6 +122,12 @@ static int slayer_cur_weapon_id = 0;
 static double slayer_blood_agg_time   = 0;
 static int    slayer_blood_agg_damage = 0;
 static int    slayer_blood_agg_count  = 0;
+// Pellets that hit a DIFFERENT victim during the aggregate window
+// must NOT be merged into the running aggregate — otherwise a shotgun
+// burst into a crowd shows one merged number and you can't tell which
+// enemy took how much. Track the victim of the running aggregate and
+// flush + restart when a new pellet hits a different one.
+static int    slayer_blood_agg_victim = 0;
 
 // =============================================================================
 // CS 1.6 Weapon damage table
@@ -288,6 +305,7 @@ void Slayer_HUD_Init( void )
 	Cvar_RegisterVariable( &slayer_damage_indicator );
 	Cvar_RegisterVariable( &slayer_damage_indicator_color );
 	Cvar_RegisterVariable( &slayer_damage_indicator_duration );
+	Cvar_RegisterVariable( &slayer_damage_indicator_per_victim_color );
 
 	Slayer_HUD_Reset();
 }
@@ -301,6 +319,7 @@ void Slayer_HUD_Reset( void )
 	slayer_blood_agg_damage     = 0;
 	slayer_blood_agg_count      = 0;
 	slayer_blood_agg_time       = 0;
+	slayer_blood_agg_victim     = 0;
 	slayer_cur_weapon_id        = 0;
 	slayer_last_plugin_hit_time = 0;
 }
@@ -333,6 +352,7 @@ void Slayer_HUD_OnDamageMessage( const char *msgname, const byte *pbuf, int iSiz
 	slayer_dmg_entries[slot].damage      = damage;
 	slayer_dmg_entries[slot].expire_time = host.realtime + duration;
 	slayer_dmg_entries[slot].halo_slot   = slayer_dmg_next_slot;
+	slayer_dmg_entries[slot].victim_idx  = 0; // plugin msg has no victim, use base color
 
 	slayer_dmg_next_slot = ( slayer_dmg_next_slot + 1 ) % (int)SLAYER_DMG_HALO_COUNT;
 
@@ -390,6 +410,7 @@ void Slayer_HUD_OnHudTextDamage( const char *pMessage, float x, float y )
 	slayer_dmg_entries[slot].damage      = damage;
 	slayer_dmg_entries[slot].expire_time = host.realtime + duration;
 	slayer_dmg_entries[slot].halo_slot   = slayer_dmg_next_slot;
+	slayer_dmg_entries[slot].victim_idx  = 0; // HudText damager has no victim, use base color
 
 	slayer_dmg_next_slot = ( slayer_dmg_next_slot + 1 ) % (int)SLAYER_DMG_HALO_COUNT;
 
@@ -419,66 +440,40 @@ void Slayer_HUD_OnCurWeapon( int weapon_id )
 // TE_BLOOD damage indicator: entity lookup + hitgroup detection
 // =============================================================================
 
-// Find the closest player entity to a given world position and return
-// a hitgroup multiplier based on where the blood Z-position falls within
-// the player's bounding box.
-static float Slayer_HUD_GetHitgroupMultiplier( vec3_t blood_pos )
+// Find the closest player entity to a given world position. Returns
+// the 1-based entindex or 0 if no player is within `max_dist` units.
+// Used as the victim resolver for both the hitbox-based hitgroup test
+// and the per-victim armor-state lookup.
+static int Slayer_HUD_FindClosestPlayer( const vec3_t world_pos, float max_dist )
 {
-	int            i;
-	cl_entity_t   *ent;
-	cl_entity_t   *closest = NULL;
-	float          closest_dist = 128.0f * 128.0f; // squared, max 128 units
-	float          foot, top, height, rel_z;
+	int          i;
+	cl_entity_t *ent;
+	int          best_idx  = 0;
+	float        best_dist = max_dist * max_dist; // squared
 
 	for( i = 1; i <= cl.maxclients; i++ )
 	{
 		float dx, dy, dz, dist_sq;
 
 		ent = CL_GetEntityByIndex( i );
-		if( !ent )
-			continue;
-		if( !ent->player )
+		if( !ent || !ent->player )
 			continue;
 		if( ent->curstate.messagenum != cl.parsecount )
 			continue;
 
-		dx = blood_pos[0] - ent->origin[0];
-		dy = blood_pos[1] - ent->origin[1];
-		dz = blood_pos[2] - ent->origin[2];
+		dx = world_pos[0] - ent->origin[0];
+		dy = world_pos[1] - ent->origin[1];
+		dz = world_pos[2] - ent->origin[2];
 		dist_sq = dx * dx + dy * dy + dz * dz;
 
-		if( dist_sq < closest_dist )
+		if( dist_sq < best_dist )
 		{
-			closest_dist = dist_sq;
-			closest = ent;
+			best_dist = dist_sq;
+			best_idx  = i;
 		}
 	}
 
-	if( !closest )
-		return 1.0f;
-
-	// Determine hitgroup from Z-position relative to entity bbox.
-	// entity foot = origin[2] + mins[2], top = origin[2] + maxs[2]
-	foot   = closest->origin[2] + closest->curstate.mins[2];
-	top    = closest->origin[2] + closest->curstate.maxs[2];
-	height = top - foot;
-
-	if( height <= 0.0f )
-		return 1.0f;
-
-	rel_z = blood_pos[2];
-
-	// Top 25% = head (x4)
-	if( rel_z > top - height * 0.25f )
-		return 4.0f;
-	// Bottom 25% = legs (x0.75)
-	if( rel_z < foot + height * 0.25f )
-		return 0.75f;
-	// Middle: below midpoint = stomach (x1.25), above = chest (x1.0)
-	if( rel_z < foot + height * 0.5f )
-		return 1.25f;
-
-	return 1.0f;
+	return best_idx;
 }
 
 // =============================================================================
@@ -501,16 +496,18 @@ static void Slayer_HUD_FlushBloodAggregate( void )
 	slayer_dmg_entries[slot].damage      = slayer_blood_agg_damage;
 	slayer_dmg_entries[slot].expire_time = host.realtime + duration;
 	slayer_dmg_entries[slot].halo_slot   = slayer_dmg_next_slot;
+	slayer_dmg_entries[slot].victim_idx  = slayer_blood_agg_victim;
 
 	slayer_dmg_next_slot = ( slayer_dmg_next_slot + 1 ) % (int)SLAYER_DMG_HALO_COUNT;
 
-	Con_DPrintf( "Slayer HUD: dmg %d via TE_BLOOD aggregate (%d pellets), halo=%d\n",
-		slayer_blood_agg_damage, slayer_blood_agg_count,
+	Con_DPrintf( "Slayer HUD: dmg %d via TE_BLOOD aggregate (%d pellets, victim=%d), halo=%d\n",
+		slayer_blood_agg_damage, slayer_blood_agg_count, slayer_blood_agg_victim,
 		slayer_dmg_entries[slot].halo_slot );
 
 	slayer_blood_agg_damage = 0;
 	slayer_blood_agg_count  = 0;
 	slayer_blood_agg_time   = 0;
+	slayer_blood_agg_victim = 0;
 }
 
 // =============================================================================
@@ -569,38 +566,124 @@ void Slayer_HUD_OnBloodImpact( vec3_t pos, int count )
 		wpn = &slayer_weapon_table[slayer_cur_weapon_id];
 		if( wpn->base_damage > 0 )
 		{
-			float hitgroup_mult;
 			float raw_damage;
+			int   victim_idx;
+			int   hitgroup;
+			float hitgroup_mult;
+			int   has_kevlar = 0, has_helmet = 0;
 
-			raw_damage = (float)wpn->base_damage * (float)pow( wpn->range_modifier, dist / 500.0 );
-			hitgroup_mult = Slayer_HUD_GetHitgroupMultiplier( pos );
-			raw_damage *= hitgroup_mult;
+			raw_damage = (float)wpn->base_damage *
+				(float)pow( wpn->range_modifier, dist / 500.0 );
+
+			// PRIMARY: which player's hitbox actually contains the
+			// blood point. This is the only correct disambiguator
+			// when two enemies stand close together — origin-based
+			// "closest player" is fooled by recoil pushback and
+			// crouch/lean offsets, hitbox containment is not.
+			hitgroup   = SLAYER_HG_GENERIC;
+			victim_idx = Slayer_DmgReplay_FindHitboxOwner( pos, &hitgroup );
+
+			// FALLBACK: animation lerp can drag bones a few units
+			// off the actual hit point at high strafe speeds, so a
+			// hitbox containment miss is still a real hit on the
+			// closest player. Use a wider 192u radius (vs 128u
+			// in the hitbox scan) — CS player bbox + worst-case
+			// lean/crouch offset can put origin ~80u from impact.
+			if( !victim_idx )
+			{
+				victim_idx = Slayer_HUD_FindClosestPlayer( pos, 192.0f );
+				// hitgroup stays SLAYER_HG_GENERIC (1.0x) so we
+				// under-count rather than fabricate a 4x headshot
+				// when we can't be sure where the bullet landed.
+			}
+
+			hitgroup_mult = Slayer_DmgReplay_HitgroupMult( hitgroup );
+			raw_damage   *= hitgroup_mult;
+
+			// Sound-channel armor inference. CS hl.dll emits
+			// helmet / kevlar SFX *after* the TE_BLOOD in the same
+			// server frame, but they arrive in the same client
+			// packet, so we read whatever the previous bullet on
+			// this victim revealed (and the next call will be more
+			// accurate). 500ms TTL inside Slayer_DmgReplay handles
+			// stale flags.
+			Slayer_DmgReplay_GetArmorState( victim_idx, &has_kevlar, &has_helmet );
+
+			if( hitgroup == SLAYER_HG_HEAD )
+			{
+				// Helmet halves the headshot before any other
+				// modifier; legs/arms with helmet see no effect.
+				if( has_helmet )
+					raw_damage *= Slayer_DmgReplay_ArmorRatio( slayer_cur_weapon_id );
+			}
+			else if( hitgroup == SLAYER_HG_CHEST   ||
+				 hitgroup == SLAYER_HG_STOMACH ||
+				 hitgroup == SLAYER_HG_LEFTARM ||
+				 hitgroup == SLAYER_HG_RIGHTARM )
+			{
+				// CS doesn't put kevlar on legs, only the torso
+				// and arms. Apply per-weapon armor ratio when
+				// the body is armored.
+				if( has_kevlar )
+					raw_damage *= Slayer_DmgReplay_ArmorRatio( slayer_cur_weapon_id );
+			}
+			// SLAYER_HG_LEFTLEG / SLAYER_HG_RIGHTLEG / GENERIC:
+			// no armor reduction in CS 1.6.
+
 			damage = (int)( raw_damage + 0.5f );
 			if( damage < 1 ) damage = 1;
 
 			// Shotgun aggregation: if weapon has multiple pellets,
-			// aggregate TE_BLOOD events within a 50ms window.
+			// aggregate TE_BLOOD events within a 50ms window — but
+			// ONLY for pellets that hit the SAME victim. A spread
+			// into a crowd that catches two enemies must produce
+			// two distinct numbers, otherwise the player has no
+			// way to tell who took how much.
 			if( wpn->pellets > 1 )
 			{
 				if( slayer_blood_agg_count > 0 &&
-					( host.realtime - slayer_blood_agg_time ) < 0.05 )
+					( host.realtime - slayer_blood_agg_time ) < 0.05 &&
+					slayer_blood_agg_victim == victim_idx )
 				{
-					// Aggregate into current window.
+					// Same victim, same window → merge.
 					slayer_blood_agg_damage += damage;
 					slayer_blood_agg_count++;
 					return;
 				}
 				else
 				{
-					// Flush previous aggregate if any, start new one.
+					// Different victim or expired window:
+					// flush the old aggregate (if any) into its
+					// own halo slot, then start a fresh one for
+					// this pellet's victim.
 					if( slayer_blood_agg_count > 0 )
 						Slayer_HUD_FlushBloodAggregate();
 					slayer_blood_agg_time   = host.realtime;
 					slayer_blood_agg_damage = damage;
 					slayer_blood_agg_count  = 1;
+					slayer_blood_agg_victim = victim_idx;
 					return;
 				}
 			}
+
+			// Non-shotgun, single-pellet: register immediately and
+			// remember the victim for per-color rendering.
+			duration = slayer_damage_indicator_duration.value;
+			if( duration < 0.25 ) duration = 0.25;
+			if( duration > 8.0  ) duration = 8.0;
+
+			slot = Slayer_HUD_PickWriteSlot();
+			slayer_dmg_entries[slot].damage      = damage;
+			slayer_dmg_entries[slot].expire_time = host.realtime + duration;
+			slayer_dmg_entries[slot].halo_slot   = slayer_dmg_next_slot;
+			slayer_dmg_entries[slot].victim_idx  = victim_idx;
+
+			slayer_dmg_next_slot = ( slayer_dmg_next_slot + 1 ) % (int)SLAYER_DMG_HALO_COUNT;
+
+			Con_DPrintf( "Slayer HUD: dmg %d via TE_BLOOD (weapon=%d, dist=%.0f, victim=%d, hg=%d), halo=%d\n",
+				damage, slayer_cur_weapon_id, dist, victim_idx, hitgroup,
+				slayer_dmg_entries[slot].halo_slot );
+			return;
 		}
 		else
 		{
@@ -616,7 +699,8 @@ void Slayer_HUD_OnBloodImpact( vec3_t pos, int count )
 		if( damage < 1 ) damage = 1;
 	}
 
-	// Register single-pellet hit.
+	// Fallback path (unknown weapon / grenade / knife): no victim
+	// resolution since we don't have a damage formula anyway.
 	duration = slayer_damage_indicator_duration.value;
 	if( duration < 0.25 ) duration = 0.25;
 	if( duration > 8.0  ) duration = 8.0;
@@ -625,11 +709,55 @@ void Slayer_HUD_OnBloodImpact( vec3_t pos, int count )
 	slayer_dmg_entries[slot].damage      = damage;
 	slayer_dmg_entries[slot].expire_time = host.realtime + duration;
 	slayer_dmg_entries[slot].halo_slot   = slayer_dmg_next_slot;
+	slayer_dmg_entries[slot].victim_idx  = 0; // unknown -> base color
 
 	slayer_dmg_next_slot = ( slayer_dmg_next_slot + 1 ) % (int)SLAYER_DMG_HALO_COUNT;
 
-	Con_DPrintf( "Slayer HUD: dmg %d via TE_BLOOD (weapon=%d, dist=%.0f), halo=%d\n",
-		damage, slayer_cur_weapon_id, dist, slayer_dmg_entries[slot].halo_slot );
+	Con_DPrintf( "Slayer HUD: dmg %d via TE_BLOOD fallback (weapon=%d), halo=%d\n",
+		damage, slayer_cur_weapon_id, slayer_dmg_entries[slot].halo_slot );
+}
+
+// HSV to RGB conversion (h in degrees 0..360, s/v in 0..1, output 0..1).
+// Used to give each victim a stable distinct color for their damage
+// numbers so the player can read 2-3 simultaneous fights at a glance.
+// Standard formula, no alpha.
+static void Slayer_HUD_HSVtoRGB( float h, float s, float v, float *r, float *g, float *b )
+{
+	float c, x, m;
+	float h6;
+	float r1 = 0.0f, g1 = 0.0f, b1 = 0.0f;
+
+	c  = v * s;
+	h6 = h / 60.0f;
+	x  = c * ( 1.0f - fabsf( fmodf( h6, 2.0f ) - 1.0f ));
+
+	if( h6 < 1.0f )      { r1 = c; g1 = x; b1 = 0; }
+	else if( h6 < 2.0f ) { r1 = x; g1 = c; b1 = 0; }
+	else if( h6 < 3.0f ) { r1 = 0; g1 = c; b1 = x; }
+	else if( h6 < 4.0f ) { r1 = 0; g1 = x; b1 = c; }
+	else if( h6 < 5.0f ) { r1 = x; g1 = 0; b1 = c; }
+	else                 { r1 = c; g1 = 0; b1 = x; }
+
+	m  = v - c;
+	*r = r1 + m;
+	*g = g1 + m;
+	*b = b1 + m;
+}
+
+// Compute a stable, well-distributed hue for victim entindex `idx`
+// in the 1..32 range. 137° is the golden-angle approximation that
+// keeps adjacent indices visually distinct (avoids the cluster of
+// near-identical reds you'd get from idx*10 or similar small strides).
+static float Slayer_HUD_VictimHue( int idx )
+{
+	int h;
+
+	if( idx <= 0 )
+		return 0.0f;
+
+	h = ( idx * 137 ) % 360;
+	if( h < 0 ) h += 360;
+	return (float)h;
 }
 
 void Slayer_HUD_Draw( void )
@@ -708,6 +836,22 @@ void Slayer_HUD_Draw( void )
 		color[1] = base_color[1];
 		color[2] = base_color[2];
 		color[3] = (byte)( base_color[3] * alpha_scale );
+
+		// Per-victim hue rotation. When enabled and the entry has a
+		// known victim, replace the RGB channels with that victim's
+		// stable color while keeping the configured alpha (and the
+		// fade scaling we just applied).
+		if( slayer_damage_indicator_per_victim_color.value != 0.0f && e->victim_idx > 0 )
+		{
+			float fr, fg, fb;
+			float hue = Slayer_HUD_VictimHue( e->victim_idx );
+
+			Slayer_HUD_HSVtoRGB( hue, 0.85f, 1.0f, &fr, &fg, &fb );
+
+			color[0] = (byte)bound( 0, (int)( fr * 255.0f ), 255 );
+			color[1] = (byte)bound( 0, (int)( fg * 255.0f ), 255 );
+			color[2] = (byte)bound( 0, (int)( fb * 255.0f ), 255 );
+		}
 
 		if( e->halo_slot < 0 || e->halo_slot >= (int)SLAYER_DMG_HALO_COUNT )
 			e->halo_slot = 0;
