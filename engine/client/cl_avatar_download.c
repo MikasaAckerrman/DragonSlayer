@@ -297,7 +297,10 @@ void Slayer_AvatarDownload_Init( void )
 		return;
 	}
 
-	Con_Printf( "Slayer3D: avatar JNI init OK (slot count %d)\n", MAX_CLIENTS );
+	Con_Printf( "Slayer3D: avatar JNI init OK (method=%p)\n", (void *)avd_download_method );
+	__android_log_print( ANDROID_LOG_INFO, "Xash",
+		"AvatarDL: JNI init SUCCESS — avd_jvm=%p class=%p method=%p",
+		(void *)avd_jvm, (void *)avd_activity_class, (void *)avd_download_method );
 }
 
 void Slayer_AvatarDownload_Shutdown( void )
@@ -336,7 +339,13 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 		return;
 
 	if( !avd_download_method )
+	{
+		Con_Printf( S_ERROR "AvatarDL: BLOCKED slot=%d — downloadAvatar method is NULL (R8 stripped?)\n", slot );
+		__android_log_print( ANDROID_LOG_ERROR, "Xash",
+			"AvatarDL: BLOCKED slot=%d steamid=%" PRIu64 " — avd_download_method is NULL (JNI init failed or R8 stripped method)",
+			slot, steamid64 );
 		return;  // JNI not initialized
+	}
 
 	// Already done or in progress?
 	if( avd_slot_result[slot] == AVD_RESULT_DONE ||

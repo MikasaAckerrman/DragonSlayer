@@ -345,6 +345,9 @@ static void Slayer_LoadAvatarTexture( int slot )
 
 	Q_snprintf( path, sizeof( path ), "avatars/%"PRIu64".png", slayer_steamid64[slot] );
 
+	Con_Printf( "AvatarTex: slot=%d id=%" PRIu64 " exists=%d\n",
+		slot, slayer_steamid64[slot], FS_FileExists( path, false ) );
+
 	if( !FS_FileExists( path, false ) )
 	{
 		// Request automatic download
@@ -541,6 +544,7 @@ void Slayer_OnHealthUpdate( int hp )
 
 void Slayer_Scoreboard_OnConnected( void )
 {
+	Con_Printf( "Slayer SB: OnConnected fired\n" );
 	// Fire a single early "status" probe to harvest SteamIDs from the server
 	// before the user ever opens the scoreboard, so avatar downloads can run
 	// in the background. Mirrors Cmd_ScoreboardDown_f's throttling semantics
@@ -759,7 +763,14 @@ void Slayer_Scoreboard_Draw( void )
 
 				Q_snprintf( avpath, sizeof( avpath ), "avatars/%" PRIu64 ".png", slayer_steamid64[i] );
 				if( !FS_FileExists( avpath, false ) )
+				{
+					Con_Printf( S_WARN "AvatarDL: post-download slot=%d file NOT FOUND: '%s'\n", i, avpath );
+#if XASH_ANDROID
+					__android_log_print( ANDROID_LOG_WARN, "Xash",
+						"AvatarDL: post-download slot=%d file NOT FOUND via FS: '%s'", i, avpath );
+#endif
 					continue;
+				}
 
 				texid = ref.dllFuncs.GL_LoadTexture( avpath, NULL, 0, TF_IMAGE );
 				if( texid == 0 )
