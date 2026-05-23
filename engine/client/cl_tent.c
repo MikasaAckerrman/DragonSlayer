@@ -2194,7 +2194,8 @@ void CL_ParseTempEntity( sizebuf_t *msg, connprotocol_t proto )
 		count = MSG_ReadByte( pbuf );
 		if( type == TE_BLOOD ) R_Blood( pos, pos2, color, count );
 		else R_BloodStream( pos, pos2, color, count );
-		Slayer_HUD_OnBloodImpact( pos, count );
+		if( type == TE_BLOOD )
+			Slayer_HUD_OnBloodImpact( pos, count );
 		break;
 	case TE_SHOWLINE:
 		pos[0] = MSG_ReadCoord( pbuf );

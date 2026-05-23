@@ -44,13 +44,14 @@ static int CL_UserMsgStub( const char *pszName, int iSize, void *pbuf )
 ==================
 Slayer_OnChatMessage
 
-Mirror SayText/SayText2 player chat to engine console with color codes stripped.
+Mirror SayText/SayText2 player chat to engine console with CS color codes
+converted to Xash ^ color escapes.
 ==================
 */
 static void Slayer_OnChatMessage( const byte *pbuf, int iSize, qboolean is_saytext2 )
 {
 	static convar_t *cv_chat = NULL;
-	char clean[256];
+	char clean[512];
 	int dst = 0;
 	const byte *end;
 
@@ -71,35 +72,47 @@ static void Slayer_OnChatMessage( const byte *pbuf, int iSize, qboolean is_sayte
 	if( is_saytext2 )
 		pbuf++;
 
-	// Walk null-terminated strings. For SayText: single string with
-	// color codes and player name embedded. For SayText2: multiple
-	// null-terminated strings (template, param1, param2, ...).
-	// Skip strings starting with '#' (localization template names).
+	// Walk null-terminated strings. Skip '#'-prefixed localization templates.
 	while( pbuf < end )
 	{
 		// Skip '#'-prefixed localization templates (e.g. "#Cstrike_Chat_All")
 		if( *pbuf == '#' )
 		{
-			// Advance past this null-terminated string
 			while( pbuf < end && *pbuf != '\0' )
 				pbuf++;
-			if( pbuf < end ) pbuf++; // skip null terminator
+			if( pbuf < end ) pbuf++;
 			continue;
 		}
 
-		// Copy printable chars, strip color codes (0x01-0x05)
+		// Copy chars, converting CS color codes to Xash ^ color escapes
 		while( pbuf < end && *pbuf != '\0' )
 		{
 			byte ch = *pbuf++;
-			if( ch >= 0x20 || ch == '\t' )
+
+			if( ch >= 0x01 && ch <= 0x05 )
 			{
-				if( dst < (int)sizeof( clean ) - 2 )
+				// Convert CS color code to Xash ^ escape
+				if( dst < (int)sizeof( clean ) - 3 )
+				{
+					clean[dst++] = '^';
+					switch( ch )
+					{
+					case 0x01: clean[dst++] = '3'; break; // yellow (default)
+					case 0x02: clean[dst++] = '2'; break; // green
+					case 0x03: clean[dst++] = '7'; break; // white (player name)
+					case 0x04: clean[dst++] = '2'; break; // green (admin)
+					case 0x05: clean[dst++] = '5'; break; // cyan
+					}
+				}
+			}
+			else if( ch >= 0x20 || ch == '\t' )
+			{
+				if( dst < (int)sizeof( clean ) - 3 )
 					clean[dst++] = (char)ch;
 			}
 		}
-		if( pbuf < end ) pbuf++; // skip null terminator
+		if( pbuf < end ) pbuf++;
 
-		// For SayText (single string), we're done after one pass
 		if( !is_saytext2 )
 			break;
 	}
