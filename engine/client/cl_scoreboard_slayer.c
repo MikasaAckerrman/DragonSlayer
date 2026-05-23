@@ -203,8 +203,22 @@ void Slayer_ParseStatusLine( const char *line )
 	if( !line || line[0] != '#' )
 		return;
 
-	// Format: #<slot> "<name>" <userid> STEAM_X:Y:Z ...
+	// Format: # <slot> "<name>" <userid> STEAM_X:Y:Z ...
 	p = line + 1;
+
+	// Log every '#' line to avatars/status_log.txt for remote debugging
+	{
+		file_t *logf = FS_Open( "avatars/status_log.txt", "a", false );
+		if( logf )
+		{
+			FS_Printf( logf, "[%.1f] %s\n", host.realtime, line );
+			FS_Close( logf );
+		}
+	}
+
+	// Skip whitespace between '#' and slot number (HLDS sends "# 1 ...")
+	while( *p == ' ' || *p == '\t' )
+		p++;
 
 	// Parse slot number
 	slot = 0;
@@ -266,13 +280,18 @@ void Slayer_ParseStatusLine( const char *line )
 				prefix[k] = p[k];
 			prefix[k] = '\0';
 			slayer_steam_reject_count++;
-#if XASH_ANDROID
-			__android_log_print( ANDROID_LOG_DEBUG, "Xash",
-				"Slayer: status line slot=%d has no real STEAM_ id (got '%s'), no avatar (skip %d/8)",
-				slot, prefix, slayer_steam_reject_count );
-#endif
-			Con_DPrintf( "Slayer: status line slot=%d has no real STEAM_ id (got '%s'), no avatar (skip %d/8)\n",
-				slot, prefix, slayer_steam_reject_count );
+			// (silent — file log only)
+
+			// Log rejection to file
+			{
+				file_t *logf = FS_Open( "avatars/status_log.txt", "a", false );
+				if( logf )
+				{
+					FS_Printf( logf, "[%.1f] REJECT slot=%d got='%s' (%d/8)\n",
+						host.realtime, slot, prefix, slayer_steam_reject_count );
+					FS_Close( logf );
+				}
+			}
 		}
 		return;
 	}
@@ -319,11 +338,17 @@ void Slayer_ParseStatusLine( const char *line )
 	slayer_steamid64[i] = steamid64;
 	slayer_avatar_tex[i] = 0; // reset so texture will be reloaded
 
-	Con_Printf( "Slayer: parsed steamid %"PRIu64" for slot %d\n", steamid64, slot );
-#if XASH_ANDROID
-	__android_log_print( ANDROID_LOG_INFO, "Xash",
-		"Slayer: parsed steamid %"PRIu64" for slot %d", steamid64, slot );
-#endif
+	// (file log only — no console spam)
+
+	// Log to file for remote debugging
+	{
+		file_t *logf = FS_Open( "avatars/status_log.txt", "a", false );
+		if( logf )
+		{
+			FS_Printf( logf, "[%.1f] PARSED slot=%d steamid=%"PRIu64"\n", host.realtime, slot, steamid64 );
+			FS_Close( logf );
+		}
+	}
 
 	// Load texture immediately at parse time (outside render loop)
 	Slayer_LoadAvatarTexture( i );
@@ -345,8 +370,18 @@ static void Slayer_LoadAvatarTexture( int slot )
 
 	Q_snprintf( path, sizeof( path ), "avatars/%"PRIu64".png", slayer_steamid64[slot] );
 
-	Con_Printf( "AvatarTex: slot=%d id=%" PRIu64 " exists=%d\n",
-		slot, slayer_steamid64[slot], FS_FileExists( path, false ) );
+	// (file log only — no console output)
+
+	// Log to file for remote debugging
+	{
+		file_t *logf = FS_Open( "avatars/status_log.txt", "a", false );
+		if( logf )
+		{
+			FS_Printf( logf, "[%.1f] LOAD_TEX slot=%d id=%"PRIu64" path=%s exists=%d\n",
+				host.realtime, slot, slayer_steamid64[slot], path, FS_FileExists( path, false ) );
+			FS_Close( logf );
+		}
+	}
 
 	if( !FS_FileExists( path, false ) )
 	{
@@ -366,24 +401,12 @@ static void Slayer_LoadAvatarTexture( int slot )
 		// fresh download via Slayer_AvatarDownload_Request.
 		FS_Delete( path );
 		slayer_avatar_tex[slot] = 0;
-		Con_Printf( S_WARN "Slayer: avatar load failed for steamid=%" PRIu64 " path=%s, cache invalidated\n",
-			slayer_steamid64[slot], path );
-#if XASH_ANDROID
-		__android_log_print( ANDROID_LOG_ERROR, "Xash",
-			"Slayer: avatar load failed for steamid=%" PRIu64 " path=%s, cache invalidated",
-			slayer_steamid64[slot], path );
-#endif
+		// (silent — file log only)
 		return;
 	}
 
 	slayer_avatar_tex[slot] = texid;
-	Con_Printf( "Slayer: avatar loaded for steamid=%" PRIu64 " texid=%d path=%s\n",
-		slayer_steamid64[slot], texid, path );
-#if XASH_ANDROID
-	__android_log_print( ANDROID_LOG_INFO, "Xash",
-		"Slayer: avatar loaded for steamid=%" PRIu64 " texid=%d path=%s",
-		slayer_steamid64[slot], texid, path );
-#endif
+	// (silent — file log only)
 }
 
 // ===========================================================================
@@ -441,7 +464,7 @@ static void Cmd_ScoreboardDown_f( void )
 		if( harvested == 0 )
 		{
 			recovery_force = true;
-			Con_DPrintf( "Slayer SB: throttle bypassed — prefetch yielded 0 ids\n" );
+			// (silent — recovery bypass, file log only)
 		}
 	}
 
@@ -456,13 +479,23 @@ static void Cmd_ScoreboardDown_f( void )
 		// stuck if the reply lands at t=6s.
 		slayer_status_deadline = host.realtime + 30.0;
 		slayer_steam_reject_count = 0; // reset debounce per request
+		// (silent — file log only)
 #if XASH_ANDROID
 		__android_log_print( ANDROID_LOG_INFO, "Xash",
 			"Slayer SB: status request queued, parse window 30s%s",
 			recovery_force ? " (recovery)" : "" );
 #endif
-		Con_DPrintf( "Slayer SB: status request queued, parse window 30s%s\n",
-			recovery_force ? " (recovery)" : "" );
+
+		// Log to file
+		{
+			file_t *logf = FS_Open( "avatars/status_log.txt", "a", false );
+			if( logf )
+			{
+				FS_Printf( logf, "[%.1f] STATUS_REQUEST queued%s\n",
+					host.realtime, recovery_force ? " (recovery)" : "" );
+				FS_Close( logf );
+			}
+		}
 	}
 
 	// Trigger batch avatar fetch via Steam Web API (if API key is set)
@@ -518,7 +551,7 @@ void Slayer_Scoreboard_Init( void )
 	Slayer_SteamAPI_Init();
 	Slayer_SteamLogin_Init();
 
-	Con_Printf( "Slayer3D: scoreboard initialized\n" );
+	// (silent)
 }
 
 void Slayer_Scoreboard_Reset( void )
@@ -544,7 +577,7 @@ void Slayer_OnHealthUpdate( int hp )
 
 void Slayer_Scoreboard_OnConnected( void )
 {
-	Con_Printf( "Slayer SB: OnConnected fired\n" );
+	// (silent — file log only)
 	// Fire a single early "status" probe to harvest SteamIDs from the server
 	// before the user ever opens the scoreboard, so avatar downloads can run
 	// in the background. Mirrors Cmd_ScoreboardDown_f's throttling semantics
@@ -559,11 +592,21 @@ void Slayer_Scoreboard_OnConnected( void )
 		slayer_status_pending     = true;
 		slayer_status_deadline    = host.realtime + 30.0;
 		slayer_steam_reject_count = 0;
+		// (silent — file log only)
 #if XASH_ANDROID
 		__android_log_print( ANDROID_LOG_INFO, "Xash",
 			"Slayer SB: prefetch on ca_active, parse window 30s" );
 #endif
-		Con_DPrintf( "Slayer SB: prefetch on ca_active, parse window 30s\n" );
+
+		// Log to file
+		{
+			file_t *logf = FS_Open( "avatars/status_log.txt", "a", false );
+			if( logf )
+			{
+				FS_Printf( logf, "[%.1f] PREFETCH on ca_active\n", host.realtime );
+				FS_Close( logf );
+			}
+		}
 	}
 
 	// Steam Web API batch fetch is keyed on slayer_steamid64[] which is
@@ -764,11 +807,7 @@ void Slayer_Scoreboard_Draw( void )
 				Q_snprintf( avpath, sizeof( avpath ), "avatars/%" PRIu64 ".png", slayer_steamid64[i] );
 				if( !FS_FileExists( avpath, false ) )
 				{
-					Con_Printf( S_WARN "AvatarDL: post-download slot=%d file NOT FOUND: '%s'\n", i, avpath );
-#if XASH_ANDROID
-					__android_log_print( ANDROID_LOG_WARN, "Xash",
-						"AvatarDL: post-download slot=%d file NOT FOUND via FS: '%s'", i, avpath );
-#endif
+				// (silent — file log handles diag)
 					continue;
 				}
 
@@ -781,24 +820,12 @@ void Slayer_Scoreboard_Draw( void )
 					// sticking on -1.
 					FS_Delete( avpath );
 					slayer_avatar_tex[i] = 0;
-					Con_Printf( S_WARN "Slayer: post-download avatar load failed for steamid=%" PRIu64 " path=%s, cache invalidated\n",
-						slayer_steamid64[i], avpath );
-#if XASH_ANDROID
-					__android_log_print( ANDROID_LOG_ERROR, "Xash",
-						"Slayer: post-download avatar load failed for steamid=%" PRIu64 " path=%s, cache invalidated",
-						slayer_steamid64[i], avpath );
-#endif
+				// (silent)
 				}
 				else
 				{
 					slayer_avatar_tex[i] = texid;
-					Con_Printf( "Slayer: post-download avatar loaded for steamid=%" PRIu64 " texid=%d path=%s\n",
-						slayer_steamid64[i], texid, avpath );
-#if XASH_ANDROID
-					__android_log_print( ANDROID_LOG_INFO, "Xash",
-						"Slayer: post-download avatar loaded for steamid=%" PRIu64 " texid=%d path=%s",
-						slayer_steamid64[i], texid, avpath );
-#endif
+				// (silent)
 				}
 			}
 		}
@@ -922,17 +949,7 @@ void Slayer_Scoreboard_Draw( void )
 	// Fixed board width: 65% of screen_w
 	board_w = (int)( screen_w * 0.65f );
 
-	// === DIAG: build summary (visible to user via adb logcat -s Xash; Con_DPrintf
-	// avoids per-frame in-game console flood while the scoreboard is held) ===
-	Con_DPrintf( "Slayer SB: built %d players (CT=%d T=%d SPEC=%d) maxclients=%d playernum=%d\n",
-		num_players, ct_player_count, t_player_count, spec_player_count,
-		cl.maxclients, cl.playernum );
-#if XASH_ANDROID
-	__android_log_print( ANDROID_LOG_INFO, "Xash",
-		"Slayer SB: built %d players (CT=%d T=%d SPEC=%d) maxclients=%d playernum=%d",
-		num_players, ct_player_count, t_player_count, spec_player_count,
-		cl.maxclients, cl.playernum );
-#endif
+	// === DIAG: build summary (file-only, no console) ===
 
 	// Height adapts to content: hostname + column-headers + populated team headers + rows + padding
 	{
@@ -955,15 +972,7 @@ void Slayer_Scoreboard_Draw( void )
 		if( board_h < (int)( screen_h * 0.20f ) )
 			board_h = (int)( screen_h * 0.20f );
 
-		// === DIAG: layout summary (Con_DPrintf to avoid per-frame in-game
-		// console flood; logcat path stays INFO so the user can capture it) ===
-		Con_DPrintf( "Slayer SB: layout row_h=%d team_hdr=%d board_h=%d (min=%d max=%d) screen=%dx%d\n",
-			row_h, team_headers, board_h, min_h, max_h, screen_w, screen_h );
-#if XASH_ANDROID
-		__android_log_print( ANDROID_LOG_INFO, "Xash",
-			"Slayer SB: layout row_h=%d team_hdr=%d board_h=%d (min=%d max=%d) screen=%dx%d",
-			row_h, team_headers, board_h, min_h, max_h, screen_w, screen_h );
-#endif
+		// === DIAG: layout (file-only, no console) ===
 	}
 
 	// Center the board
@@ -1095,14 +1104,6 @@ void Slayer_Scoreboard_Draw( void )
 		// Stop drawing if we exceed the board
 		if( cur_y + row_h > board_y + board_h - 4 )
 		{
-			// === DIAG: row clipped by board height (pre-team-header) ===
-			Con_Printf( "Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d (pre-hdr)\n",
-				row, num_players, cur_y, board_y + board_h );
-#if XASH_ANDROID
-			__android_log_print( ANDROID_LOG_INFO, "Xash",
-				"Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d (pre-hdr)",
-				row, num_players, cur_y, board_y + board_h );
-#endif
 			break;
 		}
 
@@ -1158,14 +1159,6 @@ void Slayer_Scoreboard_Draw( void )
 		// Stop drawing if we exceed the board after team header
 		if( cur_y + row_h > board_y + board_h - 4 )
 		{
-			// === DIAG: row clipped by board height (post-team-header) ===
-			Con_Printf( "Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d (post-hdr)\n",
-				row, num_players, cur_y, board_y + board_h );
-#if XASH_ANDROID
-			__android_log_print( ANDROID_LOG_INFO, "Xash",
-				"Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d (post-hdr)",
-				row, num_players, cur_y, board_y + board_h );
-#endif
 			break;
 		}
 
