@@ -39,6 +39,7 @@ GNU General Public License for more details.
 #include "platform/platform.h"
 #include "cl_view_slayer.h"
 #include "cl_hud_slayer.h"
+#include "cl_scoreboard_slayer.h"
 
 #define MAX_LINELENGTH	80
 #define TEXT_MSGNAME	"TextMessage"
@@ -924,14 +925,14 @@ void CL_DrawHUD( int state )
 			CL_DrawScreenFade ();
 		CL_DrawCrosshair ();
 		CL_DrawCenterPrint ();
-		clgame.dllFuncs.pfnRedraw( cl.time, cl.intermission );
+		clgame.dllFuncs.pfnRedraw( cl.time, Slayer_Scoreboard_IsActive() ? 0 : cl.intermission );
 		if( cl.intermission ) CL_DrawScreenFade ();
 		break;
 	case CL_PAUSED:
 		CL_DrawScreenFade ();
 		CL_DrawCrosshair ();
 		CL_DrawCenterPrint ();
-		clgame.dllFuncs.pfnRedraw( cl.time, cl.intermission );
+		clgame.dllFuncs.pfnRedraw( cl.time, Slayer_Scoreboard_IsActive() ? 0 : cl.intermission );
 		if( showpause.value )
 		{
 			if( !cls.pauseIcon )

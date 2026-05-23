@@ -467,6 +467,10 @@ void Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 	killer = pbuf[0];
 	victim = pbuf[1];
 
+	// Show Slayer scoreboard when the local player dies (replaces default tab)
+	if( victim == cl.playernum + 1 && victim != 0 )
+		Slayer_Scoreboard_Activate();
+
 	// Headshot detection. In CS/CSCZ the DeathMsg layout is:
 	//   byte killer, byte victim, byte headshot(0/1), string weapon
 	// In vanilla HL/DM it's:

@@ -75,4 +75,15 @@ void Slayer_Scoreboard_PatchUsercmd( struct usercmd_s *cmd );
 // Used by killsound to detect teamkills.
 int Slayer_GetPlayerTeam( int slot );
 
+// Returns true when the Slayer3D custom scoreboard is enabled via cvar.
+qboolean Slayer_Scoreboard_IsEnabled( void );
+
+// Returns true when the Slayer scoreboard is actively rendering (enabled AND visible).
+// Used to suppress the game DLL's built-in intermission scoreboard only when ours draws.
+qboolean Slayer_Scoreboard_IsActive( void );
+
+// Programmatically activate the scoreboard overlay (e.g. on death/intermission).
+// Unlike +slayer_scoreboard, does NOT re-issue "status" or batch API calls.
+void Slayer_Scoreboard_Activate( void );
+
 #endif // CL_SCOREBOARD_SLAYER_H
