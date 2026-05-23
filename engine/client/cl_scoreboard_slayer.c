@@ -907,13 +907,17 @@ void Slayer_Scoreboard_Draw( void )
 
 	// Auto-deactivate when the condition that triggered auto-activation is
 	// no longer true (e.g. player respawned after death, intermission ended).
-	if( slayer_scoreboard_auto_activated && cl.intermission == 0
-		&& cl.playernum >= 0 && cl.playernum < MAX_CLIENTS
-		&& !( slayer_scores[cl.playernum].flags & 1 )
-		&& ( host.realtime - slayer_scoreboard_auto_time ) >= 5.0 )
+	if( slayer_scoreboard_auto_activated && cl.intermission == 0 )
 	{
-		slayer_scoreboard_active = false;
-		slayer_scoreboard_auto_activated = false;
+		qboolean player_alive = ( cl.playernum >= 0 && cl.playernum < MAX_CLIENTS
+			&& !( slayer_scores[cl.playernum].flags & 1 ) );
+		qboolean time_expired = ( ( host.realtime - slayer_scoreboard_auto_time ) >= 3.0 );
+
+		if( player_alive || time_expired )
+		{
+			slayer_scoreboard_active = false;
+			slayer_scoreboard_auto_activated = false;
+		}
 	}
 
 	if( !slayer_scoreboard_active )
