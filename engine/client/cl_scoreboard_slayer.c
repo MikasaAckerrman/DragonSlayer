@@ -1190,16 +1190,16 @@ void Slayer_Scoreboard_Draw( void )
 			row_alpha = 128;
 		}
 
-		// Draw avatar if available
+		// Draw avatar if available (fixed layout: avatar slot always reserved)
 		{
-			int name_x_offset = 0;
+			int avatar_size = row_h;
+			int name_x_offset = avatar_size + 4; // always offset nick, even without avatar
 
 			if( slayer_avatar_tex[pidx] > 0 )
 			{
 				ref.dllFuncs.GL_SetRenderMode( kRenderTransTexture );
 				ref.dllFuncs.Color4ub( 255, 255, 255, row_alpha );
-				ref.dllFuncs.R_DrawStretchPic( col_name_x, cur_y, row_h, row_h, 0, 0, 1, 1, slayer_avatar_tex[pidx] );
-				name_x_offset = row_h + 4;
+				ref.dllFuncs.R_DrawStretchPic( col_name_x, cur_y, avatar_size, avatar_size, 0, 0, 1, 1, slayer_avatar_tex[pidx] );
 			}
 
 			Con_DrawString( col_name_x + name_x_offset, cur_y + 2, name, name_color );
