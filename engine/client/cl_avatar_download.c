@@ -29,13 +29,14 @@ Other platforms: Uses non-blocking HTTP sockets (port 80, no TLS).
 #include <jni.h>
 #include <SDL.h>
 #include <stdlib.h>
+#include <time.h>
 #include <android/log.h>
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
-#define AVD_MAX_CONCURRENT  4
+#define AVD_MAX_CONCURRENT  8
 #define AVD_RETRY_DELAY     60.0
 
 // Slot result values (written by worker thread, read by Frame)
@@ -427,11 +428,25 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 	Q_snprintf( path, sizeof( path ), "avatars/%" PRIu64 ".png", steamid64 );
 	if( FS_FileExists( path, false ) )
 	{
+		// Check if cached file is older than 24 hours (86400 seconds).
+		// If so, delete it and re-download to pick up avatar changes.
+		int file_time = FS_FileTime( path, false );
+		int now = (int)time( NULL );
+
+		if( file_time > 0 && now - file_time < 86400 )
+		{
+			__android_log_print( ANDROID_LOG_INFO, "Xash",
+				"AvatarDL: cache hit slot=%d steamid=%" PRIu64 " path=%s",
+				slot, steamid64, path );
+			avd_slot_result[slot] = AVD_RESULT_DONE;
+			return;
+		}
+
+		// Stale cache - delete and re-download
+		FS_Delete( path );
 		__android_log_print( ANDROID_LOG_INFO, "Xash",
-			"AvatarDL: cache hit slot=%d steamid=%" PRIu64 " path=%s",
-			slot, steamid64, path );
-		avd_slot_result[slot] = AVD_RESULT_DONE;
-		return;
+			"AvatarDL: cache expired for slot=%d steamid=%" PRIu64 ", re-downloading",
+			slot, steamid64 );
 	}
 
 	// Spawn worker thread
@@ -535,7 +550,7 @@ qboolean Slayer_AvatarDownload_Frame( void )
 // Configuration
 // ===========================================================================
 
-#define AVATAR_MAX_CONCURRENT  4       // max simultaneous active downloads
+#define AVATAR_MAX_CONCURRENT  8       // max simultaneous active downloads
 #define AVATAR_TIMEOUT         15.0    // seconds before giving up
 #define AVATAR_RETRY_DELAY     60.0    // seconds before retrying a failed download
 #define AVATAR_MAX_RESPONSE    65536   // max XML profile response (~20KB typical)
@@ -928,6 +943,18 @@ static qboolean AVD_SaveImage( avd_request_t *req )
 	}
 	FS_AllowDirectPaths( false );
 
+	// Save source URL for cache invalidation on next check
+	{
+		char url_path[128];
+		char url_buf[768];
+		int url_len;
+
+		Q_snprintf( url_path, sizeof( url_path ), "avatars/%" PRIu64 ".url", req->steamid64 );
+		url_len = Q_snprintf( url_buf, sizeof( url_buf ),
+			"http://%s%s", req->target_host, req->target_path );
+		FS_WriteFile( url_path, url_buf, url_len );
+	}
+
 	Con_DPrintf( "AvatarDL: saved %s (%d bytes)\n", file_path, image_size );
 	return true;
 }
@@ -1245,6 +1272,42 @@ static qboolean AVD_OnPhaseDone( avd_request_t *req )
 			return false;
 		}
 
+		// Cache invalidation: check if avatar URL changed since last download.
+		// If the URL is the same and the PNG exists, skip the image download.
+		{
+			char url_path[128];
+			char png_path[128];
+			char current_url[768];
+			int current_len;
+			byte *file_data;
+			fs_offset_t file_len;
+
+			Q_snprintf( url_path, sizeof( url_path ), "avatars/%" PRIu64 ".url", req->steamid64 );
+			Q_snprintf( png_path, sizeof( png_path ), "avatars/%" PRIu64 ".png", req->steamid64 );
+			current_len = Q_snprintf( current_url, sizeof( current_url ),
+				"http://%s%s", req->target_host, req->target_path );
+
+			file_data = FS_LoadFile( url_path, &file_len, false );
+			if( file_data )
+			{
+				if( (int)file_len == current_len
+					&& memcmp( file_data, current_url, file_len ) == 0
+					&& FS_FileExists( png_path, false ) )
+				{
+					// Avatar unchanged - mark success without re-downloading image
+					Mem_Free( file_data );
+					Con_DPrintf( "AvatarDL: avatar unchanged for slot %d, skipping image download\n", req->slot );
+					AVD_RemoveRequest( req, true );
+					return true;
+				}
+				Mem_Free( file_data );
+				// URL changed - delete stale PNG
+				if( FS_FileExists( png_path, false ) )
+					FS_Delete( png_path );
+				Con_DPrintf( "AvatarDL: avatar URL changed for slot %d, re-downloading\n", req->slot );
+			}
+		}
+
 		// Transition to image phase
 		AVD_CloseSocket( req );
 		AVD_FreeResponse( req );
@@ -1371,8 +1434,16 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 	Q_snprintf( path, sizeof( path ), "avatars/%" PRIu64 ".png", steamid64 );
 	if( FS_FileExists( path, false ) )
 	{
-		avd_slot_state[slot] = AVD_SLOT_DONE;
-		return;
+		char url_path[128];
+		Q_snprintf( url_path, sizeof( url_path ), "avatars/%" PRIu64 ".url", steamid64 );
+		if( !FS_FileExists( url_path, false ) )
+		{
+			// Legacy cache without URL tracking - treat as done
+			avd_slot_state[slot] = AVD_SLOT_DONE;
+			return;
+		}
+		// Has .url file - proceed with XML fetch for URL comparison.
+		// AVD_OnPhaseDone will short-circuit if URL unchanged.
 	}
 
 	// Mark as queued. Frame() will promote to active when capacity is available.
