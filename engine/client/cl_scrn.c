@@ -19,6 +19,7 @@ GNU General Public License for more details.
 #include "qfont.h"
 #include "input.h"
 #include "library.h"
+#include "cl_loading_slayer.h"
 
 CVAR_DEFINE_AUTO( scr_centertime, "2.5", 0, "centerprint hold time" );
 CVAR_DEFINE_AUTO( scr_loading, "0", 0, "loading bar progress" );
@@ -481,6 +482,13 @@ SCR_DrawPlaque
 */
 static qboolean SCR_DrawPlaque( void )
 {
+	// Slayer3D loading screen overlay (PC-style panel)
+	if( !cls.dl.doneregistering )
+	{
+		if( Slayer_Loading_Draw() )
+			return true;
+	}
+
 	if(( cl_allow_levelshots.value && !cls.changelevel ) || cl.background )
 	{
 		int levelshot = ref.dllFuncs.GL_LoadTexture( cl_levelshot_name.string, NULL, 0, TF_IMAGE );
