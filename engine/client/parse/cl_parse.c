@@ -51,7 +51,8 @@ static void Slayer_OnChatMessage( const byte *pbuf, int iSize, qboolean is_sayte
 {
 	static convar_t *cv_chat = NULL;
 	char clean[256];
-	int src, dst;
+	int dst = 0;
+	const byte *end;
 
 	if( !cv_chat )
 		cv_chat = Cvar_FindVar( "slayer_chat_console" );
@@ -59,32 +60,53 @@ static void Slayer_OnChatMessage( const byte *pbuf, int iSize, qboolean is_sayte
 	if( cv_chat && cv_chat->value == 0.0f )
 		return;
 
-	if( iSize < 3 ) return; // at minimum: byte + one char + null
+	if( iSize < 3 ) return;
+
+	end = pbuf + iSize;
 
 	// Skip client_index byte
 	pbuf++;
-	iSize--;
 
-	// SayText2 has an extra msg_dest byte after client_index
-	if( is_saytext2 && iSize > 1 )
-	{
+	// SayText2 has an extra msg_dest byte
+	if( is_saytext2 )
 		pbuf++;
-		iSize--;
-	}
 
-	// Walk the null-terminated string, stripping color codes (0x01-0x05)
-	dst = 0;
-	for( src = 0; src < iSize - 1 && pbuf[src] != '\0' && dst < (int)sizeof( clean ) - 2; src++ )
+	// Walk null-terminated strings. For SayText: single string with
+	// color codes and player name embedded. For SayText2: multiple
+	// null-terminated strings (template, param1, param2, ...).
+	// Skip strings starting with '#' (localization template names).
+	while( pbuf < end )
 	{
-		byte ch = pbuf[src];
-		if( ch >= 0x20 || ch == '\t' ) // printable or tab
-			clean[dst++] = (char)ch;
+		// Skip '#'-prefixed localization templates (e.g. "#Cstrike_Chat_All")
+		if( *pbuf == '#' )
+		{
+			// Advance past this null-terminated string
+			while( pbuf < end && *pbuf != '\0' )
+				pbuf++;
+			if( pbuf < end ) pbuf++; // skip null terminator
+			continue;
+		}
+
+		// Copy printable chars, strip color codes (0x01-0x05)
+		while( pbuf < end && *pbuf != '\0' )
+		{
+			byte ch = *pbuf++;
+			if( ch >= 0x20 || ch == '\t' )
+			{
+				if( dst < (int)sizeof( clean ) - 2 )
+					clean[dst++] = (char)ch;
+			}
+		}
+		if( pbuf < end ) pbuf++; // skip null terminator
+
+		// For SayText (single string), we're done after one pass
+		if( !is_saytext2 )
+			break;
 	}
 
-	// Don't print empty messages
 	if( dst == 0 ) return;
 
-	// Ensure newline at end
+	// Ensure newline
 	if( clean[dst - 1] != '\n' )
 		clean[dst++] = '\n';
 	clean[dst] = '\0';
@@ -2610,6 +2632,32 @@ qboolean CL_ParseCommonHLMessage( sizebuf_t *msg, connprotocol_t proto, int svc_
 					if( Q_strstr( s_print, "amx_" ) || Q_strstr( s_print, "AMX" ) )
 						suppress = true;
 				}
+
+				// Short numeric-only lines (countdown timers: "5", "4...", "3", etc.)
+				if( !suppress )
+				{
+					const char *c = p;
+					qboolean all_digits_dots = true;
+					int char_count = 0;
+					while( *c && *c != '\n' )
+					{
+						if( ( *c >= '0' && *c <= '9' ) || *c == '.' || *c == ' ' )
+							char_count++;
+						else
+						{
+							all_digits_dots = false;
+							break;
+						}
+						c++;
+					}
+					// Suppress lines that are only digits/dots and short (< 8 chars)
+					if( all_digits_dots && char_count > 0 && char_count < 8 )
+						suppress = true;
+				}
+
+				// Lines starting with '>' (common plugin formatting prefix)
+				if( !suppress && p[0] == '>' )
+					suppress = true;
 
 				// Lines that are ONLY dashes, equals, or underscores (separator spam)
 				if( !suppress )
