@@ -592,9 +592,33 @@ void Slayer_HUD_OnBloodImpact( vec3_t pos, int count )
 			if( !victim_idx )
 			{
 				victim_idx = Slayer_HUD_FindClosestPlayer( pos, 192.0f );
-				// hitgroup stays SLAYER_HG_GENERIC (1.0x) so we
-				// under-count rather than fabricate a 4x headshot
-				// when we can't be sure where the bullet landed.
+
+				// Apply Z-band heuristic for hitgroup when hitbox
+				// containment missed but we found a nearby player.
+				if( victim_idx > 0 )
+				{
+					cl_entity_t *vict_ent = CL_GetEntityByIndex( victim_idx );
+					if( vict_ent )
+					{
+						float dz = pos[2] - vict_ent->origin[2];
+						int   ducking = ( vict_ent->curstate.usehull == 1 );
+
+						if( ducking )
+						{
+							if( dz > 37.0f )      hitgroup = SLAYER_HG_HEAD;
+							else if( dz > 25.0f ) hitgroup = SLAYER_HG_CHEST;
+							else if( dz > 12.0f ) hitgroup = SLAYER_HG_STOMACH;
+							else                  hitgroup = SLAYER_HG_LEFTLEG;
+						}
+						else
+						{
+							if( dz > 53.0f )      hitgroup = SLAYER_HG_HEAD;
+							else if( dz > 37.0f ) hitgroup = SLAYER_HG_CHEST;
+							else if( dz > 20.0f ) hitgroup = SLAYER_HG_STOMACH;
+							else                  hitgroup = SLAYER_HG_LEFTLEG;
+						}
+					}
+				}
 			}
 
 			hitgroup_mult = Slayer_DmgReplay_HitgroupMult( hitgroup );

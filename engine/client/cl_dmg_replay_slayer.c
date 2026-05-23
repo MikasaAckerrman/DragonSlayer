@@ -453,6 +453,72 @@ int Slayer_DmgReplay_FindHitboxOwner( const vec3_t world_pt, int *out_hitgroup )
 	if( out_hitgroup && best_idx > 0 )
 		*out_hitgroup = best_hg;
 
+	// Z-band fallback: if no hitbox contained the point but we found
+	// at least one player within scan_radius, use vertical offset from
+	// victim origin to estimate hitgroup. Thresholds differ for standing
+	// vs crouching (usehull==1 in CS).
+	if( best_idx == 0 )
+	{
+		float        closest_dist = 1e30f;
+		int          closest_idx  = 0;
+		cl_entity_t *closest_ent  = NULL;
+
+		for( i = 1; i <= cl.maxclients && i < SLAYER_DR_MAX_CLIENTS; i++ )
+		{
+			float dx, dy, dz, dist_sq;
+
+			ent = CL_GetEntityByIndex( i );
+			if( !ent || !ent->player || !ent->model )
+				continue;
+			if( ent->curstate.messagenum != cl.parsecount )
+				continue;
+
+			dx = world_pt[0] - ent->origin[0];
+			dy = world_pt[1] - ent->origin[1];
+			dz = world_pt[2] - ent->origin[2];
+			dist_sq = dx * dx + dy * dy + dz * dz;
+
+			if( dist_sq < scan_radius_sq && dist_sq < closest_dist )
+			{
+				closest_dist = dist_sq;
+				closest_idx  = i;
+				closest_ent  = ent;
+			}
+		}
+
+		if( closest_idx > 0 && closest_ent )
+		{
+			float dz = world_pt[2] - closest_ent->origin[2];
+			int   ducking = ( closest_ent->curstate.usehull == 1 );
+
+			if( ducking )
+			{
+				if( dz > 37.0f )      best_hg = SLAYER_HG_HEAD;
+				else if( dz > 25.0f ) best_hg = SLAYER_HG_CHEST;
+				else if( dz > 12.0f ) best_hg = SLAYER_HG_STOMACH;
+				else                  best_hg = SLAYER_HG_LEFTLEG;
+			}
+			else
+			{
+				if( dz > 53.0f )      best_hg = SLAYER_HG_HEAD;
+				else if( dz > 37.0f ) best_hg = SLAYER_HG_CHEST;
+				else if( dz > 20.0f ) best_hg = SLAYER_HG_STOMACH;
+				else                  best_hg = SLAYER_HG_LEFTLEG;
+			}
+
+			best_idx = closest_idx;
+
+			if( slayer_dmg_replay_debug.value != 0.0f )
+			{
+				Con_Printf( "Slayer DR: Z-band fallback ent %d dz=%.1f duck=%d -> hg %d\n",
+					closest_idx, dz, ducking, best_hg );
+			}
+		}
+	}
+
+	if( out_hitgroup && best_idx > 0 )
+		*out_hitgroup = best_hg;
+
 	if( best_idx > 0 && slayer_dmg_replay_debug.value != 0.0f )
 	{
 		Con_Printf( "Slayer DR: hitbox owner ent %d hg %d for blood @ (%.0f %.0f %.0f)\n",
