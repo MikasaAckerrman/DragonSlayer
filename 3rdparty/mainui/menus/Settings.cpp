@@ -345,8 +345,8 @@ void CMenuSettings::_VidInit()
 	m_fldFpsMax.LinkCvar( "fps_max" );
 	m_chkNetGraph.LinkCvar( "net_graph" );
 
-	// Default to Multiplayer tab
-	m_tabControl.SetActiveTab( 0 );
+	// Don't reset active tab on resolution change — let user keep their tab.
+	// (Default tab is index 0 set in CMenuTabControl ctor.)
 }
 
 // ---------------------------------------------------------------

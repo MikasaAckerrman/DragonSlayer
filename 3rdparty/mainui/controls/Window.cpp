@@ -46,6 +46,14 @@ Point CMenuWindow::GetPositionOffset() const
 }
 
 // ---------------------------------------------------------------
+// Helper: clamp value (defensive — engine has no std::clamp)
+// ---------------------------------------------------------------
+static inline int Wnd_Clamp( int v, int lo, int hi )
+{
+	return v < lo ? lo : ( v > hi ? hi : v );
+}
+
+// ---------------------------------------------------------------
 // Draw
 // ---------------------------------------------------------------
 void CMenuWindow::Draw()
@@ -77,6 +85,17 @@ void CMenuWindow::Draw()
 			m_scPos.y += uiStatic.cursorY - m_dragOffset.y;
 			m_dragOffset.x = uiStatic.cursorX;
 			m_dragOffset.y = uiStatic.cursorY;
+
+			// Clamp position so title bar stays reachable on screen
+			int screenW = (int)( 1024 * uiStatic.scaleX );
+			int screenH = (int)( 768 * uiStatic.scaleY );
+			int minX = -m_scSize.w + 100;
+			int maxX = screenW - 100;
+			int minY = 0;
+			int maxY = screenH - m_iTitleBarH - m_iBorderW;
+			m_scPos.x = Wnd_Clamp( m_scPos.x, minX, maxX );
+			m_scPos.y = Wnd_Clamp( m_scPos.y, minY, maxY );
+
 			CalcItemsPositions();
 		}
 	}
@@ -116,6 +135,7 @@ void CMenuWindow::DrawChrome()
 	}
 
 	int textW = tbW - ( textX - tbX ) - m_iCloseBtnSize - WndStyle::IconPad;
+	if( textW < 16 ) textW = 16;
 	int charH = (int)( m_iTitleBarH * 0.7f );
 	UI_DrawString( uiStatic.hDefaultFont, textX, tbY, textW, m_iTitleBarH,
 		m_szTitle, WndStyle::TitleTextColor, charH, QM_LEFT, ETF_SHADOW );
@@ -141,14 +161,17 @@ void CMenuWindow::DrawChrome()
 }
 
 // ---------------------------------------------------------------
-// Hit testing
+// Hit testing — accounts for hidden chrome buttons
 // ---------------------------------------------------------------
 bool CMenuWindow::IsCursorInTitleBar() const
 {
+	int btnsCount = ( m_bShowCloseBtn ? 1 : 0 ) + ( m_bShowMaxBtn ? 1 : 0 );
+	int btnsW = btnsCount * ( m_iCloseBtnSize + 2 );
+
 	int x = m_scPos.x + m_iBorderW;
 	int y = m_scPos.y + m_iBorderW;
-	// Exclude close + maximize buttons area
-	int w = m_scSize.w - m_iBorderW * 2 - m_iCloseBtnSize * 2 - 4;
+	int w = m_scSize.w - m_iBorderW * 2 - btnsW - 2;
+	if( w < 0 ) w = 0;
 	return UI_CursorInRect( x, y, w, m_iTitleBarH );
 }
 
@@ -188,9 +211,12 @@ void CMenuWindow::ToggleMaximize()
 	}
 	else
 	{
-		// Restore
-		m_scPos = m_savedPos;
-		m_scSize = m_savedSize;
+		// Restore — guard against zero-size (if Toggle called before save)
+		if( m_savedSize.w > 0 && m_savedSize.h > 0 )
+		{
+			m_scPos = m_savedPos;
+			m_scSize = m_savedSize;
+		}
 		m_bMaximized = false;
 	}
 	CalcItemsPositions();

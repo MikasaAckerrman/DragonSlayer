@@ -123,8 +123,6 @@ void CMenuWndCreateGame::_VidInit()
 	m_fldMaxPlayers.LinkCvar( "maxplayers" );
 	m_fldPassword.LinkCvar( "sv_password" );
 	m_chkNAT.LinkCvar( "sv_nat" );
-
-	m_tabControl.SetActiveTab( 0 );
 }
 
 // ---------------------------------------------------------------

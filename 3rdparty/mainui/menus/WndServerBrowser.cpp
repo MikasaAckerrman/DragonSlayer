@@ -101,7 +101,6 @@ void CMenuWndServerBrowser::_Init()
 
 void CMenuWndServerBrowser::_VidInit()
 {
-	m_tabControl.SetActiveTab( 0 );
 }
 
 // ---------------------------------------------------------------
