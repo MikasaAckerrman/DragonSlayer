@@ -208,20 +208,21 @@ static void Slayer_GT_AxisAngleToEngineEuler( const vec3_t axis, float theta, ve
 
 // Compensate for off-center model pivot.
 //
-// PROBLEM: Studio renderer rotates the mesh around the model's LOCAL origin
-// (0,0,0). For models like w_hegrenade.mdl, w_smokegrenade.mdl etc. the mesh
-// geometric center sits at offset L_center = (mins + maxs)/2 from the local
-// origin, so rotating around (0,0,0) makes the visual center *orbit* the
-// world position ent->origin (radius |L_center|) instead of spinning in
-// place. The user sees the grenade flying in a circle.
+// PROBLEM: Studio renderer rotates the mesh around ent->origin, then applies
+// bone[0].pos as an additional offset. This means the effective visual center
+// orbits at radius |bone[0].pos| from the trajectory. The bbox center
+// (mins+maxs)/2 is nearly zero for grenade models, so it cannot be used as
+// the pivot offset. The real rotation pivot offset is bone[0].value[0..2]
+// from the studiohdr.
 //
-// FIX: Shift ent->origin by -(R(angles)*L_center - L_center). After the
-// engine renders T(ent_origin') * R(angles) * mesh, the visual center
-// world position becomes:
+// FIX: Read bone[0].value[0..2] as L_center (the pivot offset the renderer
+// applies). Then shift ent->origin by -(R(angles)*L_center - L_center).
+// After the engine renders T(ent_origin') * R(angles) * mesh, the visual
+// center world position becomes:
 //     ent_origin' + R(angles) * L_center
 //   = (ent_origin - R(angles)*L_center + L_center) + R(angles) * L_center
 //   = ent_origin + L_center
-// — same as it would be at angles=0 (no rotation), i.e. STABLE across spin.
+// -- same as it would be at angles=0 (no rotation), i.e. STABLE across spin.
 //
 // We mutate ent->origin AFTER the speed estimator has captured the original
 // world position into gt->last_origin, so the per-frame velocity used for
@@ -238,9 +239,24 @@ static void Slayer_GT_CompensatePivot( struct cl_entity_s *ent )
 	if( !ent->model )
 		return;
 
-	VectorAverage( ent->model->mins, ent->model->maxs, L_center );
+	// Try to get bone[0] position as the real pivot offset
+	{
+		studiohdr_t *phdr = (studiohdr_t *)Mod_StudioExtradata( ent->model );
+		if( phdr && phdr->numbones > 0 )
+		{
+			mstudiobone_t *pbones = (mstudiobone_t *)((byte *)phdr + phdr->boneindex);
+			L_center[0] = pbones[0].value[0];
+			L_center[1] = pbones[0].value[1];
+			L_center[2] = pbones[0].value[2];
+		}
+		else
+		{
+			// Fallback to bbox center if no studio data
+			VectorAverage( ent->model->mins, ent->model->maxs, L_center );
+		}
+	}
 
-	// Skip if model is already centered at its origin (avoid wasted math)
+	// Skip if pivot offset is negligible (avoid wasted math)
 	if( DotProduct( L_center, L_center ) < 0.01f )
 		return;
 
