@@ -295,6 +295,11 @@ void ImGui_ImplXashGLES_RenderDrawData( ImDrawData *draw_data )
 		}
 	}
 
+	// Disable vertex attrib arrays before restoring state
+	glDisableVertexAttribArray( (GLuint)g_AttribLocPosition );
+	glDisableVertexAttribArray( (GLuint)g_AttribLocTexCoord );
+	glDisableVertexAttribArray( (GLuint)g_AttribLocColor );
+
 	// Restore GL state
 	glUseProgram( (GLuint)last_program );
 	glBindTexture( GL_TEXTURE_2D, (GLuint)last_texture );

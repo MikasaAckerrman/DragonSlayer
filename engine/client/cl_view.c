@@ -584,11 +584,11 @@ void V_PostRender( void )
 		Slayer_HUD_Draw();
 		Con_DrawConsole();
 		UI_UpdateMenu( host.realtime );
-		Slayer_ImGui_Frame();
 		Con_DrawVersion();
 		Con_DrawDebug(); // must be last
 		Touch_Draw();
 		OSK_Draw();
+		Slayer_ImGui_Frame();
 
 		S_ExtraUpdate();
 	}

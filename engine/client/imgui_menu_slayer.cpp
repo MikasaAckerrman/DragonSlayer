@@ -40,7 +40,6 @@ static int   g_HQSound = 1;
 static int   g_Surround = 0;
 static int   g_VoiceEnable = 1;
 static int   g_Vsync = 0;
-static int   g_Fullscreen = 1;
 static int   g_VoiceInputFromFile = 0;
 
 // ============================================================================
@@ -63,7 +62,6 @@ static void LoadSettings( void )
 	g_Surround     = (int)Cvar_VariableValue( "s_surround" );
 	g_VoiceEnable  = (int)Cvar_VariableValue( "voice_enable" );
 	g_Vsync        = (int)Cvar_VariableValue( "gl_vsync" );
-	g_Fullscreen   = (int)Cvar_VariableValue( "fullscreen" );
 	g_VoiceInputFromFile = (int)Cvar_VariableValue( "voice_inputfromfile" );
 }
 
@@ -82,9 +80,11 @@ static void ApplySettings( void )
 	Cvar_SetValue( "s_lerping", (float)g_HQSound );
 	Cvar_SetValue( "s_surround", (float)g_Surround );
 	Cvar_SetValue( "voice_enable", (float)g_VoiceEnable );
-	Cvar_SetValue( "gl_vsync", (float)g_Vsync );
-	Cvar_SetValue( "fullscreen", (float)g_Fullscreen );
 	Cvar_SetValue( "voice_inputfromfile", (float)g_VoiceInputFromFile );
+
+	// Use Cbuf_AddText so the cvar system sets FCVAR_CHANGED,
+	// which is required for GL_UpdateSwapInterval to take effect.
+	Cbuf_AddTextf( "gl_vsync %d\n", g_Vsync );
 }
 
 // ============================================================================
@@ -219,10 +219,6 @@ static void DrawTabVideo( void )
 	bool vsync = ( g_Vsync != 0 );
 	if( ImGui::Checkbox( "VSync", &vsync ) )
 		g_Vsync = vsync ? 1 : 0;
-
-	bool fs = ( g_Fullscreen != 0 );
-	if( ImGui::Checkbox( "Fullscreen", &fs ) )
-		g_Fullscreen = fs ? 1 : 0;
 }
 
 static void DrawTabVoice( void )

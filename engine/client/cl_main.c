@@ -22,6 +22,7 @@ GNU General Public License for more details.
 #include "library.h"
 #include "cl_view_slayer.h"
 #include "cl_scoreboard_slayer.h"
+#include "imgui_menu_slayer.h"
 #include "vid_common.h"
 #include "pm_local.h"
 #include "multi_emulator.h"
@@ -3773,6 +3774,7 @@ void CL_Shutdown( void )
 	}
 
 	Joy_Shutdown ();
+	Slayer_ImGui_Shutdown ();
 	CL_CloseDemoHeader ();
 	IN_Shutdown ();
 	Mobile_Shutdown ();
