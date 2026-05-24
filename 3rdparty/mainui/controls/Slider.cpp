@@ -195,11 +195,21 @@ void CMenuSlider::Draw( void )
 		* ( m_scSize.w - m_iSliderOutlineWidth - (m_scCenterBox.w) );
 
 
-	UI_DrawRectangleExt( m_scPos.x + m_iSliderOutlineWidth / 2, m_scPos.y + m_iSliderOutlineWidth, m_scSize.w - m_iSliderOutlineWidth, m_scCenterBox.h, uiInputBgColor, m_iSliderOutlineWidth );
-	if( eFocusAnimation == QM_HIGHLIGHTIFFOCUS && this == m_pParent->ItemAtCursor())
-		UI_DrawPic( sliderX, m_scPos.y, m_scCenterBox.w, m_scSize.h, uiColorHelp, imgSlider );
-	else
-		UI_DrawPic( sliderX, m_scPos.y, m_scCenterBox.w, m_scSize.h, uiColorWhite, imgSlider );
+	// CS 1.6 PC flat slider (slayer3d): thin dark track with 1px border,
+	// orange thumb on focus, light grey thumb otherwise. Replaces the
+	// imgSlider bitmap path (UI_SLIDER_MAIN), which often is not in
+	// shipped CS 1.6 paks on Android and rendered as missing-asset stub.
+	{
+		int trackH = 4;
+		int trackY = m_scPos.y + ( m_scSize.h - trackH ) / 2;
+
+		UI_FillRect( m_scPos.x, trackY, m_scSize.w, trackH, uiInputBgColor );
+		UI_DrawRectangle( m_scPos.x, trackY, m_scSize.w, trackH, uiInputFgColor );
+
+		bool focused = m_pParent && ( this == m_pParent->ItemAtCursor() );
+		uint thumbColor = focused ? uiInputTextColor : 0xFFC0C0C0;
+		UI_FillRect( sliderX, m_scPos.y, m_scCenterBox.w, m_scSize.h, thumbColor );
+	}
 
 
 	textHeight = m_scPos.y - (m_scChSize * 1.5f);
