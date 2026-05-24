@@ -117,7 +117,8 @@ static grenade_tumble_t gt_slots[GT_MAX_SLOTS];
 // =============================================================================
 
 #define GT_DIAG_INTERVAL 0.5  // seconds between diagnostic prints
-static double gt_diag_last_print = 0.0;
+static double gt_diag_last_print_l2 = 0.0;  // level-2: active grenade telemetry
+static double gt_diag_last_print_l3 = 0.0;  // level-3: rejected model names
 
 // =============================================================================
 // Helpers
@@ -407,10 +408,10 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	if( !Slayer_GT_IsGrenadeModel( ent->model->name ))
 	{
 		// Level 3: log rejected (non-grenade) model names, throttled
-		if( slayer_grenade_pivot_fix.value >= 3.0f && cl.time - gt_diag_last_print >= GT_DIAG_INTERVAL )
+		if( slayer_grenade_pivot_fix.value >= 3.0f && cl.time - gt_diag_last_print_l3 >= GT_DIAG_INTERVAL )
 		{
 			Con_Printf( "[SlayerGT] rejected model: %s\n", ent->model->name );
-			gt_diag_last_print = cl.time;
+			gt_diag_last_print_l3 = cl.time;
 		}
 		return;
 	}
@@ -488,11 +489,11 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	gt->last_time = now;
 
 	// Level 2+: throttled diagnostic output
-	if( slayer_grenade_pivot_fix.value >= 2.0f && cl.time - gt_diag_last_print >= GT_DIAG_INTERVAL )
+	if( slayer_grenade_pivot_fix.value >= 2.0f && cl.time - gt_diag_last_print_l2 >= GT_DIAG_INTERVAL )
 	{
 		Con_Printf( "[SlayerGT] idx=%d speed=%.0f rate=%.0f deg=%.0f\n",
 			ent->index, speed, rate, RAD2DEG( gt->accum_theta ) );
-		gt_diag_last_print = cl.time;
+		gt_diag_last_print_l2 = cl.time;
 	}
 
 	Slayer_GT_AxisAngleToEngineEuler( gt->avel_dir, gt->accum_theta, ent->angles );
