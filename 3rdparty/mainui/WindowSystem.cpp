@@ -16,6 +16,8 @@ GNU General Public License for more details.
 #include "Primitive.h"
 #include "WindowSystem.h"
 #include "BaseWindow.h"
+#include "BaseMenu.h"
+#include "keydefs.h"
 #include "con_nprint.h"
 
 void CWindowStack::VidInit( bool calledOnce )
@@ -330,6 +332,34 @@ void CWindowStack::KeyUpEvent( int key )
 
 void CWindowStack::KeyDownEvent( int key )
 {
+	// Multi-window bring-to-front: on left click, check if cursor
+	// hits a non-active, non-root window and raise it.
+	if( key == K_MOUSE1 && stack.Count() > 1 )
+	{
+		FOR_EACH_LL_BACK( stack, i )
+		{
+			if( i == active )
+				continue;
+
+			CMenuBaseWindow *wnd = stack[i];
+			if( !wnd || wnd->IsRoot() )
+				continue;
+			if( FBitSet( wnd->iFlags, QMF_HIDDEN | QMF_CLOSING ) )
+				continue;
+
+			Point pos = wnd->GetRenderPosition();
+			Size  sz  = wnd->GetRenderSize();
+
+			if( UI_CursorInRect( pos.x, pos.y, sz.w, sz.h ) )
+			{
+				// Bring to front and route the click to it
+				active = i;
+				wnd->KeyDown( key );
+				return;
+			}
+		}
+	}
+
 	if( Current() ) Current()->KeyDown( key );
 }
 
