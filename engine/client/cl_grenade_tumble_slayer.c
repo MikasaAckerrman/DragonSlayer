@@ -84,7 +84,7 @@ static CVAR_DEFINE_AUTO( slayer_grenade_tumble,
 
 static CVAR_DEFINE_AUTO( slayer_grenade_pivot_fix,
 	"1", FCVAR_ARCHIVE,
-	"Slayer3D: compensate for off-center grenade model pivot using bbox center (0 = off, 1 = on, 2 = on + diagnostic logging)" );
+	"Slayer3D: grenade pivot compensation (0=off, 1=on, 2=on+diag, 3=on+diag+rejected models)" );
 
 // =============================================================================
 // Tunables
@@ -111,6 +111,13 @@ typedef struct
 } grenade_tumble_t;
 
 static grenade_tumble_t gt_slots[GT_MAX_SLOTS];
+
+// =============================================================================
+// Throttled diagnostic output
+// =============================================================================
+
+#define GT_DIAG_INTERVAL 0.5  // seconds between diagnostic prints
+static double gt_diag_last_print = 0.0;
 
 // =============================================================================
 // Helpers
@@ -399,6 +406,11 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 
 	if( !Slayer_GT_IsGrenadeModel( ent->model->name ))
 	{
+		// Level 3: log rejected (non-grenade) model names, throttled
+		if( slayer_grenade_pivot_fix.value >= 3.0f && cl.time - gt_diag_last_print >= GT_DIAG_INTERVAL )
+		{
+			Con_Printf( "[SlayerGT] rejected model: %s\n", ent->model->name );
+		}
 		return;
 	}
 
@@ -473,6 +485,14 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 
 	VectorCopy( ent->origin, gt->last_origin );
 	gt->last_time = now;
+
+	// Level 2+: throttled diagnostic output
+	if( slayer_grenade_pivot_fix.value >= 2.0f && cl.time - gt_diag_last_print >= GT_DIAG_INTERVAL )
+	{
+		Con_Printf( "[SlayerGT] idx=%d speed=%.0f rate=%.0f deg=%.0f\n",
+			ent->index, speed, rate, RAD2DEG( gt->accum_theta ) );
+		gt_diag_last_print = cl.time;
+	}
 
 	Slayer_GT_AxisAngleToEngineEuler( gt->avel_dir, gt->accum_theta, ent->angles );
 	Slayer_GT_CompensatePivot( ent );
