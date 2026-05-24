@@ -70,17 +70,13 @@ static float g_Pitch = 0.022f;
 static float g_Brightness = 1.0f;
 static float g_Gamma = 1.0f;
 static float g_VoiceScale = 1.0f;
-static float g_VoiceTransmit = 1.0f;
 static int   g_Crosshair = 1;
-static int   g_CrosshairSize = 1;
-static int   g_CrosshairColor = 0;
 static int   g_AutoSwitch = 1;
 static int   g_RawInput = 0;
 static int   g_ReverseMouse = 0;
 static int   g_MouseFilter = 0;
 static int   g_HQSound = 1;
 static int   g_Surround = 0;
-static int   g_HWAccel = 0;
 static int   g_VoiceEnable = 1;
 static int   g_Vsync = 0;
 static int   g_VoiceInputFromFile = 0;
@@ -135,7 +131,7 @@ static void ApplySettings( void )
 	Cvar_SetValue( "voice_inputfromfile", (float)g_VoiceInputFromFile );
 
 	Cbuf_AddTextf( "gl_vsync %d\n", g_Vsync );
-	Cbuf_AddTextf( "name \"%s\"\n", g_PlayerName );
+	Cvar_Set( "name", g_PlayerName );
 }
 
 // ============================================================================
@@ -275,8 +271,11 @@ static bool CS16Button( const char *label, ImVec2 size = ImVec2( 0, 0 ) )
 static bool CS16Checkbox( const char *label, bool *v )
 {
 	bool changed = ImGui::Checkbox( label, v );
-	DrawBeveledRect( ImGui::GetWindowDrawList(),
-		ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), false );
+	// Bevel only the checkbox square, not the full label area
+	ImVec2 mn = ImGui::GetItemRectMin();
+	float frameHeight = ImGui::GetFrameHeight();
+	ImVec2 mx = ImVec2( mn.x + frameHeight, mn.y + frameHeight );
+	DrawBeveledRect( ImGui::GetWindowDrawList(), mn, mx, false );
 	return changed;
 }
 
@@ -318,12 +317,6 @@ static void DrawTabGame( void )
 	bool cross = ( g_Crosshair != 0 );
 	if( CS16Checkbox( "Enable Crosshair", &cross ) )
 		g_Crosshair = cross ? 1 : 0;
-
-	if( g_Crosshair )
-	{
-		CS16Combo( "Crosshair Size", &g_CrosshairSize, "Small\0Medium\0Large\0" );
-		CS16Combo( "Crosshair Color", &g_CrosshairColor, "Green\0Red\0Blue\0Yellow\0Cyan\0" );
-	}
 
 	DrawCS16Separator();
 
@@ -384,7 +377,10 @@ static void DrawTabKeyboard( void )
 	}
 	ImGui::EndChild();
 
-	CS16Button( "Use Defaults" );
+	if( CS16Button( "Use Defaults" ) )
+	{
+		Cbuf_AddText( "unbindall\nexec default.cfg\n" );
+	}
 }
 
 static void DrawTabMouse( void )
@@ -418,10 +414,6 @@ static void DrawTabAudio( void )
 	if( CS16Checkbox( "High quality sound", &hq ) )
 		g_HQSound = hq ? 1 : 0;
 
-	bool hw = ( g_HWAccel != 0 );
-	if( CS16Checkbox( "Hardware acceleration", &hw ) )
-		g_HWAccel = hw ? 1 : 0;
-
 	bool surr = ( g_Surround != 0 );
 	if( CS16Checkbox( "Surround sound", &surr ) )
 		g_Surround = surr ? 1 : 0;
@@ -429,8 +421,9 @@ static void DrawTabAudio( void )
 
 static void DrawTabVideo( void )
 {
+	// Resolution combo is display-only; no vid_mode cvar write (requires restart)
 	static int g_ResolutionIdx = 0;
-	CS16Combo( "Resolution", &g_ResolutionIdx,
+	CS16Combo( "Resolution (info)", &g_ResolutionIdx,
 		"640x480\0800x600\01024x768\01152x864\01280x720\01280x960\01280x1024\01366x768\01600x900\01920x1080\0" );
 
 	DrawCS16Separator();
@@ -457,7 +450,6 @@ static void DrawTabVoice( void )
 
 	DrawCS16Separator();
 
-	CS16SliderFloat( "Transmit Volume", &g_VoiceTransmit, 0.0f, 2.0f, "%.2f" );
 	CS16SliderFloat( "Receive Volume", &g_VoiceScale, 0.0f, 2.0f, "%.2f" );
 
 	DrawCS16Separator();
