@@ -194,10 +194,9 @@ static inline qboolean Platform_NanoSleep( int nsec )
 	return true;
 	// SDL2 doesn't have nanosleep, so use low-level functions here
 #elif XASH_POSIX
-	struct timespec ts = {
-		.tv_sec = 0,
-		.tv_nsec = nsec, // just don't put large numbers here
-	};
+	struct timespec ts;
+	ts.tv_sec = 0;
+	ts.tv_nsec = nsec; // just don't put large numbers here
 	int ret = nanosleep( &ts, NULL );
 	if( ret < 0 )
 		return errno == EINTR; // ignore EINTR error, it just means sleep was interrupted
