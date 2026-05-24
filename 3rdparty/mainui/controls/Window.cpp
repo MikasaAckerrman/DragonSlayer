@@ -332,16 +332,16 @@ int CMenuWindow::DetectResizeEdge() const
 	int ww = m_scSize.w;
 	int wh = m_scSize.h;
 
-	bool inLeft   = ( cx >= wx - border && cx < wx + border );
-	bool inRight  = ( cx >= wx + ww - border && cx < wx + ww + border );
-	bool inTop    = ( cy >= wy - border && cy < wy + border );
-	bool inBottom = ( cy >= wy + wh - border && cy < wy + wh + border );
-
-	// Must be roughly within the window area (with edge extension)
-	bool inHRange = ( cx >= wx - border && cx < wx + ww + border );
-	bool inVRange = ( cy >= wy - border && cy < wy + wh + border );
+	// Restrict detection to inside the window border only (no outside bleed)
+	bool inHRange = ( cx >= wx && cx < wx + ww );
+	bool inVRange = ( cy >= wy && cy < wy + wh );
 
 	if( !inHRange || !inVRange ) return RESIZE_NONE;
+
+	bool inLeft   = ( cx >= wx && cx < wx + border );
+	bool inRight  = ( cx >= wx + ww - border && cx < wx + ww );
+	bool inTop    = ( cy >= wy && cy < wy + border );
+	bool inBottom = ( cy >= wy + wh - border && cy < wy + wh );
 
 	int edge = RESIZE_NONE;
 	if( inLeft )   edge |= RESIZE_LEFT;
@@ -390,9 +390,9 @@ void CMenuWindow::UpdateResize()
 		newH = m_resizeStartSize.h - dy;
 	}
 
-	// Enforce minimum size
-	int minW = MIN_WINDOW_W;
-	int minH = MIN_WINDOW_H;
+	// Enforce minimum size (scaled to screen coordinates)
+	int minW = WndStyle::ScaleX( MIN_WINDOW_W );
+	int minH = WndStyle::ScaleY( MIN_WINDOW_H );
 
 	if( newW < minW )
 	{
@@ -406,6 +406,16 @@ void CMenuWindow::UpdateResize()
 			newY = m_resizeStartPos.y + m_resizeStartSize.h - minH;
 		newH = minH;
 	}
+
+	// Clamp position so window stays reachable (same as title-bar drag)
+	int screenW = (int)( 1024 * uiStatic.scaleX );
+	int screenH = (int)( 768 * uiStatic.scaleY );
+	int minX = -newW + 100;
+	int maxX = screenW - 100;
+	int minY = 0;
+	int maxY = screenH - m_iTitleBarH - m_iBorderW;
+	newX = Wnd_Clamp( newX, minX, maxX );
+	newY = Wnd_Clamp( newY, minY, maxY );
 
 	m_scPos.x = newX;
 	m_scPos.y = newY;

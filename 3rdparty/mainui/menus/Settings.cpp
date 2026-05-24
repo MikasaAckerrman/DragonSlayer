@@ -33,6 +33,22 @@ public:
 };
 
 // ============================================================
+// Helper: apply flat bordered button style (CS 1.6 look)
+// ============================================================
+static void ApplyFlatStyle( CMenuPicButton &btn )
+{
+	btn.bDrawStroke = true;
+	btn.colorStroke = 0xFF44584C;
+	btn.iStrokeWidth = 1;
+	btn.colorBase = 0xFF2D2B2E;
+	btn.colorFocus = 0xFF383638;
+	btn.eFocusAnimation = QM_HIGHLIGHTIFFOCUS;
+	btn.eTextAlignment = QM_CENTER;
+	btn.bEnableTransitions = false;
+	btn.bPulse = false;
+}
+
+// ============================================================
 // CMenuSettings — windowed settings with tabs:
 //   Multiplayer / Keyboard / Mouse / Audio / Video / Voice
 // ============================================================
@@ -307,15 +323,7 @@ void CMenuSettings::_Init()
 	m_btnOK.SetCoord( contentW - btnW * 3 - 30, btnY );
 	m_btnOK.size.w = btnW;
 	m_btnOK.size.h = btnH;
-	m_btnOK.bDrawStroke = true;
-	m_btnOK.colorStroke = 0xFF44584C;
-	m_btnOK.iStrokeWidth = 1;
-	m_btnOK.colorBase = 0xFF2D2B2E;
-	m_btnOK.colorFocus = 0xFF383638;
-	m_btnOK.eFocusAnimation = QM_HIGHLIGHTIFFOCUS;
-	m_btnOK.eTextAlignment = QM_CENTER;
-	m_btnOK.bEnableTransitions = false;
-	m_btnOK.bPulse = false;
+	ApplyFlatStyle( m_btnOK );
 	m_btnOK.onReleased = VoidCb( &CMenuSettings::OnOK );
 	AddItem( m_btnOK );
 
@@ -323,15 +331,7 @@ void CMenuSettings::_Init()
 	m_btnCancel.SetCoord( contentW - btnW * 2 - 20, btnY );
 	m_btnCancel.size.w = btnW;
 	m_btnCancel.size.h = btnH;
-	m_btnCancel.bDrawStroke = true;
-	m_btnCancel.colorStroke = 0xFF44584C;
-	m_btnCancel.iStrokeWidth = 1;
-	m_btnCancel.colorBase = 0xFF2D2B2E;
-	m_btnCancel.colorFocus = 0xFF383638;
-	m_btnCancel.eFocusAnimation = QM_HIGHLIGHTIFFOCUS;
-	m_btnCancel.eTextAlignment = QM_CENTER;
-	m_btnCancel.bEnableTransitions = false;
-	m_btnCancel.bPulse = false;
+	ApplyFlatStyle( m_btnCancel );
 	m_btnCancel.onReleased = VoidCb( &CMenuSettings::OnCancel );
 	AddItem( m_btnCancel );
 
@@ -339,15 +339,7 @@ void CMenuSettings::_Init()
 	m_btnApply.SetCoord( contentW - btnW - 10, btnY );
 	m_btnApply.size.w = btnW;
 	m_btnApply.size.h = btnH;
-	m_btnApply.bDrawStroke = true;
-	m_btnApply.colorStroke = 0xFF44584C;
-	m_btnApply.iStrokeWidth = 1;
-	m_btnApply.colorBase = 0xFF2D2B2E;
-	m_btnApply.colorFocus = 0xFF383638;
-	m_btnApply.eFocusAnimation = QM_HIGHLIGHTIFFOCUS;
-	m_btnApply.eTextAlignment = QM_CENTER;
-	m_btnApply.bEnableTransitions = false;
-	m_btnApply.bPulse = false;
+	ApplyFlatStyle( m_btnApply );
 	m_btnApply.onReleased = VoidCb( &CMenuSettings::OnApply );
 	AddItem( m_btnApply );
 }
