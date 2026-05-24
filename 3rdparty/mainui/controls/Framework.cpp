@@ -267,11 +267,44 @@ bool CMenuFramework::DrawAnimation()
 CMenuFramework::CMenuBannerBitmap::CMenuBannerBitmap()
 {
 	SetRect( UI_BANNER_POSX, UI_BANNER_POSY, UI_BANNER_WIDTH, UI_BANNER_HEIGHT );
+	szLabel[0] = '\0';
 }
 
 void CMenuFramework::CMenuBannerBitmap::SetPicture(const char *pic)
 {
 	image.Load( pic );
+
+	// CS 1.6 PC reskin (slayer3d): derive a human-readable label from
+	// the picture path so missing bitmaps still render a section title.
+	// Path format used by all menus is "gfx/shell/head_<section>.tga"
+	// (or head_<section>_<variant>.tga) — strip dir + "head_" prefix +
+	// extension, replace underscores with spaces, uppercase.
+	szLabel[0] = '\0';
+	if( pic && pic[0] )
+	{
+		const char *base = pic;
+		for( const char *p = pic; *p; p++ )
+		{
+			if( *p == '/' || *p == '\\' )
+				base = p + 1;
+		}
+		if( !strncmp( base, "head_", 5 ) )
+			base += 5;
+
+		size_t i = 0;
+		for( ; base[i] && i < sizeof( szLabel ) - 1; i++ )
+		{
+			char c = base[i];
+			if( c == '.' )
+				break; // strip extension
+			if( c == '_' )
+				c = ' ';
+			else
+				c = toupper( (unsigned char)c );
+			szLabel[i] = c;
+		}
+		szLabel[i] = '\0';
+	}
 }
 
 void CMenuFramework::CMenuBannerBitmap::Draw( Point pt, Size sz )
@@ -282,15 +315,22 @@ void CMenuFramework::CMenuBannerBitmap::Draw( Point pt, Size sz )
 	}
 	else
 	{
+		// Animation path overrides szName from the initiator button;
+		// static path uses the auto-derived label from the picture
+		// filename. Either way we render an orange blurred title.
+		const char *label = ( szName && szName[0] ) ? szName : szLabel;
+		if( !label || !label[0] )
+			return;
+
 		UI_DrawString( uiStatic.hHeavyBlur, pt,
 			sz,
-			szName,
+			label,
 			uiPromptTextColor, m_scChSize,
 			QM_LEFT, ETF_ADDITIVE | ETF_NOSIZELIMIT | ETF_FORCECOL );
 
 		UI_DrawString( uiStatic.hLightBlur, pt,
 			sz,
-			szName,
+			label,
 			uiPromptTextColor, m_scChSize,
 			QM_LEFT, ETF_ADDITIVE | ETF_NOSIZELIMIT | ETF_FORCECOL );
 	}
