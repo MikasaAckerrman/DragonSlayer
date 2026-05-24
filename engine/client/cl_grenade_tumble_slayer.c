@@ -272,6 +272,7 @@ static void Slayer_GT_CompensatePivot( struct cl_entity_s *ent )
 		{
 			studiohdr_t   *phdr;
 			mstudiobone_t *pbones;
+			file_t        *f;
 
 			if( diag_printed_count < GT_DIAG_MAX_MODELS )
 			{
@@ -293,6 +294,28 @@ static void Slayer_GT_CompensatePivot( struct cl_entity_s *ent )
 				Con_Printf( "[SlayerGT] bone[0] \"%s\" pos=(%.1f %.1f %.1f)\n",
 					pbones[0].name,
 					pbones[0].value[0], pbones[0].value[1], pbones[0].value[2] );
+			}
+
+			// Also write diagnostics to a file for retrieval on Android
+			f = FS_Open( "slayer_diag.log", "a", false );
+			if( f )
+			{
+				FS_Printf( f, "[SlayerGT] model=%s mins=(%.1f %.1f %.1f) maxs=(%.1f %.1f %.1f) L_center=(%.1f %.1f %.1f) shift=(%.1f %.1f %.1f)\n",
+					ent->model->name,
+					ent->model->mins[0], ent->model->mins[1], ent->model->mins[2],
+					ent->model->maxs[0], ent->model->maxs[1], ent->model->maxs[2],
+					L_center[0], L_center[1], L_center[2],
+					shift[0], shift[1], shift[2] );
+
+				if( phdr && phdr->numbones > 0 )
+				{
+					pbones = (mstudiobone_t *)((byte *)phdr + phdr->boneindex);
+					FS_Printf( f, "[SlayerGT] bone[0] \"%s\" pos=(%.1f %.1f %.1f)\n",
+						pbones[0].name,
+						pbones[0].value[0], pbones[0].value[1], pbones[0].value[2] );
+				}
+
+				FS_Close( f );
 			}
 		}
 	}
