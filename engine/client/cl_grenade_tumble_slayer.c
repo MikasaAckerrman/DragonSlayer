@@ -410,6 +410,7 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 		if( slayer_grenade_pivot_fix.value >= 3.0f && cl.time - gt_diag_last_print >= GT_DIAG_INTERVAL )
 		{
 			Con_Printf( "[SlayerGT] rejected model: %s\n", ent->model->name );
+			gt_diag_last_print = cl.time;
 		}
 		return;
 	}
