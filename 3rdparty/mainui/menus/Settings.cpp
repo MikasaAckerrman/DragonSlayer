@@ -101,12 +101,20 @@ public:
 				const char *binding = EngFuncs::KEY_GetBinding( i );
 				if( !binding ) continue;
 				if( !strcmp( binding, s_keyBinds[line].command ) )
-					return EngFuncs::KeynumToString( i );
+				{
+					// Copy to persistent buffer since KeynumToString uses static buffer
+					const char *keyName = EngFuncs::KeynumToString( i );
+					snprintf( m_szKeyBuf[line], sizeof( m_szKeyBuf[line] ), "%s", keyName );
+					return m_szKeyBuf[line];
+				}
 			}
 			return "";
 		}
 		return "";
 	}
+
+private:
+	char m_szKeyBuf[16][32]; // 16 entries (s_numKeyBinds=15), 32 chars each
 };
 
 // ============================================================
@@ -170,7 +178,6 @@ private:
 	CMenuSlider   m_sldSuitVol;
 	CMenuCheckBox m_chkNoDSP;
 	CMenuCheckBox m_chkMuteLostFocus;
-	CMenuDropDownStr m_ddSoundQuality;
 
 	// --- Video page ---
 	CMenuDropDownInt m_ddResolution;
@@ -325,7 +332,6 @@ void CMenuSettings::_Init()
 
 	m_chkInvertMouse.szName = L( "GameUI_ReverseMouse" );
 	m_chkInvertMouse.SetCoord( col, 100 );
-	m_chkInvertMouse.onChanged = CMenuEditable::WriteCvarCb;
 	m_pageMouse.AddItem( m_chkInvertMouse );
 
 	m_chkRawInput.szName = L( "Raw mouse input" );
@@ -379,16 +385,6 @@ void CMenuSettings::_Init()
 	m_chkMuteLostFocus.SetCoord( col, row );
 	m_chkMuteLostFocus.onChanged = CMenuEditable::WriteCvarCb;
 	m_pageAudio.AddItem( m_chkMuteLostFocus );
-
-	row += 40;
-	m_ddSoundQuality.szName = L( "Sound quality" );
-	m_ddSoundQuality.SetCoord( col, row );
-	m_ddSoundQuality.SetSize( 180, 28 );
-	m_ddSoundQuality.AddItem( "11 kHz (Low)", "11025" );
-	m_ddSoundQuality.AddItem( "22 kHz (Medium)", "22050" );
-	m_ddSoundQuality.AddItem( "44 kHz (High)", "44100" );
-	m_ddSoundQuality.onChanged = CMenuEditable::WriteCvarCb;
-	m_pageAudio.AddItem( m_ddSoundQuality );
 
 	// ===== Video =====
 	m_ddResolution.szName = L( "Resolution" );
@@ -679,7 +675,6 @@ void CMenuSettings::_VidInit()
 	m_sldSuitVol.LinkCvar( "suitvolume" );
 	m_chkNoDSP.LinkCvar( "room_off" );
 	m_chkMuteLostFocus.LinkCvar( "snd_mute_losefocus" );
-	m_ddSoundQuality.LinkCvar( "s_khz", CMenuEditable::CVAR_STRING );
 
 	// Video
 	m_ddResolution.LinkCvar( "vid_mode", CMenuEditable::CVAR_VALUE );
@@ -733,7 +728,6 @@ void CMenuSettings::OnApply()
 	m_sldSuitVol.WriteCvar();
 	m_chkNoDSP.WriteCvar();
 	m_chkMuteLostFocus.WriteCvar();
-	m_ddSoundQuality.WriteCvar();
 	m_ddResolution.WriteCvar();
 	m_ddDisplayMode.WriteCvar();
 	m_sldBrightness.WriteCvar();
