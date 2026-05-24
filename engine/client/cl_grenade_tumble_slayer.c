@@ -1,5 +1,5 @@
 /*
-cl_grenade_tumble_slayer.c - Slayer3D client-side grenade tumble
+cl_grenade_tumble_slayer.c - Slayer3D client-side grenade tumble + quick throw
 Copyright (C) 2026 Slayer3D contributors
 
 This program is free software: you can redistribute it and/or modify
@@ -14,7 +14,7 @@ GNU General Public License for more details.
 */
 
 // =============================================================================
-// Client-side grenade tumble
+// Client-side grenade tumble (axial spin)
 // =============================================================================
 //
 // CS 1.6 (and most GoldSrc mods) drive grenade visual rotation purely from
@@ -28,18 +28,45 @@ GNU General Public License for more details.
 //   * we detect grenade entities by model name (w_hegrenade.mdl,
 //     w_smokegrenade.mdl, w_flashbang.mdl and the HL "w_grenade" generic)
 //   * for each grenade we keep a small per-entity slot with a randomized
-//     rotation axis and an accumulated angle pose
+//     rotation axis and an accumulated TOTAL ANGLE (single scalar)
 //   * the angular speed is rescaled every frame to be proportional to the
 //     instantaneous linear speed (delta-origin / delta-time), so a fast
 //     thrown grenade tumbles fast and as it bleeds speed to gravity /
 //     bounces / friction the rotation slows down naturally and stops once
 //     the grenade comes to rest on the ground
 //
+// CRITICAL: rotation is built as proper axis-angle (rotation by θ around
+// fixed unit axis n) and converted to the engine's Euler angles via the
+// quaternion intermediate (AngleQuaternion / QuaternionAngle). Earlier
+// versions of this file accumulated three Euler components independently
+// from `n * rate * dt` — that produces non-commutative Euler stacking, NOT
+// a single rotation about n, and the visual was orbital ("Earth around
+// Sun") instead of axial ("Earth around its own axis"). The fix is to
+// keep only the scalar accumulated angle and rebuild the proper Euler
+// every frame from (n, θ_total) → quaternion → engine Euler.
+//
 // The hook lives in CL_AddVisibleEntity (cl_frame.c) and runs after the
 // engine's interpolation but before R_AddEntity, so we have the final
 // origin to differentiate against the previous frame's origin.
 //
 // Toggle: cl_slayer_grenade_tumble (default 1).
+//
+// =============================================================================
+// Quick throw command (slayer_quickthrow)
+// =============================================================================
+//
+// Standoff-style one-button grenade throw: select grenade slot, pull the
+// pin (+attack), release immediately (-attack), switch back to previous
+// weapon (lastinv). All chained through Cbuf_AddText with no client-side
+// cooldown — the only timing limiter is the server's grenade throw
+// animation (~1.0-1.5s for CS 1.6).
+//
+// Usage:
+//   bind v "slayer_quickthrow"                          // slot4 (cycles HE/Flash/Smoke)
+//   bind c "slayer_quickthrow weapon_flashbang"
+//   bind z "slayer_quickthrow weapon_smokegrenade"
+//   bind x "slayer_quickthrow weapon_hegrenade"
+//
 
 #include "common.h"
 #include "client.h"
@@ -52,17 +79,17 @@ GNU General Public License for more details.
 
 static CVAR_DEFINE_AUTO( slayer_grenade_tumble,
 	"1", FCVAR_ARCHIVE,
-	"Slayer3D: client-side 3-axis grenade tumble proportional to linear speed (0 = off)" );
+	"Slayer3D: client-side axial grenade tumble proportional to linear speed (0 = off)" );
 
 // =============================================================================
 // Tunables
 // =============================================================================
 
-#define GT_MAX_SLOTS  32     // ~rarely more than a handful of grenades in flight
-#define GT_LIFETIME   5.0f   // sec: slot reclaimed if not refreshed
-#define GT_BASE_RATE  720.0f // deg/sec at GT_MAX_SPEED
-#define GT_MAX_SPEED  600.0f // hammer units / sec — typical strong throw
-#define GT_REST_SPEED 20.0f  // below this speed rotation halts entirely
+#define GT_MAX_SLOTS  32      // ~rarely more than a handful of grenades in flight
+#define GT_LIFETIME   5.0f    // sec: slot reclaimed if not refreshed
+#define GT_BASE_RATE  1080.0f // deg/sec at GT_MAX_SPEED (1.5x bump from initial 720)
+#define GT_MAX_SPEED  600.0f  // hammer units / sec — typical strong throw
+#define GT_REST_SPEED 20.0f   // below this speed rotation halts entirely
 
 // =============================================================================
 // Per-entity tumble state
@@ -73,8 +100,8 @@ typedef struct
 	int       index;        // engine entity index, 0 = empty slot
 	float     last_time;    // cl.time of last update (also slot expiry)
 	vec3_t    last_origin;  // for linear velocity estimation
-	vec3_t    accum_angles; // current pose (overrides ent->angles)
-	vec3_t    avel_dir;     // unit vector — rotation axis (random per entity)
+	float     accum_theta;  // total accumulated rotation angle in RADIANS
+	vec3_t    avel_dir;     // unit vector — fixed rotation axis (random per entity)
 	qboolean  inited;
 } grenade_tumble_t;
 
@@ -132,9 +159,9 @@ static void Slayer_GT_InitSlot( grenade_tumble_t *gt, struct cl_entity_s *ent, f
 {
 	vec3_t axis;
 
-	gt->index  = ent->index;
-	gt->inited = true;
-	VectorClear( gt->accum_angles );
+	gt->index       = ent->index;
+	gt->inited      = true;
+	gt->accum_theta = 0.0f;
 
 	// random unit axis so every grenade tumbles a little differently
 	axis[0] = COM_RandomFloat( -1.0f, 1.0f );
@@ -157,6 +184,44 @@ static void Slayer_GT_InitSlot( grenade_tumble_t *gt, struct cl_entity_s *ent, f
 	gt->last_time = now;
 }
 
+// Build a quaternion from axis-angle (axis must be unit, theta in radians)
+// and convert it to the engine's Euler angles. Layout matches AngleQuaternion
+// in xash3d_mathlib.h: q = (axis*sin(θ/2), cos(θ/2)).
+static void Slayer_GT_AxisAngleToEngineEuler( const vec3_t axis, float theta, vec3_t out_angles )
+{
+	vec4_t q;
+	float  half = theta * 0.5f;
+	float  s    = sinf( half );
+
+	q[0] = axis[0] * s;
+	q[1] = axis[1] * s;
+	q[2] = axis[2] * s;
+	q[3] = cosf( half );
+
+	QuaternionAngle( q, out_angles );
+}
+
+// =============================================================================
+// Quick throw command
+// =============================================================================
+
+static void Cmd_SlayerQuickThrow_f( void )
+{
+	const char *slot = "slot4";
+
+	if( Cmd_Argc() >= 2 )
+	{
+		// allow direct weapon name (weapon_hegrenade etc.) or numeric slotN
+		slot = Cmd_Argv( 1 );
+	}
+
+	// Standoff-style one-shot throw: select, pin-pull, release, switch back.
+	// All four commands are queued in a single Cbuf_AddText so they run
+	// sequentially in the next Cbuf_Execute pass with no extra client delay.
+	// Server-side throw animation timing remains the actual gate (~1.5s).
+	Cbuf_AddTextf( "%s\n+attack\n-attack\nlastinv\n", slot );
+}
+
 // =============================================================================
 // Public API
 // =============================================================================
@@ -167,12 +232,17 @@ void Slayer_GrenadeTumble_Init( void )
 
 	Cvar_RegisterVariable( &slayer_grenade_tumble );
 
+	Cmd_AddCommand( "slayer_quickthrow", Cmd_SlayerQuickThrow_f,
+		"Slayer3D: one-button grenade quick throw — slot4 by default; pass "
+		"weapon_hegrenade / weapon_flashbang / weapon_smokegrenade for direct "
+		"selection. Example: bind v \"slayer_quickthrow\"" );
+
 	for( i = 0; i < GT_MAX_SLOTS; i++ )
 	{
-		gt_slots[i].index  = 0;
-		gt_slots[i].inited = false;
-		gt_slots[i].last_time = 0.0f;
-		VectorClear( gt_slots[i].accum_angles );
+		gt_slots[i].index       = 0;
+		gt_slots[i].inited      = false;
+		gt_slots[i].last_time   = 0.0f;
+		gt_slots[i].accum_theta = 0.0f;
 		VectorClear( gt_slots[i].last_origin );
 		VectorClear( gt_slots[i].avel_dir );
 	}
@@ -186,7 +256,6 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	vec3_t            delta;
 	float             speed;
 	float             rate;
-	int               i;
 
 	if( !slayer_grenade_tumble.value )
 		return;
@@ -209,7 +278,7 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 		Slayer_GT_InitSlot( gt, ent, now );
 		// still apply the (zero) accumulated angles so the renderer doesn't
 		// see a single-axis spin from the server's avelocity on this frame
-		VectorCopy( gt->accum_angles, ent->angles );
+		Slayer_GT_AxisAngleToEngineEuler( gt->avel_dir, gt->accum_theta, ent->angles );
 		return;
 	}
 
@@ -217,7 +286,7 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	if( dt <= 0.0f )
 	{
 		// same-frame double call (e.g. multiple visible passes): just reapply
-		VectorCopy( gt->accum_angles, ent->angles );
+		Slayer_GT_AxisAngleToEngineEuler( gt->avel_dir, gt->accum_theta, ent->angles );
 		return;
 	}
 	if( dt > 0.5f )
@@ -237,7 +306,7 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	if( speed > GT_MAX_SPEED * 2.0f )
 	{
 		Slayer_GT_InitSlot( gt, ent, now );
-		VectorCopy( gt->accum_angles, ent->angles );
+		Slayer_GT_AxisAngleToEngineEuler( gt->avel_dir, gt->accum_theta, ent->angles );
 		return;
 	}
 
@@ -251,15 +320,21 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 		rate = GT_BASE_RATE * ( speed / GT_MAX_SPEED );
 	}
 
-	for( i = 0; i < 3; i++ )
-	{
-		gt->accum_angles[i] += gt->avel_dir[i] * rate * dt;
-		while( gt->accum_angles[i] >  360.0f ) gt->accum_angles[i] -= 360.0f;
-		while( gt->accum_angles[i] < -360.0f ) gt->accum_angles[i] += 360.0f;
-	}
+	// Single scalar accumulator — total rotation in radians around fixed
+	// axis avel_dir. This is the proper axis-angle representation; build
+	// the engine's Euler angles from (axis, theta) via quaternion to avoid
+	// the orbital drift that comes from stacking three independent Euler
+	// component accumulators.
+	gt->accum_theta += DEG2RAD( rate * dt );
+
+	// Wrap into [-2π, 2π] to keep float precision over long-lived tumbles
+	// (e.g. a smoke grenade that bounces for many seconds before settling).
+	while( gt->accum_theta >  2.0f * (float)M_PI ) gt->accum_theta -= 2.0f * (float)M_PI;
+	while( gt->accum_theta < -2.0f * (float)M_PI ) gt->accum_theta += 2.0f * (float)M_PI;
 
 	VectorCopy( ent->origin, gt->last_origin );
 	gt->last_time = now;
 
-	VectorCopy( gt->accum_angles, ent->angles );
+	Slayer_GT_AxisAngleToEngineEuler( gt->avel_dir, gt->accum_theta, ent->angles );
 }
+
