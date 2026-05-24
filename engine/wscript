@@ -292,7 +292,7 @@ def build(bld):
 		if not bld.env.DEDICATED:
 			source += bld.path.ant_glob('client/**/*.c')
 			source += bld.path.ant_glob('client/**/*.cpp')
-			libs += ['bzip2', 'MultiEmulator', 'opus', 'opusfile', 'silk', 'vorbis', 'vorbisfile', 'imgui']
+			libs += ['bzip2', 'MultiEmulator', 'opus', 'opusfile', 'silk', 'vorbis', 'vorbisfile']
 
 		# Android port is linked differently
 		if bld.env.DEST_OS == 'android':

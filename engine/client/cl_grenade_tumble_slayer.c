@@ -95,7 +95,6 @@ static CVAR_DEFINE_AUTO( slayer_grenade_pivot_fix,
 #define GT_BASE_RATE  1080.0f // deg/sec at GT_MAX_SPEED (1.5x bump from initial 720)
 #define GT_MAX_SPEED  600.0f  // hammer units / sec — typical strong throw
 #define GT_REST_SPEED 20.0f   // below this speed rotation halts entirely
-#define GT_DIAG_OVERLAY_MAX 8 // max entries in the diagnostic overlay struct
 
 // =============================================================================
 // Per-entity tumble state
@@ -112,19 +111,6 @@ typedef struct
 } grenade_tumble_t;
 
 static grenade_tumble_t gt_slots[GT_MAX_SLOTS];
-
-// =============================================================================
-// Real-time diagnostics for ImGui overlay
-// =============================================================================
-
-gt_diag_overlay_t g_GT_DiagOverlay;
-
-void Slayer_GrenadeTumble_DiagReset( void )
-{
-	g_GT_DiagOverlay.active_count = 0;
-	g_GT_DiagOverlay.calls_this_frame = 0;
-	g_GT_DiagOverlay.filtered_out = 0;
-}
 
 // =============================================================================
 // Helpers
@@ -411,11 +397,8 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	if( !ent || !ent->model )
 		return;
 
-	g_GT_DiagOverlay.calls_this_frame++;
-
 	if( !Slayer_GT_IsGrenadeModel( ent->model->name ))
 	{
-		g_GT_DiagOverlay.filtered_out++;
 		return;
 	}
 
@@ -490,19 +473,6 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 
 	VectorCopy( ent->origin, gt->last_origin );
 	gt->last_time = now;
-
-	// Fill in diagnostic overlay entry
-	if( g_GT_DiagOverlay.active_count < GT_DIAG_OVERLAY_MAX )
-	{
-		int idx = g_GT_DiagOverlay.active_count;
-		Q_strncpy( g_GT_DiagOverlay.entries[idx].model_name, ent->model->name, 64 );
-		g_GT_DiagOverlay.entries[idx].speed = speed;
-		g_GT_DiagOverlay.entries[idx].rate = rate;
-		g_GT_DiagOverlay.entries[idx].accum_deg = RAD2DEG( gt->accum_theta );
-		VectorCopy( ent->origin, g_GT_DiagOverlay.entries[idx].origin );
-		g_GT_DiagOverlay.entries[idx].ent_index = ent->index;
-		g_GT_DiagOverlay.active_count++;
-	}
 
 	Slayer_GT_AxisAngleToEngineEuler( gt->avel_dir, gt->accum_theta, ent->angles );
 	Slayer_GT_CompensatePivot( ent );
