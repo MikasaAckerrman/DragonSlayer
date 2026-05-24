@@ -23,6 +23,7 @@ GNU General Public License for more details.
 #include "sound.h"
 #include "input.h"
 #include "cl_view_slayer.h"
+#include "cl_grenade_tumble_slayer.h"
 
 // #define STUDIO_INTERPOLATION_FIX
 
@@ -980,6 +981,9 @@ qboolean CL_AddVisibleEntity( cl_entity_t *ent, int entityType )
 
 	if( !draw_player )
 		return false;
+
+	// Slayer3D: 3-axis grenade tumble (proportional to linear speed)
+	Slayer_GrenadeTumble_Apply( ent );
 
 	if( !ref.dllFuncs.R_AddEntity( ent, entityType ))
 		return false;
