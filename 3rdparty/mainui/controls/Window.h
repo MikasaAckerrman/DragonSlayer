@@ -35,6 +35,7 @@ public:
 	bool KeyDown( int key ) override;
 	bool KeyUp( int key ) override;
 	bool MouseMove( int x, int y ) override;
+	VGUI_DefaultCursor CursorAction() override;
 
 	bool IsRoot() const override { return false; }
 
@@ -90,6 +91,35 @@ private:
 
 	// Touch drag threshold (pixels² to avoid accidental drag on tap)
 	static const int DRAG_THRESHOLD_SQ = 64; // 8px movement
+
+	// --- Resize state ---
+	enum ResizeEdge
+	{
+		RESIZE_NONE        = 0,
+		RESIZE_LEFT        = 1,
+		RESIZE_RIGHT       = 2,
+		RESIZE_TOP         = 4,
+		RESIZE_BOTTOM      = 8,
+		RESIZE_TOPLEFT     = 5,   // TOP | LEFT
+		RESIZE_TOPRIGHT    = 6,   // TOP | RIGHT
+		RESIZE_BOTTOMLEFT  = 9,   // BOTTOM | LEFT
+		RESIZE_BOTTOMRIGHT = 10   // BOTTOM | RIGHT
+	};
+
+	int m_iResizeEdge;
+	bool m_bResizing;
+	Point m_resizeStartCursor;
+	Point m_resizeStartPos;
+	Size  m_resizeStartSize;
+
+	static const int RESIZE_BORDER = 8;    // virtual coord pixels for edge detection
+	static const int MIN_WINDOW_W  = 200;  // minimum window width (screen coords)
+	static const int MIN_WINDOW_H  = 150;  // minimum window height (screen coords)
+
+	int  DetectResizeEdge() const;
+	void StartResize( int edge );
+	void UpdateResize();
+	void StopResize();
 };
 
 #endif // MENUWINDOW_H

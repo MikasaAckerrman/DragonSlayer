@@ -30,6 +30,12 @@ CMenuWindow::CMenuWindow( const char *title, CWindowStack *pStack )
 	m_savedPos = Point( 0, 0 );
 	m_savedSize = Size( 0, 0 );
 
+	m_iResizeEdge = RESIZE_NONE;
+	m_bResizing = false;
+	m_resizeStartCursor = Point( 0, 0 );
+	m_resizeStartPos = Point( 0, 0 );
+	m_resizeStartSize = Size( 0, 0 );
+
 	bAllowDrag = false; // we handle drag ourselves via title bar only
 
 	m_iTitleBarH = WndStyle::TitleBarHeight;
@@ -62,6 +68,12 @@ void CMenuWindow::Draw()
 	m_iTitleBarH = WndStyle::ScaleYTouch( WndStyle::TitleBarHeight );
 	m_iCloseBtnSize = WndStyle::ScaleYTouch( WndStyle::CloseBtnSize );
 	m_iBorderW = WndStyle::BorderWidth;
+
+	// Resize in progress
+	if( m_bResizing )
+	{
+		UpdateResize();
+	}
 
 	// Title-bar drag with touch threshold
 	if( m_bTitleDrag )
@@ -239,6 +251,15 @@ bool CMenuWindow::KeyDown( int key )
 			ToggleMaximize();
 			return true;
 		}
+
+		// Check resize edge before title bar drag
+		int resizeEdge = DetectResizeEdge();
+		if( resizeEdge != RESIZE_NONE )
+		{
+			StartResize( resizeEdge );
+			return true;
+		}
+
 		if( IsCursorInTitleBar() && !m_bMaximized )
 		{
 			TitleBarDragDrop( true );
@@ -257,6 +278,11 @@ bool CMenuWindow::KeyDown( int key )
 
 bool CMenuWindow::KeyUp( int key )
 {
+	if( UI::Key::IsLeftMouse( key ) && m_bResizing )
+	{
+		StopResize();
+		return true;
+	}
 	if( UI::Key::IsLeftMouse( key ) && m_bTitleDrag )
 	{
 		TitleBarDragDrop( false );
@@ -287,5 +313,132 @@ void CMenuWindow::TitleBarDragDrop( bool down )
 	else
 	{
 		m_bDragStarted = false;
+	}
+}
+
+// ---------------------------------------------------------------
+// Resize — edge/corner detection and drag resize
+// ---------------------------------------------------------------
+int CMenuWindow::DetectResizeEdge() const
+{
+	if( m_bMaximized ) return RESIZE_NONE;
+
+	int border = WndStyle::ScaleX( RESIZE_BORDER );
+	int cx = uiStatic.cursorX;
+	int cy = uiStatic.cursorY;
+
+	int wx = m_scPos.x;
+	int wy = m_scPos.y;
+	int ww = m_scSize.w;
+	int wh = m_scSize.h;
+
+	bool inLeft   = ( cx >= wx - border && cx < wx + border );
+	bool inRight  = ( cx >= wx + ww - border && cx < wx + ww + border );
+	bool inTop    = ( cy >= wy - border && cy < wy + border );
+	bool inBottom = ( cy >= wy + wh - border && cy < wy + wh + border );
+
+	// Must be roughly within the window area (with edge extension)
+	bool inHRange = ( cx >= wx - border && cx < wx + ww + border );
+	bool inVRange = ( cy >= wy - border && cy < wy + wh + border );
+
+	if( !inHRange || !inVRange ) return RESIZE_NONE;
+
+	int edge = RESIZE_NONE;
+	if( inLeft )   edge |= RESIZE_LEFT;
+	if( inRight )  edge |= RESIZE_RIGHT;
+	if( inTop )    edge |= RESIZE_TOP;
+	if( inBottom ) edge |= RESIZE_BOTTOM;
+
+	return edge;
+}
+
+void CMenuWindow::StartResize( int edge )
+{
+	m_iResizeEdge = edge;
+	m_bResizing = true;
+	m_resizeStartCursor = Point( uiStatic.cursorX, uiStatic.cursorY );
+	m_resizeStartPos = m_scPos;
+	m_resizeStartSize = m_scSize;
+}
+
+void CMenuWindow::UpdateResize()
+{
+	int dx = uiStatic.cursorX - m_resizeStartCursor.x;
+	int dy = uiStatic.cursorY - m_resizeStartCursor.y;
+
+	int newX = m_resizeStartPos.x;
+	int newY = m_resizeStartPos.y;
+	int newW = m_resizeStartSize.w;
+	int newH = m_resizeStartSize.h;
+
+	if( m_iResizeEdge & RESIZE_RIGHT )
+	{
+		newW = m_resizeStartSize.w + dx;
+	}
+	if( m_iResizeEdge & RESIZE_LEFT )
+	{
+		newX = m_resizeStartPos.x + dx;
+		newW = m_resizeStartSize.w - dx;
+	}
+	if( m_iResizeEdge & RESIZE_BOTTOM )
+	{
+		newH = m_resizeStartSize.h + dy;
+	}
+	if( m_iResizeEdge & RESIZE_TOP )
+	{
+		newY = m_resizeStartPos.y + dy;
+		newH = m_resizeStartSize.h - dy;
+	}
+
+	// Enforce minimum size
+	int minW = MIN_WINDOW_W;
+	int minH = MIN_WINDOW_H;
+
+	if( newW < minW )
+	{
+		if( m_iResizeEdge & RESIZE_LEFT )
+			newX = m_resizeStartPos.x + m_resizeStartSize.w - minW;
+		newW = minW;
+	}
+	if( newH < minH )
+	{
+		if( m_iResizeEdge & RESIZE_TOP )
+			newY = m_resizeStartPos.y + m_resizeStartSize.h - minH;
+		newH = minH;
+	}
+
+	m_scPos.x = newX;
+	m_scPos.y = newY;
+	m_scSize.w = newW;
+	m_scSize.h = newH;
+
+	CalcItemsPositions();
+}
+
+void CMenuWindow::StopResize()
+{
+	m_bResizing = false;
+	m_iResizeEdge = RESIZE_NONE;
+}
+
+VGUI_DefaultCursor CMenuWindow::CursorAction()
+{
+	int edge = DetectResizeEdge();
+	switch( edge )
+	{
+	case RESIZE_TOPLEFT:
+	case RESIZE_BOTTOMRIGHT:
+		return dc_sizenwse;
+	case RESIZE_TOPRIGHT:
+	case RESIZE_BOTTOMLEFT:
+		return dc_sizenesw;
+	case RESIZE_LEFT:
+	case RESIZE_RIGHT:
+		return dc_sizewe;
+	case RESIZE_TOP:
+	case RESIZE_BOTTOM:
+		return dc_sizens;
+	default:
+		return dc_arrow;
 	}
 }
