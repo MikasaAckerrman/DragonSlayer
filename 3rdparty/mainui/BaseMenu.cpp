@@ -55,19 +55,19 @@ const char	*uiSounds[] = {
 	""
 };
 
-// they match default WON colors.lst now, except alpha
-// a1ba: made uiColorHelp brighter so it's easier to read
-unsigned int uiColorHelp        = 0xFFA0A0A0; // 160, 160, 160, 255 // hint letters color
-unsigned int uiPromptBgColor    = 0xFF383838; // 56,  56,  56,  255 // dialog background color
-unsigned int uiPromptTextColor  = 0xFFF0B418; // 240, 180, 24,  255 // dialog or button letters color
-unsigned int uiPromptFocusColor = 0xFFFFFF00; // 255, 255,  0,  255 // dialog or button focus letters color
-unsigned int uiInputTextColor   = 0xFFF0B418; // 240, 180, 24,  255
-unsigned int uiInputBgColor     = 0x80383838; // 56,  56,  56,  128 // field, scrollist, checkbox background color
-unsigned int uiInputFgColor     = 0xFF555555; // 85,  85,  85,  255 // field, scrollist, checkbox foreground color
-unsigned int uiColorWhite       = 0xFFFFFFFF; // 255, 255, 255, 255 // useful for bitmaps
-unsigned int uiColorDkGrey      = 0x80404040; // 64,  64,  64,  128 // shadow and grayed items
-unsigned int uiColorBlack       = 0x80000000; //  0,   0,   0,  128 // some controls background
-unsigned int uiColorConsole     = 0xFFF0B418; // just for reference
+// CS 1.6 PC palette (slayer3d): dark panels + saturated orange accent.
+// Originals (WON colors.lst) preserved as comments for reference.
+unsigned int uiColorHelp        = 0xFFC8C8C8; // 200, 200, 200, 255  (was 0xFFA0A0A0) // hint letters color
+unsigned int uiPromptBgColor    = 0xE6151515; // 21,  21,  21,  230  (was 0xFF383838) // dialog/panel background
+unsigned int uiPromptTextColor  = 0xFFFFA000; // 255, 160,   0, 255  (was 0xFFF0B418) // CS orange button text
+unsigned int uiPromptFocusColor = 0xFFFFD040; // 255, 208,  64, 255  (was 0xFFFFFF00) // focused button text
+unsigned int uiInputTextColor   = 0xFFFFA000; // 255, 160,   0, 255  (was 0xFFF0B418)
+unsigned int uiInputBgColor     = 0xC0151515; // 21,  21,  21,  192  (was 0x80383838) // field/list/checkbox bg
+unsigned int uiInputFgColor     = 0xFF555555; // 85,  85,  85,  255  // field/list/checkbox foreground (kept)
+unsigned int uiColorWhite       = 0xFFFFFFFF; // 255, 255, 255, 255  // useful for bitmaps
+unsigned int uiColorDkGrey      = 0x80404040; // 64,  64,  64,  128  // shadow and grayed items
+unsigned int uiColorBlack       = 0x80000000; //   0,   0,   0, 128  // some controls background
+unsigned int uiColorConsole     = 0xFFFFA000; // 255, 160,   0, 255  (was 0xFFF0B418)
 
 // color presets (this is nasty hack to allow color presets to part of text)
 const unsigned int g_iColorTable[8] =

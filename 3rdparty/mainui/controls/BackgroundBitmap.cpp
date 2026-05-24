@@ -58,7 +58,8 @@ void CMenuBackgroundBitmap::VidInit()
 		size = Size( ScreenWidth, ScreenHeight );
 	}
 
-	colorBase.SetDefault( 0xFF505050 );
+	// CS 1.6 PC reskin (slayer3d): default empty-bg fill is now near-black.
+	colorBase.SetDefault( 0xFF101010 );
 
 	CMenuBaseItem::VidInit();
 }
