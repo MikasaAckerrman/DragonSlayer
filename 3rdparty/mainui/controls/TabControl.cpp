@@ -11,6 +11,7 @@ the Free Software Foundation, either version 3 of the License, or
 #include "BaseMenu.h"
 #include "Utils.h"
 #include "TabControl.h"
+#include "WindowStyle.h"
 #include "ItemsHolder.h"
 
 CMenuTabControl::CMenuTabControl()
@@ -18,13 +19,13 @@ CMenuTabControl::CMenuTabControl()
 	m_iTabCount = 0;
 	m_iActiveTab = 0;
 	m_iHoverTab = -1;
-	m_iScaledTabH = TAB_HEIGHT;
+	m_iScaledTabH = WndStyle::TabHeight;
 	memset( m_tabs, 0, sizeof( m_tabs ) );
 }
 
 void CMenuTabControl::VidInit()
 {
-	m_iScaledTabH = TAB_HEIGHT * uiStatic.scaleY;
+	m_iScaledTabH = WndStyle::ScaleY( WndStyle::TabHeight );
 	BaseClass::VidInit();
 }
 
@@ -42,7 +43,6 @@ void CMenuTabControl::AddTab( const char *label, CMenuItemsHolder *page )
 	t.renderX = 0;
 	t.renderW = 0;
 
-	// Only active tab page is visible
 	if( page )
 		page->SetVisibility( m_iTabCount == m_iActiveTab );
 
@@ -54,19 +54,17 @@ void CMenuTabControl::SetActiveTab( int index )
 	if( index < 0 || index >= m_iTabCount )
 		return;
 
-	// Hide previous page
 	if( m_tabs[m_iActiveTab].page )
 		m_tabs[m_iActiveTab].page->Hide();
 
 	m_iActiveTab = index;
 
-	// Show new page
 	if( m_tabs[m_iActiveTab].page )
 		m_tabs[m_iActiveTab].page->Show();
 }
 
 // ---------------------------------------------------------------
-// Content area helpers
+// Content area
 // ---------------------------------------------------------------
 Point CMenuTabControl::GetContentOffset() const
 {
@@ -86,61 +84,31 @@ void CMenuTabControl::Draw()
 	if( m_iTabCount == 0 )
 		return;
 
-	m_iScaledTabH = TAB_HEIGHT * uiStatic.scaleY;
+	m_iScaledTabH = WndStyle::ScaleY( WndStyle::TabHeight );
 
 	int x = m_scPos.x;
 	int y = m_scPos.y;
 	int availW = m_scSize.w;
 
-	// Calculate tab widths — distribute evenly but respect min width
 	int tabW = availW / m_iTabCount;
-	if( tabW < TAB_MIN_WIDTH * uiStatic.scaleX )
-		tabW = TAB_MIN_WIDTH * uiStatic.scaleX;
+	int minW = WndStyle::ScaleX( WndStyle::TabMinWidth );
+	if( tabW < minW )
+		tabW = minW;
 
-	// Draw each tab
 	for( int i = 0; i < m_iTabCount; i++ )
 	{
 		int tx = x + i * tabW;
-		int tw = tabW - TAB_PAD_BETWEEN;
+		int tw = tabW - WndStyle::TabPadBetween;
 
 		m_tabs[i].renderX = tx;
 		m_tabs[i].renderW = tw;
 
-		// Pick color
-		unsigned int bgCol;
-		unsigned int textCol;
-
-		if( i == m_iActiveTab )
-		{
-			bgCol = TAB_ACTIVE_COLOR;
-			textCol = TAB_TEXT_ACTIVE_COLOR;
-		}
-		else if( i == m_iHoverTab )
-		{
-			bgCol = TAB_HOVER_COLOR;
-			textCol = TAB_TEXT_COLOR;
-		}
-		else
-		{
-			bgCol = TAB_INACTIVE_COLOR;
-			textCol = TAB_TEXT_COLOR;
-		}
-
-		// Tab background
-		UI_FillRect( tx, y, tw, m_iScaledTabH, bgCol );
-
-		// Tab border (top + sides, no bottom for active)
-		UI_DrawRectangleExt( tx, y, tw, m_iScaledTabH, TAB_BORDER_COLOR, 1,
-			QM_TOP | QM_LEFT | QM_RIGHT | ( i != m_iActiveTab ? QM_BOTTOM : 0 ) );
-
-		// Tab label
-		int charH = m_iScaledTabH * 0.6f;
-		UI_DrawString( uiStatic.hSmallFont, tx + TAB_PAD_H, y, tw - TAB_PAD_H * 2,
-			m_iScaledTabH, m_tabs[i].label, textCol, charH, QM_CENTER, ETF_SHADOW );
+		WndStyle::DrawTab( tx, y, tw, m_iScaledTabH,
+			i == m_iActiveTab, i == m_iHoverTab, m_tabs[i].label );
 	}
 
-	// Underline below inactive area (connects visual bottom)
-	UI_FillRect( x, y + m_iScaledTabH, availW, 1, TAB_BORDER_COLOR );
+	// Bottom line
+	UI_FillRect( x, y + m_iScaledTabH, availW, 1, WndStyle::TabBorderColor );
 }
 
 // ---------------------------------------------------------------

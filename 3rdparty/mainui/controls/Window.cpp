@@ -11,6 +11,7 @@ the Free Software Foundation, either version 3 of the License, or
 #include "BaseMenu.h"
 #include "Utils.h"
 #include "Window.h"
+#include "WindowStyle.h"
 
 CMenuWindow::CMenuWindow( const char *title, CWindowStack *pStack )
 	: BaseClass( title, pStack )
@@ -21,12 +22,11 @@ CMenuWindow::CMenuWindow( const char *title, CWindowStack *pStack )
 	m_bCloseHover = false;
 	m_dragOffset = Point( 0, 0 );
 
-	// Enable drag at BaseWindow level as well (safety net)
 	bAllowDrag = false; // we handle drag ourselves via title bar only
 
-	m_iTitleBarH = WINDOW_TITLEBAR_HEIGHT;
-	m_iCloseBtnSize = WINDOW_CLOSE_BTN_SIZE;
-	m_iBorderW = WINDOW_BORDER_WIDTH;
+	m_iTitleBarH = WndStyle::TitleBarHeight;
+	m_iCloseBtnSize = WndStyle::CloseBtnSize;
+	m_iBorderW = WndStyle::BorderWidth;
 }
 
 // ---------------------------------------------------------------
@@ -42,93 +42,63 @@ Point CMenuWindow::GetPositionOffset() const
 // ---------------------------------------------------------------
 void CMenuWindow::Draw()
 {
-	// Scale metrics to current resolution
-	m_iTitleBarH = WINDOW_TITLEBAR_HEIGHT * uiStatic.scaleY;
-	m_iCloseBtnSize = WINDOW_CLOSE_BTN_SIZE * uiStatic.scaleY;
-	m_iBorderW = WINDOW_BORDER_WIDTH; // thin, no scale needed
+	// Scale metrics
+	m_iTitleBarH = WndStyle::ScaleY( WndStyle::TitleBarHeight );
+	m_iCloseBtnSize = WndStyle::ScaleY( WndStyle::CloseBtnSize );
+	m_iBorderW = WndStyle::BorderWidth;
 
-	// Handle title-bar dragging
+	// Title-bar drag
 	if( m_bTitleDrag )
 	{
-		int dx = uiStatic.cursorX - m_dragOffset.x;
-		int dy = uiStatic.cursorY - m_dragOffset.y;
-		m_scPos.x += dx;
-		m_scPos.y += dy;
+		m_scPos.x += uiStatic.cursorX - m_dragOffset.x;
+		m_scPos.y += uiStatic.cursorY - m_dragOffset.y;
 		m_dragOffset.x = uiStatic.cursorX;
 		m_dragOffset.y = uiStatic.cursorY;
 		CalcItemsPositions();
 	}
 
-	// Update close button hover
 	m_bCloseHover = IsCursorOnCloseBtn();
 
-	// --- Draw chrome ---
+	// Chrome
 	DrawChrome();
 
-	// --- Draw child items (content area) ---
+	// Child items
 	CMenuItemsHolder::Draw();
 }
 
 // ---------------------------------------------------------------
-// Chrome rendering
+// Chrome
 // ---------------------------------------------------------------
 void CMenuWindow::DrawChrome()
 {
-	DrawBorder();
-	DrawTitleBar();
-	DrawCloseButton();
-}
+	// Background + border
+	WndStyle::DrawWindowChrome( m_scPos.x, m_scPos.y, m_scSize.w, m_scSize.h );
 
-void CMenuWindow::DrawBorder()
-{
-	// Outer border
-	UI_DrawRectangleExt( m_scPos.x, m_scPos.y, m_scSize.w, m_scSize.h,
-		WINDOW_BORDER_COLOR, m_iBorderW );
+	// Title bar
+	int tbX = m_scPos.x + m_iBorderW;
+	int tbY = m_scPos.y + m_iBorderW;
+	int tbW = m_scSize.w - m_iBorderW * 2;
+	WndStyle::DrawTitleBar( tbX, tbY, tbW, m_iTitleBarH );
 
-	// Background fill (inside border)
-	UI_FillRect( m_scPos.x + m_iBorderW, m_scPos.y + m_iBorderW,
-		m_scSize.w - m_iBorderW * 2, m_scSize.h - m_iBorderW * 2,
-		WINDOW_BG_COLOR );
-}
-
-void CMenuWindow::DrawTitleBar()
-{
-	int x = m_scPos.x + m_iBorderW;
-	int y = m_scPos.y + m_iBorderW;
-	int w = m_scSize.w - m_iBorderW * 2;
-	int h = m_iTitleBarH;
-
-	// Title bar background
-	UI_FillRect( x, y, w, h, WINDOW_TITLEBAR_COLOR );
-
-	// Icon (if set)
-	int textX = x + WINDOW_TITLE_PAD_LEFT;
+	// Icon + title text
+	int textX = tbX + WndStyle::TitlePadLeft;
 	if( m_szIconPath )
 	{
-		int iconSz = WINDOW_ICON_SIZE * uiStatic.scaleY;
-		int iconY = y + ( h - iconSz ) / 2;
+		int iconSz = WndStyle::ScaleY( WndStyle::IconSize );
+		int iconY = tbY + ( m_iTitleBarH - iconSz ) / 2;
 		UI_DrawPic( textX, iconY, iconSz, iconSz, 0xFFFFFFFF, m_szIconPath, QM_DRAWTRANS );
-		textX += iconSz + WINDOW_ICON_PAD;
+		textX += iconSz + WndStyle::IconPad;
 	}
 
-	// Title text
-	int textW = w - ( textX - x ) - m_iCloseBtnSize - WINDOW_ICON_PAD;
-	UI_DrawString( uiStatic.hDefaultFont, textX, y, textW, h,
-		m_szTitle, WINDOW_TITLE_TEXT_COLOR, h * 0.7f, QM_LEFT, ETF_SHADOW );
-}
+	int textW = tbW - ( textX - tbX ) - m_iCloseBtnSize - WndStyle::IconPad;
+	int charH = (int)( m_iTitleBarH * 0.7f );
+	UI_DrawString( uiStatic.hDefaultFont, textX, tbY, textW, m_iTitleBarH,
+		m_szTitle, WndStyle::TitleTextColor, charH, QM_LEFT, ETF_SHADOW );
 
-void CMenuWindow::DrawCloseButton()
-{
-	int btnSize = m_iCloseBtnSize;
-	int x = m_scPos.x + m_scSize.w - m_iBorderW - btnSize - 2;
-	int y = m_scPos.y + m_iBorderW + ( m_iTitleBarH - btnSize ) / 2;
-
-	unsigned int bgColor = m_bCloseHover ? WINDOW_CLOSE_HOVER_COLOR : WINDOW_TITLEBAR_COLOR;
-	UI_FillRect( x, y, btnSize, btnSize, bgColor );
-
-	// Draw "X" text centered
-	UI_DrawString( uiStatic.hDefaultFont, x, y, btnSize, btnSize,
-		"X", WINDOW_CLOSE_TEXT_COLOR, btnSize * 0.7f, QM_CENTER, ETF_SHADOW );
+	// Close button
+	int cbX = m_scPos.x + m_scSize.w - m_iBorderW - m_iCloseBtnSize - 2;
+	int cbY = m_scPos.y + m_iBorderW + ( m_iTitleBarH - m_iCloseBtnSize ) / 2;
+	WndStyle::DrawCloseBtn( cbX, cbY, m_iCloseBtnSize, m_bCloseHover );
 }
 
 // ---------------------------------------------------------------
@@ -139,9 +109,7 @@ bool CMenuWindow::IsCursorInTitleBar() const
 	int x = m_scPos.x + m_iBorderW;
 	int y = m_scPos.y + m_iBorderW;
 	int w = m_scSize.w - m_iBorderW * 2 - m_iCloseBtnSize;
-	int h = m_iTitleBarH;
-
-	return UI_CursorInRect( x, y, w, h );
+	return UI_CursorInRect( x, y, w, m_iTitleBarH );
 }
 
 bool CMenuWindow::IsCursorOnCloseBtn() const
@@ -149,25 +117,21 @@ bool CMenuWindow::IsCursorOnCloseBtn() const
 	int btnSize = m_iCloseBtnSize;
 	int x = m_scPos.x + m_scSize.w - m_iBorderW - btnSize - 2;
 	int y = m_scPos.y + m_iBorderW + ( m_iTitleBarH - btnSize ) / 2;
-
 	return UI_CursorInRect( x, y, btnSize, btnSize );
 }
 
 // ---------------------------------------------------------------
-// Input handling
+// Input
 // ---------------------------------------------------------------
 bool CMenuWindow::KeyDown( int key )
 {
 	if( UI::Key::IsLeftMouse( key ) )
 	{
-		// Close button click
 		if( IsCursorOnCloseBtn() )
 		{
 			Hide();
 			return true;
 		}
-
-		// Title bar drag start
 		if( IsCursorInTitleBar() )
 		{
 			TitleBarDragDrop( true );
@@ -186,27 +150,21 @@ bool CMenuWindow::KeyDown( int key )
 
 bool CMenuWindow::KeyUp( int key )
 {
-	if( UI::Key::IsLeftMouse( key ) )
+	if( UI::Key::IsLeftMouse( key ) && m_bTitleDrag )
 	{
-		if( m_bTitleDrag )
-		{
-			TitleBarDragDrop( false );
-			return true;
-		}
+		TitleBarDragDrop( false );
+		return true;
 	}
-
 	return BaseClass::KeyUp( key );
 }
 
 bool CMenuWindow::MouseMove( int x, int y )
 {
-	// Update drag offset while dragging
-	// (actual move happens in Draw to avoid jitter)
 	return BaseClass::MouseMove( x, y );
 }
 
 // ---------------------------------------------------------------
-// Drag helpers
+// Drag
 // ---------------------------------------------------------------
 void CMenuWindow::TitleBarDragDrop( bool down )
 {
