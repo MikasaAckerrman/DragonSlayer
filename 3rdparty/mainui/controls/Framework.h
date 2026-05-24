@@ -64,11 +64,6 @@ public:
 
 	private:
 		CImage image;
-		// CS 1.6 PC reskin (slayer3d): label derived from the picture
-		// path (e.g. "gfx/shell/head_newgame.tga" -> "NEW GAME").
-		// Used as text fallback when the bitmap is missing AND the
-		// banner has no szName set (typical for a static section banner).
-		char szLabel[64];
 	} banner;
 
 protected:

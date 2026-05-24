@@ -153,36 +153,4 @@ void CMenuScrollView::Draw()
 	UI::Scissor::PushScissor( m_scPos, m_scSize );
 		CMenuItemsHolder::Draw();
 	UI::Scissor::PopScissor();
-
-	// CS 1.6 PC flat scrollbar (slayer3d): narrow dark track + orange
-	// thumb, drawn outside the scissor on the right edge of the view.
-	// Purely visual indicator — drag-to-scroll already works anywhere
-	// inside the view, so no input hit-test on the bar itself.
-	if( !m_bDisableScrolling && m_iMax > m_scSize.h )
-	{
-		int barW = (int)( 4 * uiStatic.scaleX );
-		if( barW < 4 ) barW = 4;
-		int barX = m_scPos.x + m_scSize.w - barW;
-		int barY = m_scPos.y;
-		int barH = m_scSize.h;
-
-		UI_FillRect( barX, barY, barW, barH, uiInputBgColor );
-
-		int thumbH = (int)( (float)barH * (float)barH / (float)m_iMax );
-		if( thumbH < 16 ) thumbH = 16;
-		if( thumbH > barH ) thumbH = barH;
-
-		int range = m_iMax - m_scSize.h;
-		int thumbY = barY;
-		if( range > 0 )
-			thumbY += (int)( (float)( barH - thumbH ) * (float)m_iPos / (float)range );
-
-		// Defensive clamp: m_iPos can theoretically exceed range during a
-		// VidInit recalc race (item count changed mid-frame), which would
-		// push the thumb outside the track. Clamp to keep it inside.
-		if( thumbY < barY ) thumbY = barY;
-		if( thumbY + thumbH > barY + barH ) thumbY = barY + barH - thumbH;
-
-		UI_FillRect( barX, thumbY, barW, thumbH, uiInputTextColor );
-	}
 }

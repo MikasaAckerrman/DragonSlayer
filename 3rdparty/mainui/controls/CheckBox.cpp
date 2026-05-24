@@ -132,37 +132,45 @@ void CMenuCheckBox::Draw( void )
 		EngFuncs::DrawConsoleString( coord, szStatusText );
 	}
 
-	// CS 1.6 PC flat skin (slayer3d): drop bitmap textures, draw a plain
-	// outlined square with an orange fill when checked. Bitmap pictures
-	// (UI_CHECKBOX_*) are not shipped with most CS 1.6 paks on Android,
-	// so the previous UI_DrawPic path rendered as a missing-asset stub.
-	bool grayed  = ( iFlags & QMF_GRAYED ) != 0;
-	bool focused = !grayed && m_pParent && ( this == m_pParent->ItemAtCursor() );
-	bool pressed = m_bPressed;
-
-	uint bgColor = pressed ? 0xC0303030 : 0xC0101010;
-	uint borderColor;
-	if( grayed )                       borderColor = uiInputFgColor;     // dimmed dark grey
-	else if( focused || bChecked )     borderColor = uiInputTextColor;   // CS orange #FFA000
-	else                               borderColor = uiInputFgColor;     // idle dark grey
-
-	// background panel
-	UI_FillRect( m_scPos, m_scSize, bgColor );
-	// 1px border
-	UI_DrawRectangle( m_scPos, m_scSize, borderColor );
-
-	if( bChecked )
+	if( iFlags & QMF_GRAYED )
 	{
-		// solid orange square inset to ~50% of the box, centred
-		Size innerSize;
-		Point innerPos;
-		innerSize.w = m_scSize.w / 2;
-		innerSize.h = m_scSize.h / 2;
-		innerPos.x  = m_scPos.x + ( m_scSize.w - innerSize.w ) / 2;
-		innerPos.y  = m_scPos.y + ( m_scSize.h - innerSize.h ) / 2;
+		UI_DrawPic( m_scPos, m_scSize, uiColorWhite, szGrayedPic );
+		return; // grayed
+	}
 
-		uint fillColor = grayed ? uiInputFgColor : uiInputTextColor;
-		UI_FillRect( innerPos, innerSize, fillColor );
+	if((( iFlags & QMF_MOUSEONLY ) && !( iFlags & QMF_HASMOUSEFOCUS ))
+	   || ( this != m_pParent->ItemAtCursor() ) )
+	{
+		if( !bChecked )
+			UI_DrawPic( m_scPos, m_scSize, colorBase, szEmptyPic );
+		else UI_DrawPic( m_scPos, m_scSize, colorBase, szCheckPic );
+		return; // no focus
+	}
+
+	if( m_bPressed )
+	{
+		UI_DrawPic( m_scPos, m_scSize, colorBase, szPressPic );
+	}
+	else if( eFocusAnimation == QM_HIGHLIGHTIFFOCUS )
+	{
+		if( bChecked )
+		{
+			// use two textures for it. Second is just focus texture, slightly orange. Looks pretty.
+			UI_DrawPic( m_scPos, m_scSize, colorBase, szPressPic );
+			UI_DrawPic( m_scPos, m_scSize, uiInputTextColor, szFocusPic, QM_DRAWADDITIVE );
+		}
+		else
+		{
+			UI_DrawPic( m_scPos, m_scSize, colorFocus, szFocusPic );
+		}
+	}
+	else if( bChecked )
+	{
+		UI_DrawPic( m_scPos, m_scSize, colorBase, szCheckPic );
+	}
+	else
+	{
+		UI_DrawPic( m_scPos, m_scSize, colorBase, szEmptyPic );
 	}
 }
 

@@ -309,65 +309,64 @@ UI_Main_Init
 */
 void CMenuMain::VidInit( bool connected )
 {
-	// CS 1.6 PC reskin (slayer3d): top-anchored vertical button stack
-	// inside the left navigation slab (CS16_NAV_* in Framework.cpp).
-	// Buttons grow downward from y=240 (just under the banner divider)
-	// at a 42-px gap. The whole list lives inside the dark slab.
 	int hoffset = ( 70 / 640.0 ) * 1024.0;
-	int top_voffset = 240;
-	int ygap = 42;
-	bool single = gpGlobals->maxClients < 2;
+
+	// in original menu Previews is located at specific point
+	int previews_voffset = ( 404 / 480.0 ) * 768.0;
+
+	// no visible console button gap
+	int ygap = (( 404 - 373 ) / 480.0 ) * 768.0;
 
 	// statically positioned items
 	minimizeBtn.SetRect( uiStatic.width - 72, 13, 32, 32 );
 	quitButton.SetRect( uiStatic.width - 36, 13, 32, 32 );
 
-	int yoffset = top_voffset;
+	previews.SetCoord( hoffset, previews_voffset );
+	quit.SetCoord( hoffset, previews_voffset + ygap );
 
-	console.SetCoord( hoffset, yoffset );
-	yoffset += ygap;
-
-	if( connected )
-	{
-		resumeGame.SetCoord( hoffset, yoffset );
-		yoffset += ygap;
-
-		if( !single )
-		{
-			disconnect.SetCoord( hoffset, yoffset );
-			yoffset += ygap;
-		}
-	}
-
-	newGame.SetCoord( hoffset, yoffset );
-	yoffset += ygap;
-
-	if( bTrainMap )
-	{
-		hazardCourse.SetCoord( hoffset, yoffset );
-		yoffset += ygap;
-	}
-
-	configuration.SetCoord( hoffset, yoffset );
-	yoffset += ygap;
-
-	saveRestore.SetCoord( hoffset, yoffset );
-	yoffset += ygap;
-
-	multiPlayer.SetCoord( hoffset, yoffset );
-	yoffset += ygap;
+	// let's start calculating positions
+	int yoffset = previews_voffset - ygap;
 
 	if( bCustomGame )
 	{
 		customGame.SetCoord( hoffset, yoffset );
-		yoffset += ygap;
+		yoffset -= ygap;
 	}
 
-	previews.SetCoord( hoffset, yoffset );
-	yoffset += ygap;
+	multiPlayer.SetCoord( hoffset, yoffset );
+	yoffset -= ygap;
 
-	quit.SetCoord( hoffset, yoffset );
-	yoffset += ygap;
+	bool single = gpGlobals->maxClients < 2;
+
+	saveRestore.SetCoord( hoffset, yoffset );
+	yoffset -= ygap;
+
+	configuration.SetCoord( hoffset, yoffset );
+	yoffset -= ygap;
+
+	if( bTrainMap )
+	{
+		hazardCourse.SetCoord( hoffset, yoffset );
+		yoffset -= ygap;
+	}
+
+	newGame.SetCoord( hoffset, yoffset );
+	yoffset -= ygap;
+
+	if( connected )
+	{
+		resumeGame.SetCoord( hoffset, yoffset );
+		yoffset -= ygap;
+
+		if( !single )
+		{
+			disconnect.SetCoord( hoffset, yoffset );
+			yoffset -= ygap;
+		}
+	}
+
+	console.SetCoord( hoffset, yoffset );
+	yoffset -= ygap;
 
 	// now figure out what's visible
 	resumeGame.SetVisibility( connected );

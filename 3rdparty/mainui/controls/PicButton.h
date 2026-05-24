@@ -50,6 +50,8 @@ private:
 	void CheckWindowChanged( void );
 	void _Event( int ev ) override;
 
+	void DrawButton( int r, int g, int b, int a, wrect_t *rects, int state );
+
 	HIMAGE hPic;
 	int hotkey;
 	int button_id;

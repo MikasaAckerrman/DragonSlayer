@@ -456,9 +456,8 @@ void CMenuField::Draw( void )
 		// draw the background
 		UI_FillRect( newPos, m_scSize, uiInputBgColor );
 
-		// CS 1.6 PC flat skin (slayer3d): orange 1px border on focus, dark grey otherwise.
-		bool focused = m_pParent && ( this == m_pParent->ItemAtCursor() ) && !( iFlags & QMF_GRAYED );
-		UI_DrawRectangle( newPos, m_scSize, focused ? uiInputTextColor : uiInputFgColor );
+		// draw the rectangle
+		UI_DrawRectangle( newPos, m_scSize, uiInputFgColor );
 	}
 
 	textHeight = y - (m_scChSize * 1.5f);
