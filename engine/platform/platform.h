@@ -346,9 +346,16 @@ typedef enum
 } rserr_t;
 
 struct vidmode_s;
+#ifdef __cplusplus
+// C++ forbids forward references to enum types, use int as compatible stand-in
+typedef int window_mode_t;
+typedef int ref_window_type_t;
+typedef int ref_graphic_apis_t;
+#else
 typedef enum window_mode_e window_mode_t;
 typedef enum ref_window_type_e ref_window_type_t;
 typedef enum ref_graphic_apis_e ref_graphic_apis_t;
+#endif
 
 // Window
 qboolean  R_Init_Video( ref_graphic_apis_t type );
