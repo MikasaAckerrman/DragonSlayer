@@ -81,6 +81,10 @@ static CVAR_DEFINE_AUTO( slayer_grenade_tumble,
 	"1", FCVAR_ARCHIVE,
 	"Slayer3D: client-side axial grenade tumble proportional to linear speed (0 = off)" );
 
+static CVAR_DEFINE_AUTO( slayer_grenade_pivot_fix,
+	"1", FCVAR_ARCHIVE,
+	"Slayer3D: compensate for off-center grenade model pivot so rotation is around its own axis (0 = off)" );
+
 // =============================================================================
 // Tunables
 // =============================================================================
@@ -201,6 +205,50 @@ static void Slayer_GT_AxisAngleToEngineEuler( const vec3_t axis, float theta, ve
 	QuaternionAngle( q, out_angles );
 }
 
+// Compensate for off-center model pivot.
+//
+// PROBLEM: Studio renderer rotates the mesh around the model's LOCAL origin
+// (0,0,0). For models like w_hegrenade.mdl, w_smokegrenade.mdl etc. the mesh
+// geometric center sits at offset L_center = (mins + maxs)/2 from the local
+// origin, so rotating around (0,0,0) makes the visual center *orbit* the
+// world position ent->origin (radius |L_center|) instead of spinning in
+// place. The user sees the grenade flying in a circle.
+//
+// FIX: Shift ent->origin by -(R(angles)*L_center - L_center). After the
+// engine renders T(ent_origin') * R(angles) * mesh, the visual center
+// world position becomes:
+//     ent_origin' + R(angles) * L_center
+//   = (ent_origin - R(angles)*L_center + L_center) + R(angles) * L_center
+//   = ent_origin + L_center
+// — same as it would be at angles=0 (no rotation), i.e. STABLE across spin.
+//
+// We mutate ent->origin AFTER the speed estimator has captured the original
+// world position into gt->last_origin, so the per-frame velocity used for
+// rotation rate is unaffected.
+static void Slayer_GT_CompensatePivot( struct cl_entity_s *ent )
+{
+	vec3_t    L_center, rotated_L, shift;
+	matrix3x4 mat;
+
+	if( !slayer_grenade_pivot_fix.value )
+		return;
+	if( !ent->model )
+		return;
+
+	VectorAverage( ent->model->mins, ent->model->maxs, L_center );
+
+	// Skip if model is already centered at its origin (avoid wasted math)
+	if( DotProduct( L_center, L_center ) < 0.01f )
+		return;
+
+	// Pure rotation matrix from current angles (translation = origin = 0)
+	Matrix3x4_CreateFromEntity( mat, ent->angles, vec3_origin, 1.0f );
+	Matrix3x4_VectorRotate( mat, L_center, rotated_L );
+
+	VectorSubtract( rotated_L, L_center, shift );
+	VectorSubtract( ent->origin, shift, ent->origin );
+}
+
 // =============================================================================
 // Quick throw command
 // =============================================================================
@@ -231,6 +279,7 @@ void Slayer_GrenadeTumble_Init( void )
 	int i;
 
 	Cvar_RegisterVariable( &slayer_grenade_tumble );
+	Cvar_RegisterVariable( &slayer_grenade_pivot_fix );
 
 	Cmd_AddCommand( "slayer_quickthrow", Cmd_SlayerQuickThrow_f,
 		"Slayer3D: one-button grenade quick throw — slot4 by default; pass "
@@ -279,6 +328,7 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 		// still apply the (zero) accumulated angles so the renderer doesn't
 		// see a single-axis spin from the server's avelocity on this frame
 		Slayer_GT_AxisAngleToEngineEuler( gt->avel_dir, gt->accum_theta, ent->angles );
+		Slayer_GT_CompensatePivot( ent );
 		return;
 	}
 
@@ -287,6 +337,7 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	{
 		// same-frame double call (e.g. multiple visible passes): just reapply
 		Slayer_GT_AxisAngleToEngineEuler( gt->avel_dir, gt->accum_theta, ent->angles );
+		Slayer_GT_CompensatePivot( ent );
 		return;
 	}
 	if( dt > 0.5f )
@@ -307,6 +358,7 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	{
 		Slayer_GT_InitSlot( gt, ent, now );
 		Slayer_GT_AxisAngleToEngineEuler( gt->avel_dir, gt->accum_theta, ent->angles );
+		Slayer_GT_CompensatePivot( ent );
 		return;
 	}
 
@@ -336,5 +388,6 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	gt->last_time = now;
 
 	Slayer_GT_AxisAngleToEngineEuler( gt->avel_dir, gt->accum_theta, ent->angles );
+	Slayer_GT_CompensatePivot( ent );
 }
 
