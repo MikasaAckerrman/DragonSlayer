@@ -422,7 +422,9 @@ void CMenuSettings::_VidInit()
 
 	// Mouse
 	m_sldSensitivity.LinkCvar( "sensitivity" );
-	m_chkInvertMouse.LinkCvar( "m_pitch" ); // negative = inverted
+	// m_pitch is a float (0.022 or -0.022); LinkCvar + checkbox treats any
+	// non-zero as checked. Read sign manually instead.
+	m_chkInvertMouse.bChecked = ( EngFuncs::GetCvarFloat( "m_pitch" ) < 0 );
 	m_chkRawInput.LinkCvar( "m_rawinput" );
 
 	// Audio
@@ -466,7 +468,7 @@ void CMenuSettings::OnApply()
 	m_ddPlayerModel.WriteCvar();
 	m_ddHand.WriteCvar();
 	m_sldSensitivity.WriteCvar();
-	m_chkInvertMouse.WriteCvar();
+	EngFuncs::CvarSetValue( "m_pitch", m_chkInvertMouse.bChecked ? -0.022f : 0.022f );
 	m_chkRawInput.WriteCvar();
 	m_sldSoundVol.WriteCvar();
 	m_sldMusicVol.WriteCvar();
