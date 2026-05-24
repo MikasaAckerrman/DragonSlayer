@@ -200,7 +200,10 @@ void CMenuSlider::Draw( void )
 	// imgSlider bitmap path (UI_SLIDER_MAIN), which often is not in
 	// shipped CS 1.6 paks on Android and rendered as missing-asset stub.
 	{
-		int trackH = 4;
+		// 6px track height: leaves 4px of fill between the 1px borders.
+		// 4px would only give 2px of visible fill which reads as a
+		// hairline on Android portrait orientation.
+		int trackH = 6;
 		int trackY = m_scPos.y + ( m_scSize.h - trackH ) / 2;
 
 		UI_FillRect( m_scPos.x, trackY, m_scSize.w, trackH, uiInputBgColor );

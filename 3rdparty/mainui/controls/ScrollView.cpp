@@ -160,7 +160,7 @@ void CMenuScrollView::Draw()
 	// inside the view, so no input hit-test on the bar itself.
 	if( !m_bDisableScrolling && m_iMax > m_scSize.h )
 	{
-		int barW = 4 * uiStatic.scaleX;
+		int barW = (int)( 4 * uiStatic.scaleX );
 		if( barW < 4 ) barW = 4;
 		int barX = m_scPos.x + m_scSize.w - barW;
 		int barY = m_scPos.y;
@@ -176,6 +176,12 @@ void CMenuScrollView::Draw()
 		int thumbY = barY;
 		if( range > 0 )
 			thumbY += (int)( (float)( barH - thumbH ) * (float)m_iPos / (float)range );
+
+		// Defensive clamp: m_iPos can theoretically exceed range during a
+		// VidInit recalc race (item count changed mid-frame), which would
+		// push the thumb outside the track. Clamp to keep it inside.
+		if( thumbY < barY ) thumbY = barY;
+		if( thumbY + thumbH > barY + barH ) thumbY = barY + barH - thumbH;
 
 		UI_FillRect( barX, thumbY, barW, thumbH, uiInputTextColor );
 	}
