@@ -84,7 +84,7 @@ static CVAR_DEFINE_AUTO( slayer_grenade_tumble,
 
 static CVAR_DEFINE_AUTO( slayer_grenade_pivot_fix,
 	"1", FCVAR_ARCHIVE,
-	"Slayer3D: compensate for off-center grenade model pivot so rotation is around its own axis (0 = off)" );
+	"Slayer3D: compensate for off-center grenade model pivot using bbox center (0 = off, 1 = on, 2 = on + diagnostic logging)" );
 
 // =============================================================================
 // Tunables
@@ -208,21 +208,29 @@ static void Slayer_GT_AxisAngleToEngineEuler( const vec3_t axis, float theta, ve
 
 // Compensate for off-center model pivot.
 //
-// PROBLEM: Studio renderer rotates the mesh around ent->origin, then applies
-// bone[0].pos as an additional offset. This means the effective visual center
-// orbits at radius |bone[0].pos| from the trajectory. The bbox center
-// (mins+maxs)/2 is nearly zero for grenade models, so it cannot be used as
-// the pivot offset. The real rotation pivot offset is bone[0].value[0..2]
-// from the studiohdr.
+// PROBLEM: Studio renderer rotates the mesh around ent->origin, but the
+// visual center of the mesh is offset from that origin by bbox_center =
+// (mins+maxs)/2. This means the visual center orbits around the trajectory
+// at radius |bbox_center| instead of staying on it.
 //
-// FIX: Read bone[0].value[0..2] as L_center (the pivot offset the renderer
-// applies). Then shift ent->origin by -(R(angles)*L_center - L_center).
-// After the engine renders T(ent_origin') * R(angles) * mesh, the visual
-// center world position becomes:
+// PREVIOUS (WRONG) APPROACH: used bone[0].value[0..2] as the pivot offset.
+// bone[0].value is the root bone reference position in bind pose, which is a
+// point OUTSIDE the bounding box (e.g. 6.5, 0.6, 4.1 for hegrenade). Using
+// it made the orbiting WORSE, not better.
+//
+// CORRECT FIX: Use the bounding box center (mins+maxs)/2 as L_center. This
+// represents how far the visual mesh center is from the entity origin. Then
+// shift ent->origin by -(R(angles)*L_center - L_center). After the engine
+// renders T(ent_origin') * R(angles) * mesh, the visual center world
+// position becomes:
 //     ent_origin' + R(angles) * L_center
 //   = (ent_origin - R(angles)*L_center + L_center) + R(angles) * L_center
 //   = ent_origin + L_center
 // -- same as it would be at angles=0 (no rotation), i.e. STABLE across spin.
+//
+// Even small offsets (e.g. hegrenade center=(0,-2,0), length=2) are worth
+// correcting because at high rotation speeds even 2 units of offset produces
+// visible wobble.
 //
 // We mutate ent->origin AFTER the speed estimator has captured the original
 // world position into gt->last_origin, so the per-frame velocity used for
@@ -239,24 +247,11 @@ static void Slayer_GT_CompensatePivot( struct cl_entity_s *ent )
 	if( !ent->model )
 		return;
 
-	// Try to get bone[0] position as the real pivot offset
-	{
-		studiohdr_t *phdr = (studiohdr_t *)Mod_StudioExtradata( ent->model );
-		if( phdr && phdr->numbones > 0 )
-		{
-			mstudiobone_t *pbones = (mstudiobone_t *)((byte *)phdr + phdr->boneindex);
-			L_center[0] = pbones[0].value[0];
-			L_center[1] = pbones[0].value[1];
-			L_center[2] = pbones[0].value[2];
-		}
-		else
-		{
-			// Fallback to bbox center if no studio data
-			VectorAverage( ent->model->mins, ent->model->maxs, L_center );
-		}
-	}
+	// Always use bbox center as the pivot offset
+	VectorAverage( ent->model->mins, ent->model->maxs, L_center );
 
-	// Skip if pivot offset is negligible (avoid wasted math)
+	// Apply even for small offsets (|L_center| >= 1.0 still produces visible
+	// wobble at high rotation speeds), but skip truly negligible cases
 	if( DotProduct( L_center, L_center ) < 0.01f )
 		return;
 
@@ -296,7 +291,8 @@ static void Slayer_GT_CompensatePivot( struct cl_entity_s *ent )
 				diag_printed_count++;
 			}
 
-			Con_Printf( "[SlayerGT] model=%s mins=(%.1f %.1f %.1f) maxs=(%.1f %.1f %.1f) L_center=(%.1f %.1f %.1f) shift=(%.1f %.1f %.1f)\n",
+			Con_Printf( "[SlayerGT] pivot_fix: using bbox center\n" );
+			Con_Printf( "[SlayerGT] model=%s mins=(%.1f %.1f %.1f) maxs=(%.1f %.1f %.1f) bbox_center=(%.1f %.1f %.1f) shift=(%.1f %.1f %.1f)\n",
 				ent->model->name,
 				ent->model->mins[0], ent->model->mins[1], ent->model->mins[2],
 				ent->model->maxs[0], ent->model->maxs[1], ent->model->maxs[2],
@@ -307,7 +303,7 @@ static void Slayer_GT_CompensatePivot( struct cl_entity_s *ent )
 			if( phdr && phdr->numbones > 0 )
 			{
 				pbones = (mstudiobone_t *)((byte *)phdr + phdr->boneindex);
-				Con_Printf( "[SlayerGT] bone[0] \"%s\" pos=(%.1f %.1f %.1f)\n",
+				Con_Printf( "[SlayerGT] (info) bone[0] \"%s\" pos=(%.1f %.1f %.1f) -- NOT used for pivot\n",
 					pbones[0].name,
 					pbones[0].value[0], pbones[0].value[1], pbones[0].value[2] );
 			}
@@ -316,7 +312,8 @@ static void Slayer_GT_CompensatePivot( struct cl_entity_s *ent )
 			f = FS_Open( "slayer_diag.log", "a", false );
 			if( f )
 			{
-				FS_Printf( f, "[SlayerGT] model=%s mins=(%.1f %.1f %.1f) maxs=(%.1f %.1f %.1f) L_center=(%.1f %.1f %.1f) shift=(%.1f %.1f %.1f)\n",
+				FS_Printf( f, "[SlayerGT] pivot_fix: using bbox center\n" );
+				FS_Printf( f, "[SlayerGT] model=%s mins=(%.1f %.1f %.1f) maxs=(%.1f %.1f %.1f) bbox_center=(%.1f %.1f %.1f) shift=(%.1f %.1f %.1f)\n",
 					ent->model->name,
 					ent->model->mins[0], ent->model->mins[1], ent->model->mins[2],
 					ent->model->maxs[0], ent->model->maxs[1], ent->model->maxs[2],
@@ -326,7 +323,7 @@ static void Slayer_GT_CompensatePivot( struct cl_entity_s *ent )
 				if( phdr && phdr->numbones > 0 )
 				{
 					pbones = (mstudiobone_t *)((byte *)phdr + phdr->boneindex);
-					FS_Printf( f, "[SlayerGT] bone[0] \"%s\" pos=(%.1f %.1f %.1f)\n",
+					FS_Printf( f, "[SlayerGT] (info) bone[0] \"%s\" pos=(%.1f %.1f %.1f) -- NOT used for pivot\n",
 						pbones[0].name,
 						pbones[0].value[0], pbones[0].value[1], pbones[0].value[2] );
 				}
