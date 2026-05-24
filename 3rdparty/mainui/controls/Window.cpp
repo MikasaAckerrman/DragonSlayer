@@ -21,8 +21,12 @@ CMenuWindow::CMenuWindow( const char *title, CWindowStack *pStack )
 	m_bTitleDrag = false;
 	m_bDragStarted = false;
 	m_bCloseHover = false;
+	m_bMaxHover = false;
+	m_bMaximized = false;
 	m_dragOffset = Point( 0, 0 );
 	m_dragStartPos = Point( 0, 0 );
+	m_savedPos = Point( 0, 0 );
+	m_savedSize = Size( 0, 0 );
 
 	bAllowDrag = false; // we handle drag ourselves via title bar only
 
@@ -76,6 +80,7 @@ void CMenuWindow::Draw()
 	}
 
 	m_bCloseHover = IsCursorOnCloseBtn();
+	m_bMaxHover = IsCursorOnMaxBtn();
 
 	// Chrome
 	DrawChrome();
@@ -117,6 +122,16 @@ void CMenuWindow::DrawChrome()
 	int cbX = m_scPos.x + m_scSize.w - m_iBorderW - m_iCloseBtnSize - 2;
 	int cbY = m_scPos.y + m_iBorderW + ( m_iTitleBarH - m_iCloseBtnSize ) / 2;
 	WndStyle::DrawCloseBtn( cbX, cbY, m_iCloseBtnSize, m_bCloseHover );
+
+	// Maximize/Restore button (left of close)
+	int mbX = cbX - m_iCloseBtnSize - 2;
+	int mbY = cbY;
+	unsigned int mbBg = m_bMaxHover ? WndStyle::TabHoverColor : WndStyle::TitleBarColor;
+	UI_FillRect( mbX, mbY, m_iCloseBtnSize, m_iCloseBtnSize, mbBg );
+	const char *mbLabel = m_bMaximized ? "-" : "+";
+	int mbCharH = (int)( m_iCloseBtnSize * 0.7f );
+	UI_DrawString( uiStatic.hDefaultFont, mbX, mbY, m_iCloseBtnSize, m_iCloseBtnSize,
+		mbLabel, WndStyle::CloseTextColor, mbCharH, QM_CENTER, ETF_SHADOW );
 }
 
 // ---------------------------------------------------------------
@@ -126,7 +141,8 @@ bool CMenuWindow::IsCursorInTitleBar() const
 {
 	int x = m_scPos.x + m_iBorderW;
 	int y = m_scPos.y + m_iBorderW;
-	int w = m_scSize.w - m_iBorderW * 2 - m_iCloseBtnSize;
+	// Exclude close + maximize buttons area
+	int w = m_scSize.w - m_iBorderW * 2 - m_iCloseBtnSize * 2 - 4;
 	return UI_CursorInRect( x, y, w, m_iTitleBarH );
 }
 
@@ -136,6 +152,40 @@ bool CMenuWindow::IsCursorOnCloseBtn() const
 	int x = m_scPos.x + m_scSize.w - m_iBorderW - btnSize - 2;
 	int y = m_scPos.y + m_iBorderW + ( m_iTitleBarH - btnSize ) / 2;
 	return UI_CursorInRect( x, y, btnSize, btnSize );
+}
+
+bool CMenuWindow::IsCursorOnMaxBtn() const
+{
+	int btnSize = m_iCloseBtnSize;
+	int closeX = m_scPos.x + m_scSize.w - m_iBorderW - btnSize - 2;
+	int x = closeX - btnSize - 2;
+	int y = m_scPos.y + m_iBorderW + ( m_iTitleBarH - btnSize ) / 2;
+	return UI_CursorInRect( x, y, btnSize, btnSize );
+}
+
+// ---------------------------------------------------------------
+// Maximize / Restore
+// ---------------------------------------------------------------
+void CMenuWindow::ToggleMaximize()
+{
+	if( !m_bMaximized )
+	{
+		// Save current pos/size
+		m_savedPos = m_scPos;
+		m_savedSize = m_scSize;
+		// Maximize to full screen (virtual coords)
+		m_scPos = Point( 0, 0 );
+		m_scSize = Size( (int)(1024 * uiStatic.scaleX), (int)(768 * uiStatic.scaleY) );
+		m_bMaximized = true;
+	}
+	else
+	{
+		// Restore
+		m_scPos = m_savedPos;
+		m_scSize = m_savedSize;
+		m_bMaximized = false;
+	}
+	CalcItemsPositions();
 }
 
 // ---------------------------------------------------------------
@@ -150,7 +200,12 @@ bool CMenuWindow::KeyDown( int key )
 			Hide();
 			return true;
 		}
-		if( IsCursorInTitleBar() )
+		if( IsCursorOnMaxBtn() )
+		{
+			ToggleMaximize();
+			return true;
+		}
+		if( IsCursorInTitleBar() && !m_bMaximized )
 		{
 			TitleBarDragDrop( true );
 			return true;

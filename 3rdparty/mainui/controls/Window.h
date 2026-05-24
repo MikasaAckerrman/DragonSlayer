@@ -52,18 +52,26 @@ protected:
 
 	bool IsCursorInTitleBar() const;
 	bool IsCursorOnCloseBtn() const;
+	bool IsCursorOnMaxBtn() const;
 
 	void TitleBarDragDrop( bool down );
+	void ToggleMaximize();
 
 private:
 	const char *m_szTitle;
 	const char *m_szIconPath;
 
 	bool m_bTitleDrag;
-	bool m_bDragStarted; // true once threshold exceeded
+	bool m_bDragStarted;
 	Point m_dragOffset;
-	Point m_dragStartPos; // cursor pos at mousedown (for threshold)
+	Point m_dragStartPos;
 	bool m_bCloseHover;
+	bool m_bMaxHover;
+
+	// Maximize/restore state
+	bool m_bMaximized;
+	Point m_savedPos;  // position before maximize
+	Size  m_savedSize; // size before maximize
 
 	// Scaled metrics (recomputed each frame)
 	int m_iTitleBarH;
