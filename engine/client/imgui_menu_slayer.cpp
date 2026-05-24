@@ -873,9 +873,6 @@ void Slayer_ImGui_Frame( void )
 	if( refState.width <= 0 || refState.height <= 0 )
 		return;
 
-	// Reset per-frame grenade diagnostics
-	Slayer_GrenadeTumble_DiagReset();
-
 	// Check if the diagnostic overlay should be active
 	float pivot_fix_val = Cvar_VariableValue( "slayer_grenade_pivot_fix" );
 	bool diag_active = ( pivot_fix_val >= 2.0f );
@@ -901,6 +898,11 @@ void Slayer_ImGui_Frame( void )
 
 	ImGui::Render();
 	ImGui_ImplXashGLES_RenderDrawData( ImGui::GetDrawData() );
+
+	// Reset grenade diagnostics AFTER drawing (data was filled by render pass
+	// earlier this frame, we read it above, now clear for next frame)
+	if( diag_active )
+		Slayer_GrenadeTumble_DiagReset();
 
 	{
 		ImGuiIO &ioPost = ImGui::GetIO();
