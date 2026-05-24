@@ -18,6 +18,8 @@ CMenuWindow::CMenuWindow( const char *title, CWindowStack *pStack )
 {
 	m_szTitle = title;
 	m_szIconPath = NULL;
+	m_bShowCloseBtn = true;
+	m_bShowMaxBtn = true;
 	m_bTitleDrag = false;
 	m_bDragStarted = false;
 	m_bCloseHover = false;
@@ -121,17 +123,21 @@ void CMenuWindow::DrawChrome()
 	// Close button
 	int cbX = m_scPos.x + m_scSize.w - m_iBorderW - m_iCloseBtnSize - 2;
 	int cbY = m_scPos.y + m_iBorderW + ( m_iTitleBarH - m_iCloseBtnSize ) / 2;
-	WndStyle::DrawCloseBtn( cbX, cbY, m_iCloseBtnSize, m_bCloseHover );
+	if( m_bShowCloseBtn )
+		WndStyle::DrawCloseBtn( cbX, cbY, m_iCloseBtnSize, m_bCloseHover );
 
 	// Maximize/Restore button (left of close)
-	int mbX = cbX - m_iCloseBtnSize - 2;
-	int mbY = cbY;
-	unsigned int mbBg = m_bMaxHover ? WndStyle::TabHoverColor : WndStyle::TitleBarColor;
-	UI_FillRect( mbX, mbY, m_iCloseBtnSize, m_iCloseBtnSize, mbBg );
-	const char *mbLabel = m_bMaximized ? "-" : "+";
-	int mbCharH = (int)( m_iCloseBtnSize * 0.7f );
-	UI_DrawString( uiStatic.hDefaultFont, mbX, mbY, m_iCloseBtnSize, m_iCloseBtnSize,
-		mbLabel, WndStyle::CloseTextColor, mbCharH, QM_CENTER, ETF_SHADOW );
+	if( m_bShowMaxBtn )
+	{
+		int mbX = cbX - ( m_bShowCloseBtn ? m_iCloseBtnSize + 2 : 0 );
+		int mbY = cbY;
+		unsigned int mbBg = m_bMaxHover ? WndStyle::TabHoverColor : WndStyle::TitleBarColor;
+		UI_FillRect( mbX, mbY, m_iCloseBtnSize, m_iCloseBtnSize, mbBg );
+		const char *mbLabel = m_bMaximized ? "-" : "+";
+		int mbCharH = (int)( m_iCloseBtnSize * 0.7f );
+		UI_DrawString( uiStatic.hDefaultFont, mbX, mbY, m_iCloseBtnSize, m_iCloseBtnSize,
+			mbLabel, WndStyle::CloseTextColor, mbCharH, QM_CENTER, ETF_SHADOW );
+	}
 }
 
 // ---------------------------------------------------------------
@@ -148,6 +154,7 @@ bool CMenuWindow::IsCursorInTitleBar() const
 
 bool CMenuWindow::IsCursorOnCloseBtn() const
 {
+	if( !m_bShowCloseBtn ) return false;
 	int btnSize = m_iCloseBtnSize;
 	int x = m_scPos.x + m_scSize.w - m_iBorderW - btnSize - 2;
 	int y = m_scPos.y + m_iBorderW + ( m_iTitleBarH - btnSize ) / 2;
@@ -156,9 +163,10 @@ bool CMenuWindow::IsCursorOnCloseBtn() const
 
 bool CMenuWindow::IsCursorOnMaxBtn() const
 {
+	if( !m_bShowMaxBtn ) return false;
 	int btnSize = m_iCloseBtnSize;
 	int closeX = m_scPos.x + m_scSize.w - m_iBorderW - btnSize - 2;
-	int x = closeX - btnSize - 2;
+	int x = closeX - ( m_bShowCloseBtn ? btnSize + 2 : 0 );
 	int y = m_scPos.y + m_iBorderW + ( m_iTitleBarH - btnSize ) / 2;
 	return UI_CursorInRect( x, y, btnSize, btnSize );
 }
@@ -197,7 +205,7 @@ bool CMenuWindow::KeyDown( int key )
 	{
 		if( IsCursorOnCloseBtn() )
 		{
-			Hide();
+			OnCloseClicked();
 			return true;
 		}
 		if( IsCursorOnMaxBtn() )

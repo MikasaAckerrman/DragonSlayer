@@ -44,6 +44,13 @@ public:
 
 	void SetIcon( const char *iconPath ) { m_szIconPath = iconPath; }
 
+	// Show/hide chrome buttons (default both visible)
+	void SetShowCloseButton( bool show ) { m_bShowCloseBtn = show; }
+	void SetShowMaxButton( bool show ) { m_bShowMaxBtn = show; }
+
+	// Override to customize what happens on [X] click (default: Hide())
+	virtual void OnCloseClicked() { Hide(); }
+
 	// Content area offset (below title bar)
 	Point GetPositionOffset() const override;
 
@@ -60,6 +67,9 @@ protected:
 private:
 	const char *m_szTitle;
 	const char *m_szIconPath;
+
+	bool m_bShowCloseBtn;
+	bool m_bShowMaxBtn;
 
 	bool m_bTitleDrag;
 	bool m_bDragStarted;

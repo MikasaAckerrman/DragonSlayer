@@ -25,6 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "ProgressBar.h"
 #include "PicButton.h"
 #include "YesNoMessageBox.h"
+#include "Window.h"
 
 enum EState
 {
@@ -43,7 +44,7 @@ enum ESource
 };
 
 
-class CMenuConnectionProgress : public CMenuBaseWindow
+class CMenuConnectionProgress : public CMenuWindow
 {
 public:
 	CMenuConnectionProgress();
@@ -135,12 +136,15 @@ private:
 	char sCommonString[512];
 };
 
-CMenuConnectionProgress::CMenuConnectionProgress() : CMenuBaseWindow( "ConnectionProgress" )
+CMenuConnectionProgress::CMenuConnectionProgress() : CMenuWindow( L( "Loading..." ) )
 {
 	sDownloadString[0] = sCommonString[0] = sTitleString[0] = '\0';
 	m_iSource = SOURCE_CONSOLE;
 	m_iState = STATE_NONE;
 	szName = "ConnectionProgress";
+	// CS 1.6 PC loading window: no [X] (use Disconnect instead), no [+] (fixed size)
+	SetShowCloseButton( false );
+	SetShowMaxButton( false );
 }
 
 bool CMenuConnectionProgress::KeyDown( int key )
@@ -268,9 +272,10 @@ void CMenuConnectionProgress::_Init( void )
 
 void CMenuConnectionProgress::_VidInit( void )
 {
-	int dlg_h = ( m_iState == STATE_DOWNLOAD )?256:192;
+	// +30 for title bar (28px) + border (2px) added by CMenuWindow
+	int dlg_h = ( m_iState == STATE_DOWNLOAD ) ? 286 : 222;
 	int dlg_y = 768 / 2 - dlg_h / 2;
-	int cursor = dlg_h;
+	int cursor = dlg_h - 30; // content area height (excluding title bar)
 
 	SetRect( DLG_X + 192, dlg_y, 640, dlg_h );
 	pos.x += uiStatic.xOffset;
