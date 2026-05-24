@@ -142,9 +142,10 @@ CMenuConnectionProgress::CMenuConnectionProgress() : CMenuWindow( L( "Loading...
 	m_iSource = SOURCE_CONSOLE;
 	m_iState = STATE_NONE;
 	szName = "ConnectionProgress";
-	// CS 1.6 PC loading window: no [X] (use Disconnect instead), no [+] (fixed size)
+	// CS 1.6 PC loading window: no [X] (use Cancel instead), no [+] (fixed size)
 	SetShowCloseButton( false );
 	SetShowMaxButton( false );
+	SetIcon( "gfx/shell/cs_logo" ); // engine fallback if missing
 }
 
 bool CMenuConnectionProgress::KeyDown( int key )
@@ -236,8 +237,9 @@ void CMenuConnectionProgress::_Init( void )
 	});
 	consoleButton.bEnableTransitions = false;
 
+	// CS 1.6 PC: single "Cancel" button (we map to Disconnect logic)
 	disconnectButton.SetPicture( PC_DISCONNECT );
-	disconnectButton.szName = L( "GameUI_GameMenu_Disconnect" );
+	disconnectButton.szName = L( "Cancel" );
 	disconnectButton.onReleased = VoidCb( &CMenuConnectionProgress::Disconnect );
 	disconnectButton.bEnableTransitions = false;
 
@@ -272,44 +274,53 @@ void CMenuConnectionProgress::_Init( void )
 
 void CMenuConnectionProgress::_VidInit( void )
 {
+	// CS 1.6 PC layout: title bar at top (chrome), state text, progress bar
+	// with Cancel button on the right of it. Optional download progress
+	// adds another row.
 	// +30 for title bar (28px) + border (2px) added by CMenuWindow
-	int dlg_h = ( m_iState == STATE_DOWNLOAD ) ? 286 : 222;
+	int dlg_h = ( m_iState == STATE_DOWNLOAD ) ? 200 : 150;
 	int dlg_y = 768 / 2 - dlg_h / 2;
-	int cursor = dlg_h - 30; // content area height (excluding title bar)
 
-	SetRect( DLG_X + 192, dlg_y, 640, dlg_h );
+	SetRect( DLG_X + 192, dlg_y, 460, dlg_h );
 	pos.x += uiStatic.xOffset;
 	pos.y += uiStatic.yOffset;
 
-	title.SetCharSize( QM_DEFAULTFONT );
-	title.SetRect( 0, 16, 640, 20 );
+	// Console button — not shown in CS 1.6 PC windowed loading
+	consoleButton.Hide();
 
-	cursor -= 44;
-	consoleButton.SetRect( 188, cursor, UI_BUTTONS_WIDTH / 2, UI_BUTTONS_HEIGHT );
-	disconnectButton.SetRect( 338, cursor, UI_BUTTONS_WIDTH / 2, UI_BUTTONS_HEIGHT );
+	// Hidden title (CMenuWindow already shows window title in chrome)
+	title.SetRect( 0, -100, 0, 0 );
+	title.Hide();
 
-	if( gpGlobals->developer )
-		consoleButton.Hide();
+	// Layout (Y is relative to content area, after title bar offset)
+	int row = 16;
 
-	cursor -= 30;
-	commonProgress.SetRect( 20, cursor, 600, 20 );
-
-	cursor -= 50;
+	// State text (sCommonString) — e.g. "Validating game resources..."
 	commonText.SetCharSize( QM_SMALLFONT );
-	commonText.SetRect( 20, cursor, 500, 40 );
+	commonText.SetRect( 16, row, 430, 24 );
+	row += 30;
+
+	// Progress bar + Cancel button on same row
+	int btnW = 90, btnH = 30;
+	int progW = 460 - 16 - btnW - 16 - 12;
+	commonProgress.SetRect( 16, row, progW, btnH );
+	disconnectButton.SetRect( 16 + progW + 12, row, btnW, btnH );
 
 	if( m_iState == STATE_DOWNLOAD )
 	{
-		cursor -= 30;
-		downloadProgress.Show();
-		downloadProgress.SetRect( 20, cursor, 500, 20 );
-		skipButton.SetRect( 540, cursor, UI_BUTTONS_WIDTH / 2, UI_BUTTONS_HEIGHT );
-		skipButton.Show();
+		row += btnH + 18;
 
-		cursor -= 50;
+		// Per-file text
 		downloadText.Show();
 		downloadText.SetCharSize( QM_SMALLFONT );
-		downloadText.SetRect( 20, cursor, 500, 40 );
+		downloadText.SetRect( 16, row, 430, 20 );
+		row += 24;
+
+		// Download progress + Skip button on same row
+		downloadProgress.Show();
+		downloadProgress.SetRect( 16, row, progW, btnH );
+		skipButton.Show();
+		skipButton.SetRect( 16 + progW + 12, row, btnW, btnH );
 	}
 	else
 	{
