@@ -19,6 +19,17 @@ int  Slayer_ImGui_TouchEvent( int type, int fingerID, float x, float y, float dx
 int  Slayer_ImGui_KeyEvent( int key, int down );
 void Slayer_ImGui_Toggle( void );
 
+// Connection progress hooks
+void Slayer_ImGui_ConnectionProgress_Connect( const char *server );
+void Slayer_ImGui_ConnectionProgress_Disconnect( void );
+void Slayer_ImGui_ConnectionProgress_Download( const char *pszFileName, const char *pszServerName, int iCurrent, int iTotal, const char *comment );
+void Slayer_ImGui_ConnectionProgress_DownloadEnd( void );
+void Slayer_ImGui_ConnectionProgress_Precache( void );
+void Slayer_ImGui_ConnectionProgress_ChangeLevel( void );
+
+// Console output capture hook
+void Slayer_ImGui_ConsolePrint( const char *text );
+
 #ifdef __cplusplus
 }
 #endif

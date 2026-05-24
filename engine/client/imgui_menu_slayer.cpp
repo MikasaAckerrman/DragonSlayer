@@ -11,6 +11,7 @@ extern "C"
 {
 #include "common.h"
 #include "client.h"
+#include "keydefs.h"
 #include "ref_common.h"
 }
 
@@ -24,6 +25,40 @@ extern "C"
 
 static bool g_Initialized = false;
 static bool g_MenuVisible = false;
+
+// --- Connection Progress state ---
+enum connprogress_state_e
+{
+	CONNPROGRESS_NONE = 0,
+	CONNPROGRESS_CONNECTING,
+	CONNPROGRESS_DOWNLOADING,
+	CONNPROGRESS_PRECACHING,
+	CONNPROGRESS_CHANGELEVEL,
+};
+
+static connprogress_state_e g_ConnProgressState = CONNPROGRESS_NONE;
+static char  g_ConnStatusText[512] = "";
+static float g_ConnProgress = 0.0f;
+static char  g_ConnServerName[256] = "";
+
+// --- Main Menu state ---
+static bool g_MainMenuVisible = false;
+
+// --- Console state ---
+static bool g_ConsoleVisible = false;
+
+#define CONSOLE_MAX_LINES 1024
+#define CONSOLE_LINE_LEN  256
+
+static char  g_ConsoleLines[CONSOLE_MAX_LINES][CONSOLE_LINE_LEN];
+static int   g_ConsoleLineCount = 0;
+static int   g_ConsoleWritePos = 0;  // next write slot in ring buffer
+static bool  g_ConsoleScrollToBottom = true;
+static char  g_ConsoleInputBuf[512] = "";
+
+// Line accumulator for ConsolePrint (file-scope to make intent explicit)
+static char  g_ConsoleLineBuf[CONSOLE_LINE_LEN];
+static int   g_ConsoleLineBufPos = 0;
 
 // Pending settings (applied on OK/Apply)
 static float g_Volume = 1.0f;
@@ -152,6 +187,177 @@ static void SetupCS16Style( void )
 // ============================================================================
 // Menu drawing
 // ============================================================================
+
+// ---- Connection Progress window ----
+static void DrawConnectionProgress( void )
+{
+	if( g_ConnProgressState == CONNPROGRESS_NONE )
+		return;
+
+	ImGuiIO &io = ImGui::GetIO();
+	ImVec2 center( io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f );
+	ImGui::SetNextWindowPos( center, ImGuiCond_Always, ImVec2( 0.5f, 0.5f ) );
+
+	float winW = ( 400.0f < io.DisplaySize.x * 0.8f ) ? 400.0f : io.DisplaySize.x * 0.8f;
+	float winH = ( 180.0f < io.DisplaySize.y * 0.5f ) ? 180.0f : io.DisplaySize.y * 0.5f;
+	ImGui::SetNextWindowSize( ImVec2( winW, winH ), ImGuiCond_Always );
+
+	ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
+	if( ImGui::Begin( "Loading...", NULL, flags ) )
+	{
+		if( g_ConnServerName[0] )
+		{
+			ImGui::TextUnformatted( g_ConnServerName );
+			ImGui::Separator();
+		}
+
+		ImGui::TextWrapped( "%s", g_ConnStatusText );
+		ImGui::Spacing();
+		ImGui::ProgressBar( g_ConnProgress, ImVec2( -1.0f, 0.0f ) );
+		ImGui::Spacing();
+
+		float buttonWidth = 100.0f;
+		ImGui::SetCursorPosX( ( ImGui::GetWindowWidth() - buttonWidth ) * 0.5f );
+		if( ImGui::Button( "Cancel", ImVec2( buttonWidth, 0 ) ) )
+		{
+			Cbuf_AddText( "disconnect\n" );
+		}
+	}
+	ImGui::End();
+}
+
+// ---- Main Menu window ----
+static void DrawMainMenu( void )
+{
+	if( !g_MainMenuVisible )
+		return;
+
+	ImGuiIO &io = ImGui::GetIO();
+	ImVec2 center( io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f );
+	ImGui::SetNextWindowPos( center, ImGuiCond_Always, ImVec2( 0.5f, 0.5f ) );
+
+	float winW = ( 300.0f < io.DisplaySize.x * 0.6f ) ? 300.0f : io.DisplaySize.x * 0.6f;
+	float winH = ( 350.0f < io.DisplaySize.y * 0.7f ) ? 350.0f : io.DisplaySize.y * 0.7f;
+	ImGui::SetNextWindowSize( ImVec2( winW, winH ), ImGuiCond_Always );
+
+	ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+		| ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar;
+
+	if( ImGui::Begin( "##MainMenu", NULL, flags ) )
+	{
+		// Title centered at top
+		const char *title = "Counter-Strike";
+		float titleWidth = ImGui::CalcTextSize( title ).x;
+		ImGui::SetCursorPosX( ( ImGui::GetWindowWidth() - titleWidth ) * 0.5f );
+		ImGui::TextUnformatted( title );
+		ImGui::Spacing();
+		ImGui::Separator();
+		ImGui::Spacing();
+
+		float btnWidth = ImGui::GetContentRegionAvail().x;
+		float btnHeight = 36.0f;
+
+		if( ImGui::Button( "New Game", ImVec2( btnWidth, btnHeight ) ) )
+		{
+			Cbuf_AddText( "maxplayers 1\nmap de_dust2\n" );
+		}
+		if( ImGui::Button( "Find Servers", ImVec2( btnWidth, btnHeight ) ) )
+		{
+			Cbuf_AddText( "openserverbrowser\n" );
+		}
+		if( ImGui::Button( "Options", ImVec2( btnWidth, btnHeight ) ) )
+		{
+			Slayer_ImGui_Toggle();
+		}
+		if( ImGui::Button( "Console", ImVec2( btnWidth, btnHeight ) ) )
+		{
+			g_ConsoleVisible = true;
+		}
+		if( ImGui::Button( "Quit", ImVec2( btnWidth, btnHeight ) ) )
+		{
+			Cbuf_AddText( "quit\n" );
+		}
+	}
+	ImGui::End();
+}
+
+// ---- Console window ----
+static void DrawConsole( void )
+{
+	if( !g_ConsoleVisible )
+		return;
+
+	ImGuiIO &io = ImGui::GetIO();
+	float winW = io.DisplaySize.x * 0.8f;
+	float winH = io.DisplaySize.y * 0.6f;
+	ImVec2 pos( io.DisplaySize.x * 0.5f, io.DisplaySize.y );
+	ImGui::SetNextWindowPos( pos, ImGuiCond_Always, ImVec2( 0.5f, 1.0f ) );
+	ImGui::SetNextWindowSize( ImVec2( winW, winH ), ImGuiCond_Always );
+
+	ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
+	if( ImGui::Begin( "Console", &g_ConsoleVisible, flags ) )
+	{
+		// Scrollable child region for log lines
+		float footerHeight = ImGui::GetStyle().ItemSpacing.y + ImGui::GetFrameHeightWithSpacing() + ImGui::GetFrameHeightWithSpacing();
+		if( ImGui::BeginChild( "ConsoleScroll", ImVec2( 0, -footerHeight ), false, ImGuiWindowFlags_HorizontalScrollbar ) )
+		{
+			int count = ( g_ConsoleLineCount < CONSOLE_MAX_LINES ) ? g_ConsoleLineCount : CONSOLE_MAX_LINES;
+			for( int i = 0; i < count; i++ )
+			{
+				int idx;
+				if( g_ConsoleLineCount <= CONSOLE_MAX_LINES )
+					idx = i;
+				else
+					idx = ( g_ConsoleWritePos + i ) % CONSOLE_MAX_LINES;
+
+				ImGui::TextUnformatted( g_ConsoleLines[idx] );
+			}
+
+			if( g_ConsoleScrollToBottom )
+			{
+				ImGui::SetScrollHereY( 1.0f );
+				g_ConsoleScrollToBottom = false;
+			}
+		}
+		ImGui::EndChild();
+
+		// Input line
+		ImGuiInputTextFlags inputFlags = ImGuiInputTextFlags_EnterReturnsTrue;
+		bool reclaim_focus = false;
+
+		if( ImGui::InputText( "##ConInput", g_ConsoleInputBuf, sizeof( g_ConsoleInputBuf ), inputFlags ) )
+		{
+			if( g_ConsoleInputBuf[0] )
+			{
+				// Add typed text to log
+				char echo[CONSOLE_LINE_LEN];
+				Q_snprintf( echo, sizeof( echo ), "> %s", g_ConsoleInputBuf );
+				int slot = g_ConsoleWritePos % CONSOLE_MAX_LINES;
+				Q_strncpy( g_ConsoleLines[slot], echo, CONSOLE_LINE_LEN );
+				g_ConsoleWritePos++;
+				if( g_ConsoleLineCount < CONSOLE_MAX_LINES )
+					g_ConsoleLineCount++;
+				g_ConsoleScrollToBottom = true;
+
+				// Execute command
+				Cbuf_AddTextf( "%s\n", g_ConsoleInputBuf );
+				g_ConsoleInputBuf[0] = '\0';
+			}
+			reclaim_focus = true;
+		}
+
+		// Auto-focus input
+		if( reclaim_focus )
+			ImGui::SetKeyboardFocusHere( -1 );
+
+		ImGui::SameLine();
+		if( ImGui::Button( "Close" ) )
+		{
+			g_ConsoleVisible = false;
+		}
+	}
+	ImGui::End();
+}
 
 static void DrawTabGame( void )
 {
@@ -313,7 +519,7 @@ static void DrawSettingsMenu( void )
 }
 
 // ============================================================================
-// Console command callback
+// Console command callbacks
 // ============================================================================
 
 static void Cmd_SlayerMenu_f( void )
@@ -323,14 +529,19 @@ static void Cmd_SlayerMenu_f( void )
 		LoadSettings();
 }
 
+static void Cmd_SlayerConsole_f( void )
+{
+	g_ConsoleVisible = !g_ConsoleVisible;
+	if( g_ConsoleVisible )
+		g_ConsoleScrollToBottom = true;
+}
+
 // ============================================================================
 // Public API (extern "C")
 // ============================================================================
 
 extern "C"
 {
-
-static convar_t *g_pCvarImguiMenu = NULL;
 
 void Slayer_ImGui_Init( void )
 {
@@ -346,6 +557,8 @@ void Slayer_ImGui_Init( void )
 
 	SetupCS16Style();
 
+	io.FontGlobalScale = 2.0f;
+
 	if( !ImGui_ImplXashGLES_Init() )
 	{
 		Con_Printf( S_ERROR "Slayer_ImGui_Init: GLES backend init failed\n" );
@@ -354,6 +567,7 @@ void Slayer_ImGui_Init( void )
 	}
 
 	Cmd_AddCommand( "slayer_menu", Cmd_SlayerMenu_f, "Toggle Slayer3D settings menu" );
+	Cmd_AddCommand( "slayer_console", Cmd_SlayerConsole_f, "Toggle Slayer3D ImGui console" );
 
 	g_Initialized = true;
 	Con_Printf( "Slayer3D: ImGui menu initialized\n" );
@@ -374,7 +588,20 @@ void Slayer_ImGui_Frame( void )
 	if( !g_Initialized )
 		return;
 
-	if( !g_MenuVisible )
+	// Auto-clear connection progress when engine reaches active state
+	if( g_ConnProgressState != CONNPROGRESS_NONE && cls.state == ca_active )
+	{
+		g_ConnProgressState = CONNPROGRESS_NONE;
+		g_ConnProgress = 0.0f;
+		g_ConnStatusText[0] = '\0';
+		g_ConnServerName[0] = '\0';
+	}
+
+	// Update main menu visibility based on engine state
+	g_MainMenuVisible = ( cls.state == ca_disconnected && cls.key_dest == key_menu );
+
+	// If nothing to draw, skip frame
+	if( !g_MenuVisible && !g_ConsoleVisible && !g_MainMenuVisible && g_ConnProgressState == CONNPROGRESS_NONE )
 		return;
 
 	ImGuiIO &io = ImGui::GetIO();
@@ -384,7 +611,12 @@ void Slayer_ImGui_Frame( void )
 	ImGui_ImplXashGLES_NewFrame();
 	ImGui::NewFrame();
 
-	DrawSettingsMenu();
+	DrawConnectionProgress();
+	DrawMainMenu();
+	DrawConsole();
+
+	if( g_MenuVisible )
+		DrawSettingsMenu();
 
 	ImGui::Render();
 	ImGui_ImplXashGLES_RenderDrawData( ImGui::GetDrawData() );
@@ -392,7 +624,11 @@ void Slayer_ImGui_Frame( void )
 
 int Slayer_ImGui_TouchEvent( int type, int fingerID, float x, float y, float dx, float dy )
 {
-	if( !g_Initialized || !g_MenuVisible )
+	if( !g_Initialized )
+		return 0;
+
+	// Consume input when any ImGui window is visible
+	if( !g_MenuVisible && !g_ConsoleVisible && !g_MainMenuVisible && g_ConnProgressState == CONNPROGRESS_NONE )
 		return 0;
 
 	ImGuiIO &io = ImGui::GetIO();
@@ -417,17 +653,53 @@ int Slayer_ImGui_TouchEvent( int type, int fingerID, float x, float y, float dx,
 		break;
 	}
 
-	// Consume all touch events while menu is open
-	return 1;
+	// Consume all touch events only if ImGui wants the mouse
+	return io.WantCaptureMouse ? 1 : 0;
 }
 
 int Slayer_ImGui_KeyEvent( int key, int down )
 {
-	if( !g_Initialized || !g_MenuVisible )
+	if( !g_Initialized )
 		return 0;
 
-	// Consume key events while the menu is open
-	return 1;
+	// Don't process keys when no ImGui window is visible
+	if( !g_MenuVisible && !g_ConsoleVisible && !g_MainMenuVisible && g_ConnProgressState == CONNPROGRESS_NONE )
+		return 0;
+
+	ImGuiIO &io = ImGui::GetIO();
+
+	// Forward printable characters as text input for InputText widgets
+	if( down && key >= 32 && key < 127 )
+	{
+		io.AddInputCharacter( (unsigned int)key );
+	}
+
+	// Forward basic key events to ImGui
+	ImGuiKey imgui_key = ImGuiKey_None;
+	switch( key )
+	{
+	case K_TAB:       imgui_key = ImGuiKey_Tab; break;
+	case K_ENTER:     imgui_key = ImGuiKey_Enter; break;
+	case K_ESCAPE:    imgui_key = ImGuiKey_Escape; break;
+	case K_SPACE:     imgui_key = ImGuiKey_Space; break;
+	case K_BACKSPACE: imgui_key = ImGuiKey_Backspace; break;
+	case K_DEL:       imgui_key = ImGuiKey_Delete; break;
+	case K_UPARROW:   imgui_key = ImGuiKey_UpArrow; break;
+	case K_DOWNARROW: imgui_key = ImGuiKey_DownArrow; break;
+	case K_LEFTARROW: imgui_key = ImGuiKey_LeftArrow; break;
+	case K_RIGHTARROW:imgui_key = ImGuiKey_RightArrow; break;
+	case K_HOME:      imgui_key = ImGuiKey_Home; break;
+	case K_END:       imgui_key = ImGuiKey_End; break;
+	case K_PGUP:      imgui_key = ImGuiKey_PageUp; break;
+	case K_PGDN:      imgui_key = ImGuiKey_PageDown; break;
+	case K_INS:       imgui_key = ImGuiKey_Insert; break;
+	default: break;
+	}
+
+	if( imgui_key != ImGuiKey_None )
+		io.AddKeyEvent( imgui_key, down != 0 );
+
+	return io.WantCaptureKeyboard ? 1 : 0;
 }
 
 void Slayer_ImGui_Toggle( void )
@@ -435,6 +707,93 @@ void Slayer_ImGui_Toggle( void )
 	g_MenuVisible = !g_MenuVisible;
 	if( g_MenuVisible )
 		LoadSettings();
+}
+
+void Slayer_ImGui_ConnectionProgress_Connect( const char *server )
+{
+	g_ConnProgressState = CONNPROGRESS_CONNECTING;
+	g_ConnProgress = 0.0f;
+	Q_strncpy( g_ConnStatusText, "Establishing connection...", sizeof( g_ConnStatusText ) );
+	if( server )
+		Q_strncpy( g_ConnServerName, server, sizeof( g_ConnServerName ) );
+	else
+		Q_strncpy( g_ConnServerName, "Local Server", sizeof( g_ConnServerName ) );
+}
+
+void Slayer_ImGui_ConnectionProgress_Disconnect( void )
+{
+	g_ConnProgressState = CONNPROGRESS_NONE;
+	g_ConnProgress = 0.0f;
+	g_ConnStatusText[0] = '\0';
+	g_ConnServerName[0] = '\0';
+}
+
+void Slayer_ImGui_ConnectionProgress_Download( const char *pszFileName, const char *pszServerName, int iCurrent, int iTotal, const char *comment )
+{
+	g_ConnProgressState = CONNPROGRESS_DOWNLOADING;
+	if( iTotal > 0 )
+		g_ConnProgress = (float)iCurrent / (float)iTotal;
+	else
+		g_ConnProgress = 0.0f;
+
+	if( comment && comment[0] )
+		Q_snprintf( g_ConnStatusText, sizeof( g_ConnStatusText ), "%s\n%s from %s (%d/%d)", comment, pszFileName ? pszFileName : "", pszServerName ? pszServerName : "", iCurrent, iTotal );
+	else
+		Q_snprintf( g_ConnStatusText, sizeof( g_ConnStatusText ), "Downloading %s from %s (%d/%d)", pszFileName ? pszFileName : "", pszServerName ? pszServerName : "", iCurrent, iTotal );
+
+	if( pszServerName )
+		Q_strncpy( g_ConnServerName, pszServerName, sizeof( g_ConnServerName ) );
+}
+
+void Slayer_ImGui_ConnectionProgress_DownloadEnd( void )
+{
+	g_ConnProgressState = CONNPROGRESS_NONE;
+	g_ConnProgress = 0.0f;
+	g_ConnStatusText[0] = '\0';
+	g_ConnServerName[0] = '\0';
+}
+
+void Slayer_ImGui_ConnectionProgress_Precache( void )
+{
+	g_ConnProgressState = CONNPROGRESS_PRECACHING;
+	g_ConnProgress = 0.5f;
+	Q_strncpy( g_ConnStatusText, "Precaching resources...", sizeof( g_ConnStatusText ) );
+}
+
+void Slayer_ImGui_ConnectionProgress_ChangeLevel( void )
+{
+	g_ConnProgressState = CONNPROGRESS_CHANGELEVEL;
+	g_ConnProgress = 0.0f;
+	Q_strncpy( g_ConnStatusText, "Changing level...", sizeof( g_ConnStatusText ) );
+}
+
+void Slayer_ImGui_ConsolePrint( const char *text )
+{
+	if( !g_Initialized )
+		return;
+
+	if( !text || !text[0] )
+		return;
+
+	// Split input on newlines and add each line to ring buffer
+	for( const char *p = text; *p; p++ )
+	{
+		if( *p == '\n' || g_ConsoleLineBufPos >= CONSOLE_LINE_LEN - 1 )
+		{
+			g_ConsoleLineBuf[g_ConsoleLineBufPos] = '\0';
+			int slot = g_ConsoleWritePos % CONSOLE_MAX_LINES;
+			Q_strncpy( g_ConsoleLines[slot], g_ConsoleLineBuf, CONSOLE_LINE_LEN );
+			g_ConsoleWritePos++;
+			if( g_ConsoleLineCount < CONSOLE_MAX_LINES )
+				g_ConsoleLineCount++;
+			g_ConsoleScrollToBottom = true;
+			g_ConsoleLineBufPos = 0;
+		}
+		else
+		{
+			g_ConsoleLineBuf[g_ConsoleLineBufPos++] = *p;
+		}
+	}
 }
 
 } // extern "C"

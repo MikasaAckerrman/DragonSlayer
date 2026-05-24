@@ -22,6 +22,7 @@ GNU General Public License for more details.
 #include "wadfile.h"
 #include "input.h"
 #include "utflib.h"
+#include "imgui_menu_slayer.h"
 
 static CVAR_DEFINE_AUTO( scr_conspeed, "600", FCVAR_ARCHIVE, "console moving speed" );
 static CVAR_DEFINE_AUTO( con_notifytime, "3", FCVAR_ARCHIVE, "notify time to live" );
@@ -880,6 +881,8 @@ void Con_Print( const char *txt )
 	// client not running
 	if( !con.initialized || !con.buffer )
 		return;
+
+	Slayer_ImGui_ConsolePrint( txt );
 
 	if( txt[0] == 2 )
 	{

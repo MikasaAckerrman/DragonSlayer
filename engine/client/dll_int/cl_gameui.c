@@ -20,6 +20,7 @@ GNU General Public License for more details.
 #include "input.h"
 #include "server.h" // !!svgame.hInstance
 #include "vid_common.h"
+#include "imgui_menu_slayer.h"
 
 static void 	UI_UpdateUserinfo( void );
 
@@ -221,6 +222,7 @@ qboolean UI_ShowMessageBox( const char *text )
 
 void UI_ConnectionProgress_Disconnect( void )
 {
+	Slayer_ImGui_ConnectionProgress_Disconnect( );
 	if( gameui.dllFuncs2.pfnConnectionProgress_Disconnect )
 	{
 		gameui.dllFuncs2.pfnConnectionProgress_Disconnect( );
@@ -230,23 +232,39 @@ void UI_ConnectionProgress_Disconnect( void )
 void UI_ConnectionProgress_Download( const char *pszFileName, const char *pszServerName, const char *pszServerPath, int iCurrent, int iTotal, const char *comment )
 {
 	if( !gameui.dllFuncs2.pfnConnectionProgress_Download )
+	{
+		// Still call imgui hook even if mainui is unavailable
+		if( pszServerPath )
+		{
+			char serverpath[MAX_SYSPATH];
+			Q_snprintf( serverpath, sizeof( serverpath ), "%s%s", pszServerName, pszServerPath );
+			Slayer_ImGui_ConnectionProgress_Download( pszFileName, serverpath, iCurrent, iTotal, comment );
+		}
+		else
+		{
+			Slayer_ImGui_ConnectionProgress_Download( pszFileName, pszServerName, iCurrent, iTotal, comment );
+		}
 		return;
+	}
 
 	if( pszServerPath )
 	{
 		char serverpath[MAX_SYSPATH];
 
 		Q_snprintf( serverpath, sizeof( serverpath ), "%s%s", pszServerName, pszServerPath );
+		Slayer_ImGui_ConnectionProgress_Download( pszFileName, serverpath, iCurrent, iTotal, comment );
 		gameui.dllFuncs2.pfnConnectionProgress_Download( pszFileName, serverpath, iCurrent, iTotal, comment );
 	}
 	else
 	{
+		Slayer_ImGui_ConnectionProgress_Download( pszFileName, pszServerName, iCurrent, iTotal, comment );
 		gameui.dllFuncs2.pfnConnectionProgress_Download( pszFileName, pszServerName, iCurrent, iTotal, comment );
 	}
 }
 
 void UI_ConnectionProgress_DownloadEnd( void )
 {
+	Slayer_ImGui_ConnectionProgress_DownloadEnd( );
 	if( gameui.dllFuncs2.pfnConnectionProgress_DownloadEnd )
 	{
 		gameui.dllFuncs2.pfnConnectionProgress_DownloadEnd( );
@@ -255,6 +273,7 @@ void UI_ConnectionProgress_DownloadEnd( void )
 
 void UI_ConnectionProgress_Precache( void )
 {
+	Slayer_ImGui_ConnectionProgress_Precache( );
 	if( gameui.dllFuncs2.pfnConnectionProgress_Precache )
 	{
 		gameui.dllFuncs2.pfnConnectionProgress_Precache( );
@@ -263,6 +282,7 @@ void UI_ConnectionProgress_Precache( void )
 
 void UI_ConnectionProgress_Connect( const char *server ) // NULL for local server
 {
+	Slayer_ImGui_ConnectionProgress_Connect( server );
 	if( gameui.dllFuncs2.pfnConnectionProgress_Connect )
 	{
 		gameui.dllFuncs2.pfnConnectionProgress_Connect( server );
@@ -271,6 +291,7 @@ void UI_ConnectionProgress_Connect( const char *server ) // NULL for local serve
 
 void UI_ConnectionProgress_ChangeLevel( void )
 {
+	Slayer_ImGui_ConnectionProgress_ChangeLevel( );
 	if( gameui.dllFuncs2.pfnConnectionProgress_ChangeLevel )
 	{
 		gameui.dllFuncs2.pfnConnectionProgress_ChangeLevel( );
