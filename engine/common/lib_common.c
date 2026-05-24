@@ -38,6 +38,53 @@ void COM_PushLibraryError( const char *error )
 	Q_strncat( s_szLastError, error, sizeof( s_szLastError ) );
 }
 
+/*
+==============
+Slayer_MenuLoaderLog / Slayer_MenuLoaderLogReset
+
+Append-only diagnostic log dedicated to menu DLL loading. Mirrors
+Con_Reportf output but writes to <gamedir>/menu_loader.log so users
+can pull the file via adb pull (Android) or just open it locally
+without enabling the dev console. Used to diagnose why the embedded
+mainui_cpp reskin fails to load and the engine falls back to the
+user's CS 1.6 menu.so.
+
+Reset is called once at the top of UI_LoadProgs to truncate stale
+content from previous runs; subsequent calls append.
+==============
+*/
+void Slayer_MenuLoaderLogReset( void )
+{
+	file_t *f = FS_Open( "menu_loader.log", "w", false );
+	if( !f ) return;
+	FS_Printf( f, "=== menu_loader.log session start (build %i / %s, %s) ===\n",
+		Q_buildnum(), g_buildcommit, Q_timestamp( TIME_FULL ));
+	FS_Close( f );
+}
+
+void Slayer_MenuLoaderLog( const char *fmt, ... )
+{
+	file_t  *f;
+	va_list  args;
+	char     buf[1024];
+	int      len;
+
+	f = FS_Open( "menu_loader.log", "a", false );
+	if( !f ) return;
+
+	va_start( args, fmt );
+	len = Q_vsnprintf( buf, sizeof( buf ), fmt, args );
+	va_end( args );
+
+	if( len < 0 ) len = 0;
+	if( len > (int)sizeof( buf ) - 1 ) len = sizeof( buf ) - 1;
+
+	FS_Write( f, buf, len );
+	if( len == 0 || buf[len - 1] != '\n' )
+		FS_Write( f, "\n", 1 );
+	FS_Close( f );
+}
+
 void *COM_FunctionFromName_SR( void *hInstance, const char *pName )
 {
 #ifdef XASH_ALLOW_SAVERESTORE_OFFSETS

@@ -1358,11 +1358,53 @@ qboolean UI_LoadProgs( void )
 	// setup globals
 	gameui.globals = &gpGlobals;
 
-	COM_GetCommonLibraryPath( LIBRARY_GAMEUI, dllpath, sizeof( dllpath ));
+	Slayer_MenuLoaderLogReset();
+	Slayer_MenuLoaderLog( "[ui] UI_LoadProgs entered (host.menulib=\"%s\")",
+		host.menulib );
 
+	COM_GetCommonLibraryPath( LIBRARY_GAMEUI, dllpath, sizeof( dllpath ));
+	Slayer_MenuLoaderLog( "[ui] COM_GetCommonLibraryPath -> dllpath=\"%s\"",
+		dllpath );
+
+#if XASH_ANDROID
+	// DragonSlayer reskin: on Android, prefer the APK-bundled libmenu.so
+	// over any menu.so the user may ship inside their game data folder
+	// (e.g. the original CS 1.6 menu.so in cstrike/dlls/). The default
+	// ANDROID_LoadLibrary order is XASH3D_GAMELIBDIR -> VFS -> LD_LIBRARY_PATH,
+	// so the user's CS 1.6 menu.so wins via VFS lookup and the embedded
+	// reskinned mainui never gets a chance. Skip this prioritization when
+	// the user explicitly overrides via -menulib so mod authors keep control.
+	if( COM_StringEmpty( host.menulib ))
+	{
+		string libname = OS_LIB_PREFIX "menu." OS_LIB_EXT;
+
+		Slayer_MenuLoaderLog( "[ui] android: trying APK-bundled \"%s\" first",
+			libname );
+
+		COM_ResetLibraryError();
+		FS_AllowDirectPaths( true );
+		gameui.hInstance = COM_LoadLibrary( libname, false, true );
+		FS_AllowDirectPaths( false );
+
+		if( gameui.hInstance )
+			Slayer_MenuLoaderLog( "[ui] android: APK-bundled libmenu.so loaded OK" );
+		else
+			Slayer_MenuLoaderLog( "[ui] android: APK-bundled libmenu.so FAILED: %s",
+				COM_GetLibraryError());
+	}
+	else
+	{
+		Slayer_MenuLoaderLog( "[ui] android: skipped APK-first preload, host.menulib override active" );
+	}
+
+	if( !gameui.hInstance )
+#endif // XASH_ANDROID
 	if(!( gameui.hInstance = COM_LoadLibrary( dllpath, false, false )))
 	{
 		string path = OS_LIB_PREFIX "menu." OS_LIB_EXT;
+
+		Slayer_MenuLoaderLog( "[ui] primary load failed: %s", COM_GetLibraryError());
+		Slayer_MenuLoaderLog( "[ui] fallback: trying \"%s\" with FS_AllowDirectPaths", path );
 
 		FS_AllowDirectPaths( true );
 
@@ -1373,20 +1415,27 @@ qboolean UI_LoadProgs( void )
 #endif
 		{
 			FS_AllowDirectPaths( false );
+			Slayer_MenuLoaderLog( "[ui] FALLBACK FAILED, all menu load attempts exhausted: %s",
+				COM_GetLibraryError());
 			return false;
 		}
+		Slayer_MenuLoaderLog( "[ui] fallback succeeded" );
 	}
 
 	FS_AllowDirectPaths( false );
+	Slayer_MenuLoaderLog( "[ui] hInstance=%p, looking up GetMenuAPI export",
+		gameui.hInstance );
 
 	if(( GetMenuAPI = (MENUAPI)COM_GetProcAddress( gameui.hInstance, "GetMenuAPI" )) == NULL )
 	{
+		Slayer_MenuLoaderLog( "[ui] FATAL: GetMenuAPI export NOT FOUND in loaded library — wrong .so?" );
 		COM_FreeLibrary( gameui.hInstance );
 		Con_Reportf( "%s: can't init menu API\n", __func__ );
 		gameui.hInstance = NULL;
 		return false;
 	}
 
+	Slayer_MenuLoaderLog( "[ui] GetMenuAPI=%p", (void *)GetMenuAPI );
 
 	gameui.use_extended_api = false;
 
@@ -1397,12 +1446,15 @@ qboolean UI_LoadProgs( void )
 
 	if( !GetMenuAPI( &gameui.dllFuncs, &gpEngfuncs, gameui.globals ))
 	{
+		Slayer_MenuLoaderLog( "[ui] FATAL: GetMenuAPI() returned 0 (menu refused to init)" );
 		COM_FreeLibrary( gameui.hInstance );
 		Con_Reportf( "%s: can't init menu API\n", __func__ );
 		Mem_FreePool( &gameui.mempool );
 		gameui.hInstance = NULL;
 		return false;
 	}
+
+	Slayer_MenuLoaderLog( "[ui] GetMenuAPI() OK, menu DLL initialized successfully" );
 
 	// make local copy of engfuncs to prevent overwrite it with user dll
 	gpExtendedfuncs = gExtendedfuncs;

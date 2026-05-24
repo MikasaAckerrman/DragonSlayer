@@ -50,6 +50,13 @@ void COM_ResetLibraryError( void );
 void COM_PushLibraryError( const char *error );
 const char *COM_OffsetNameForFunction( void *function );
 
+// DragonSlayer: dedicated diagnostic log for menu DLL loading.
+// Writes to <gamedir>/menu_loader.log so the user (especially on
+// Android, where the runtime console is hard to reach) can pull
+// the file and see exactly which load attempts succeeded / failed.
+void Slayer_MenuLoaderLogReset( void );
+void Slayer_MenuLoaderLog( const char *fmt, ... ) FORMAT_CHECK( 1 );
+
 typedef enum
 {
 	LIBRARY_CLIENT,
