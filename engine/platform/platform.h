@@ -346,22 +346,21 @@ typedef enum
 } rserr_t;
 
 struct vidmode_s;
-#ifdef __cplusplus
-// C++ forbids forward references to enum types, use int as compatible stand-in
-typedef int window_mode_t;
-typedef int ref_window_type_t;
-typedef int ref_graphic_apis_t;
-#else
+#ifndef __cplusplus
 typedef enum window_mode_e window_mode_t;
 typedef enum ref_window_type_e ref_window_type_t;
 typedef enum ref_graphic_apis_e ref_graphic_apis_t;
 #endif
 
 // Window
+#ifndef __cplusplus
 qboolean  R_Init_Video( ref_graphic_apis_t type );
+#endif
 void      R_Free_Video( void );
 qboolean  VID_SetMode( void );
+#ifndef __cplusplus
 rserr_t   R_ChangeDisplaySettings( int width, int height, window_mode_t window_mode );
+#endif
 int       R_MaxVideoModes( void );
 struct vidmode_s *R_GetVideoMode( int num );
 void*     GL_GetProcAddress( const char *name ); // RenderAPI requirement
@@ -373,7 +372,9 @@ void *SW_LockBuffer( void );
 void SW_UnlockBuffer( void );
 qboolean SW_CreateBuffer( int width, int height, uint *stride, uint *bpp, uint *r, uint *g, uint *b );
 void Platform_Minimize_f( void );
+#ifndef __cplusplus
 ref_window_type_t R_GetWindowHandle( void **handle, ref_window_type_t type );
+#endif
 void VID_Info_f( void );
 
 //
