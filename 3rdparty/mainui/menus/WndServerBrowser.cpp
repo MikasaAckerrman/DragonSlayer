@@ -64,7 +64,9 @@ void CMenuWndServerBrowser::_Init()
 	SetRect( 60, 80, 750, 480 );
 
 	int contentW = 750 - WndStyle::BorderWidth * 2;
-	m_tabControl.SetRect( 0, 0, contentW, 480 );
+	int pageH = 480 - WndStyle::TabHeight; // area below tabs
+	// Tab control covers only the header row
+	m_tabControl.SetRect( 0, 0, contentW, WndStyle::TabHeight );
 	m_tabControl.AddTab( "Internet",  &m_pageInternet );
 	m_tabControl.AddTab( "Favorites", &m_pageFavorites );
 	m_tabControl.AddTab( "History",   &m_pageHistory );
@@ -90,6 +92,20 @@ void CMenuWndServerBrowser::_Init()
 		tabs[i].lbl->SetCoord( 20, 40 );
 		tabs[i].page->AddItem( *tabs[i].lbl );
 	}
+
+	// Position and size pages below tab header row
+	m_pageInternet.SetCoord( 0, WndStyle::TabHeight );
+	m_pageInternet.SetSize( contentW, pageH );
+	m_pageFavorites.SetCoord( 0, WndStyle::TabHeight );
+	m_pageFavorites.SetSize( contentW, pageH );
+	m_pageHistory.SetCoord( 0, WndStyle::TabHeight );
+	m_pageHistory.SetSize( contentW, pageH );
+	m_pageSpectate.SetCoord( 0, WndStyle::TabHeight );
+	m_pageSpectate.SetSize( contentW, pageH );
+	m_pageLAN.SetCoord( 0, WndStyle::TabHeight );
+	m_pageLAN.SetSize( contentW, pageH );
+	m_pageFriends.SetCoord( 0, WndStyle::TabHeight );
+	m_pageFriends.SetSize( contentW, pageH );
 
 	AddItem( m_pageInternet );
 	AddItem( m_pageFavorites );

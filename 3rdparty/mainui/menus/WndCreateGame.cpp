@@ -65,7 +65,9 @@ void CMenuWndCreateGame::_Init()
 	SetRect( 120, 70, 640, 460 );
 
 	int contentW = 640 - WndStyle::BorderWidth * 2;
-	m_tabControl.SetRect( 0, 0, contentW, 460 );
+	int pageH = 460 - WndStyle::TabHeight; // area below tabs
+	// Tab control covers only the header row
+	m_tabControl.SetRect( 0, 0, contentW, WndStyle::TabHeight );
 	m_tabControl.AddTab( "Server",       &m_pageServer );
 	m_tabControl.AddTab( "Game",         &m_pageGame );
 	m_tabControl.AddTab( "Bot Settings", &m_pageBots );
@@ -111,6 +113,14 @@ void CMenuWndCreateGame::_Init()
 	m_lblBots.iFlags |= QMF_INACTIVE;
 	m_lblBots.SetCoord( 20, 40 );
 	m_pageBots.AddItem( m_lblBots );
+
+	// Position and size pages below tab header row
+	m_pageServer.SetCoord( 0, WndStyle::TabHeight );
+	m_pageServer.SetSize( contentW, pageH );
+	m_pageGame.SetCoord( 0, WndStyle::TabHeight );
+	m_pageGame.SetSize( contentW, pageH );
+	m_pageBots.SetCoord( 0, WndStyle::TabHeight );
+	m_pageBots.SetSize( contentW, pageH );
 
 	AddItem( m_pageServer );
 	AddItem( m_pageGame );

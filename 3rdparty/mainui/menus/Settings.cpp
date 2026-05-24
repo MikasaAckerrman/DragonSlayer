@@ -115,8 +115,9 @@ void CMenuSettings::_Init()
 	SetRect( 80, 60, 700, 500 );
 
 	int contentW = 700 - WndStyle::BorderWidth * 2;
-	// Reserve bottom bar for OK/Cancel/Apply (~50px)
-	m_tabControl.SetRect( 0, 0, contentW, 500 - 50 );
+	int pageH = 500 - WndStyle::TabHeight - 50; // area below tabs, above bottom buttons
+	// Tab control covers only the header row
+	m_tabControl.SetRect( 0, 0, contentW, WndStyle::TabHeight );
 	m_tabControl.AddTab( "Multiplayer", &m_pageMultiplayer );
 	m_tabControl.AddTab( "Keyboard",    &m_pageKeyboard );
 	m_tabControl.AddTab( "Mouse",       &m_pageMouse );
@@ -269,6 +270,24 @@ void CMenuSettings::_Init()
 	m_chkNetGraph.SetCoord( col, 160 );
 	m_chkNetGraph.onChanged = CMenuEditable::WriteCvarCb;
 	m_pageSystem.AddItem( m_chkNetGraph );
+
+	// Position and size pages below tab header row
+	m_pageMultiplayer.SetCoord( 0, WndStyle::TabHeight );
+	m_pageMultiplayer.SetSize( contentW, pageH );
+	m_pageKeyboard.SetCoord( 0, WndStyle::TabHeight );
+	m_pageKeyboard.SetSize( contentW, pageH );
+	m_pageMouse.SetCoord( 0, WndStyle::TabHeight );
+	m_pageMouse.SetSize( contentW, pageH );
+	m_pageAudio.SetCoord( 0, WndStyle::TabHeight );
+	m_pageAudio.SetSize( contentW, pageH );
+	m_pageVideo.SetCoord( 0, WndStyle::TabHeight );
+	m_pageVideo.SetSize( contentW, pageH );
+	m_pageVoice.SetCoord( 0, WndStyle::TabHeight );
+	m_pageVoice.SetSize( contentW, pageH );
+	m_pageHUD.SetCoord( 0, WndStyle::TabHeight );
+	m_pageHUD.SetSize( contentW, pageH );
+	m_pageSystem.SetCoord( 0, WndStyle::TabHeight );
+	m_pageSystem.SetSize( contentW, pageH );
 
 	// Add pages so they get Init/VidInit/Draw calls
 	AddItem( m_pageMultiplayer );
