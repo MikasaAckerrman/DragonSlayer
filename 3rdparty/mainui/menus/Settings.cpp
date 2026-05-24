@@ -56,6 +56,13 @@ private:
 	CSettingsPage m_pageAudio;
 	CSettingsPage m_pageVideo;
 	CSettingsPage m_pageVoice;
+	CSettingsPage m_pageHUD;
+	CSettingsPage m_pageSystem;
+
+	// Bottom button bar
+	CMenuPicButton m_btnOK;
+	CMenuPicButton m_btnCancel;
+	CMenuPicButton m_btnApply;
 
 	// --- Multiplayer page ---
 	CMenuField    m_fldPlayerName;
@@ -83,6 +90,21 @@ private:
 	// --- Voice page ---
 	CMenuCheckBox m_chkVoiceEnable;
 	CMenuSlider   m_sldVoiceScale;
+
+	// --- HUD page ---
+	CMenuSlider   m_sldCrosshairSize;
+	CMenuCheckBox m_chkFastSwitch;
+	CMenuCheckBox m_chkCenterID;
+	CMenuCheckBox m_chkAutoWepSwitch;
+
+	// --- System page ---
+	CMenuCheckBox m_chkDeveloper;
+	CMenuField    m_fldFpsMax;
+	CMenuCheckBox m_chkNetGraph;
+
+	void OnApply();
+	void OnOK();
+	void OnCancel();
 };
 
 // ---------------------------------------------------------------
@@ -93,13 +115,16 @@ void CMenuSettings::_Init()
 	SetRect( 80, 60, 700, 500 );
 
 	int contentW = 700 - WndStyle::BorderWidth * 2;
-	m_tabControl.SetRect( 0, 0, contentW, 500 );
+	// Reserve bottom bar for OK/Cancel/Apply (~50px)
+	m_tabControl.SetRect( 0, 0, contentW, 500 - 50 );
 	m_tabControl.AddTab( "Multiplayer", &m_pageMultiplayer );
 	m_tabControl.AddTab( "Keyboard",    &m_pageKeyboard );
 	m_tabControl.AddTab( "Mouse",       &m_pageMouse );
 	m_tabControl.AddTab( "Audio",       &m_pageAudio );
 	m_tabControl.AddTab( "Video",       &m_pageVideo );
 	m_tabControl.AddTab( "Voice",       &m_pageVoice );
+	m_tabControl.AddTab( "HUD",         &m_pageHUD );
+	m_tabControl.AddTab( "System",      &m_pageSystem );
 	AddItem( m_tabControl );
 
 	int col = 20;
@@ -203,6 +228,48 @@ void CMenuSettings::_Init()
 	m_sldVoiceScale.onChanged = CMenuEditable::WriteCvarCb;
 	m_pageVoice.AddItem( m_sldVoiceScale );
 
+	// ===== HUD =====
+	m_sldCrosshairSize.szName = L( "Crosshair size" );
+	m_sldCrosshairSize.Setup( 0, 3, 1 );
+	m_sldCrosshairSize.SetCoord( col, 40 );
+	m_sldCrosshairSize.size.w = slW;
+	m_sldCrosshairSize.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageHUD.AddItem( m_sldCrosshairSize );
+
+	m_chkFastSwitch.szName = L( "Fast weapon switch" );
+	m_chkFastSwitch.SetCoord( col, 100 );
+	m_chkFastSwitch.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageHUD.AddItem( m_chkFastSwitch );
+
+	m_chkCenterID.szName = L( "Player names in center" );
+	m_chkCenterID.SetCoord( col, 140 );
+	m_chkCenterID.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageHUD.AddItem( m_chkCenterID );
+
+	m_chkAutoWepSwitch.szName = L( "Auto-switch to picked weapon" );
+	m_chkAutoWepSwitch.SetCoord( col, 180 );
+	m_chkAutoWepSwitch.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageHUD.AddItem( m_chkAutoWepSwitch );
+
+	// ===== System =====
+	m_chkDeveloper.szName = L( "Developer console" );
+	m_chkDeveloper.SetCoord( col, 40 );
+	m_chkDeveloper.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageSystem.AddItem( m_chkDeveloper );
+
+	m_fldFpsMax.szName = L( "Max FPS" );
+	m_fldFpsMax.iMaxLength = 5;
+	m_fldFpsMax.bNumbersOnly = true;
+	m_fldFpsMax.SetCoord( col, 100 );
+	m_fldFpsMax.size.w = 100;
+	m_fldFpsMax.size.h = 32;
+	m_pageSystem.AddItem( m_fldFpsMax );
+
+	m_chkNetGraph.szName = L( "Show net graph" );
+	m_chkNetGraph.SetCoord( col, 160 );
+	m_chkNetGraph.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageSystem.AddItem( m_chkNetGraph );
+
 	// Add pages so they get Init/VidInit/Draw calls
 	AddItem( m_pageMultiplayer );
 	AddItem( m_pageKeyboard );
@@ -210,6 +277,33 @@ void CMenuSettings::_Init()
 	AddItem( m_pageAudio );
 	AddItem( m_pageVideo );
 	AddItem( m_pageVoice );
+	AddItem( m_pageHUD );
+	AddItem( m_pageSystem );
+
+	// ===== Bottom button bar (OK / Cancel / Apply) =====
+	int btnY = 500 - 42;
+	int btnW = 90;
+	int btnH = 32;
+	m_btnOK.SetNameAndStatus( "OK", "Apply and close" );
+	m_btnOK.SetCoord( contentW - btnW * 3 - 30, btnY );
+	m_btnOK.size.w = btnW;
+	m_btnOK.size.h = btnH;
+	m_btnOK.onReleased = VoidCb( &CMenuSettings::OnOK );
+	AddItem( m_btnOK );
+
+	m_btnCancel.SetNameAndStatus( "Cancel", "Discard changes" );
+	m_btnCancel.SetCoord( contentW - btnW * 2 - 20, btnY );
+	m_btnCancel.size.w = btnW;
+	m_btnCancel.size.h = btnH;
+	m_btnCancel.onReleased = VoidCb( &CMenuSettings::OnCancel );
+	AddItem( m_btnCancel );
+
+	m_btnApply.SetNameAndStatus( "Apply", "Apply without closing" );
+	m_btnApply.SetCoord( contentW - btnW - 10, btnY );
+	m_btnApply.size.w = btnW;
+	m_btnApply.size.h = btnH;
+	m_btnApply.onReleased = VoidCb( &CMenuSettings::OnApply );
+	AddItem( m_btnApply );
 }
 
 // ---------------------------------------------------------------
@@ -240,14 +334,25 @@ void CMenuSettings::_VidInit()
 	m_chkVoiceEnable.LinkCvar( "voice_enable" );
 	m_sldVoiceScale.LinkCvar( "voice_scale" );
 
+	// HUD
+	m_sldCrosshairSize.LinkCvar( "cl_crosshair_size" );
+	m_chkFastSwitch.LinkCvar( "hud_fastswitch" );
+	m_chkCenterID.LinkCvar( "hud_centerid" );
+	m_chkAutoWepSwitch.LinkCvar( "cl_autowepswitch" );
+
+	// System
+	m_chkDeveloper.LinkCvar( "developer" );
+	m_fldFpsMax.LinkCvar( "fps_max" );
+	m_chkNetGraph.LinkCvar( "net_graph" );
+
 	// Default to Multiplayer tab
 	m_tabControl.SetActiveTab( 0 );
 }
 
 // ---------------------------------------------------------------
-// Save
+// Bottom button bar handlers
 // ---------------------------------------------------------------
-void CMenuSettings::SaveAndPopMenu()
+void CMenuSettings::OnApply()
 {
 	m_fldPlayerName.WriteCvar();
 	m_sldSensitivity.WriteCvar();
@@ -262,6 +367,32 @@ void CMenuSettings::SaveAndPopMenu()
 	m_chkVsync.WriteCvar();
 	m_chkVoiceEnable.WriteCvar();
 	m_sldVoiceScale.WriteCvar();
+	m_sldCrosshairSize.WriteCvar();
+	m_chkFastSwitch.WriteCvar();
+	m_chkCenterID.WriteCvar();
+	m_chkAutoWepSwitch.WriteCvar();
+	m_chkDeveloper.WriteCvar();
+	m_fldFpsMax.WriteCvar();
+	m_chkNetGraph.WriteCvar();
+}
+
+void CMenuSettings::OnOK()
+{
+	OnApply();
+	Hide();
+}
+
+void CMenuSettings::OnCancel()
+{
+	Hide(); // discard: don't write cvars
+}
+
+// ---------------------------------------------------------------
+// Save (called from CMenuWindow on close — bridges to OnOK)
+// ---------------------------------------------------------------
+void CMenuSettings::SaveAndPopMenu()
+{
+	OnApply();
 	CMenuWindow::SaveAndPopMenu();
 }
 
