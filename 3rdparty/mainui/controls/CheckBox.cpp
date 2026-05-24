@@ -148,8 +148,13 @@ void CMenuCheckBox::Draw( void )
 	if( this == m_pParent->ItemAtCursor() )
 		borderCol = WndStyle::WidgetFocusBorderColor;
 
+	// Darken fill when pressed for tactile feedback
+	unsigned int fillCol = WndStyle::WidgetBgColor;
+	if( m_bPressed )
+		fillCol = WndStyle::TitleBarColor;
+
 	// Draw box background and border
-	UI_FillRect( m_scPos.x, m_scPos.y, boxSize, boxSize, WndStyle::WidgetBgColor );
+	UI_FillRect( m_scPos.x, m_scPos.y, boxSize, boxSize, fillCol );
 	UI_DrawRectangleExt( m_scPos.x, m_scPos.y, boxSize, boxSize, borderCol, 1 );
 
 	// Draw checkmark when checked

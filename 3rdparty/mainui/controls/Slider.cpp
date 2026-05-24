@@ -54,12 +54,12 @@ void CMenuSlider::VidInit(  )
 
 	BaseClass::VidInit();
 
-	// scale the center box
-	m_scCenterBox.w = 40 * uiStatic.scaleX;
+	// scale the center box to match the flat thumb width used in Draw()
+	m_scCenterBox.w = WndStyle::SliderThumbW;
 	m_scCenterBox.h = m_scSize.h - m_iSliderOutlineWidth * 2;
 
 	m_iNumSteps = (m_flMaxValue - m_flMinValue) / m_flRange + 1;
-	m_flDrawStep = (float)(m_scSize.w - m_iSliderOutlineWidth - m_scCenterBox.w) / (float)m_iNumSteps;
+	m_flDrawStep = (float)(m_scSize.w - WndStyle::SliderThumbW) / (float)m_iNumSteps;
 }
 
 bool CMenuSlider::KeyUp( int key )
@@ -95,7 +95,7 @@ bool CMenuSlider::KeyDown( int key )
 		// immediately move slider into specified place
 		int	dist, numSteps;
 
-		dist = uiStatic.cursorX - (m_scPos.x + m_iSliderOutlineWidth + m_scCenterBox.w);
+		dist = uiStatic.cursorX - (m_scPos.x + (WndStyle::SliderThumbW / 2));
 		numSteps = floor(dist / m_flDrawStep);
 		m_flCurValue = bound( m_flMinValue, numSteps * m_flRange + m_flMinValue, m_flMaxValue );
 
@@ -177,7 +177,7 @@ void CMenuSlider::Draw( void )
 			int	dist, numSteps;
 
 			// move slider follow the holded mouse button
-			dist = uiStatic.cursorX - m_scPos.x - m_iSliderOutlineWidth - (m_scCenterBox.w/2);
+			dist = uiStatic.cursorX - m_scPos.x - (WndStyle::SliderThumbW / 2);
 			numSteps = floor(dist / m_flDrawStep);
 			m_flCurValue = bound( m_flMinValue, numSteps * m_flRange + m_flMinValue, m_flMaxValue );
 
