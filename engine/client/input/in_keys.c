@@ -716,7 +716,7 @@ void GAME_EXPORT Key_Event( int key, int down )
 	if( OSK_KeyEvent( key, down ) )
 		return;
 
-	if( Slayer_ImGui_KeyEvent( key, down ) )
+	if( Slayer_ImGui_KeyEvent( key, down ) && down )
 		return;
 
 	// key was pressed before engine was run

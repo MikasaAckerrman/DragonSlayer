@@ -307,7 +307,7 @@ static void DrawConsole( void )
 			for( int i = 0; i < count; i++ )
 			{
 				int idx;
-				if( g_ConsoleLineCount <= CONSOLE_MAX_LINES )
+				if( g_ConsoleWritePos <= CONSOLE_MAX_LINES )
 					idx = i;
 				else
 					idx = ( g_ConsoleWritePos + i ) % CONSOLE_MAX_LINES;

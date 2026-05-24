@@ -193,6 +193,7 @@ void ImGui_ImplXashGLES_RenderDrawData( ImDrawData *draw_data )
 
 	// Save GL state
 	GLint last_program; glGetIntegerv( GL_CURRENT_PROGRAM, &last_program );
+	GLint last_active_texture; glGetIntegerv( GL_ACTIVE_TEXTURE, &last_active_texture );
 	GLint last_texture; glGetIntegerv( GL_TEXTURE_BINDING_2D, &last_texture );
 	GLint last_array_buffer; glGetIntegerv( GL_ARRAY_BUFFER_BINDING, &last_array_buffer );
 	GLint last_element_array_buffer; glGetIntegerv( GL_ELEMENT_ARRAY_BUFFER_BINDING, &last_element_array_buffer );
@@ -302,6 +303,7 @@ void ImGui_ImplXashGLES_RenderDrawData( ImDrawData *draw_data )
 
 	// Restore GL state
 	glUseProgram( (GLuint)last_program );
+	glActiveTexture( (GLenum)last_active_texture );
 	glBindTexture( GL_TEXTURE_2D, (GLuint)last_texture );
 	glBindBuffer( GL_ARRAY_BUFFER, (GLuint)last_array_buffer );
 	glBindBuffer( GL_ELEMENT_ARRAY_BUFFER, (GLuint)last_element_array_buffer );
