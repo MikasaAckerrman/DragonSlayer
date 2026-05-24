@@ -1,0 +1,29 @@
+#! /usr/bin/env python
+# encoding: utf-8
+
+top = '.'
+
+def options(opt):
+	pass
+
+def configure(conf):
+	pass
+
+def build(bld):
+	source = [
+		'imgui/imgui.cpp',
+		'imgui/imgui_draw.cpp',
+		'imgui/imgui_tables.cpp',
+		'imgui/imgui_widgets.cpp',
+		'imgui_impl_xash_gles.cpp',
+	]
+
+	bld.stlib(
+		source = source,
+		target = 'imgui',
+		includes = ['imgui', '.'],
+		export_includes = ['imgui', '.'],
+		features = 'cxx',
+		cxxflags = ['-fno-rtti', '-fno-exceptions'],
+		use = ['LOG'],
+	)

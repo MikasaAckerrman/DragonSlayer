@@ -20,6 +20,7 @@ GNU General Public License for more details.
 #include "cl_hud_slayer.h"
 #include "cl_dmg_replay_slayer.h"
 #include "cl_grenade_tumble_slayer.h"
+#include "imgui_menu_slayer.h"
 
 // ===========================================================================
 // Cvars - Third-person camera
@@ -221,6 +222,9 @@ void V_InitSlayerCvars( void )
 
 	// Client-side 3-axis grenade tumble (overrides server's single-axis spin)
 	Slayer_GrenadeTumble_Init();
+
+	// Dear ImGui CS 1.6-style settings menu
+	Slayer_ImGui_Init();
 
 	Con_Printf( "Slayer3D: cvars initialized\n" );
 }

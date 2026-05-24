@@ -18,6 +18,7 @@ GNU General Public License for more details.
 #include "math.h"
 #include "vgui_draw.h"
 #include "mobility_int.h"
+#include "imgui_menu_slayer.h"
 
 #if !XASH_NO_TOUCH
 
@@ -2122,6 +2123,10 @@ int IN_TouchEvent( touchEventType type, int fingerID, float x, float y, float dx
 	// making repeated calls cheap (just 3 comparisons).  It is needed here
 	// because IN_TouchEvent can fire before Touch_Draw() runs the first frame.
 	Touch_InitConfig();
+
+	// Forward to ImGui menu if active; consume the event if handled.
+	if( Slayer_ImGui_TouchEvent( type, fingerID, x, y, dx, dy ) )
+		return 1;
 
 //	Con_Printf("%f %f\n", TO_SCRN_X(x), TO_SCRN_Y(y));
 	// simulate menu mouse click

@@ -24,6 +24,7 @@ GNU General Public License for more details.
 #include "cl_view_slayer.h" // Slayer3D third-person camera
 #include "cl_scoreboard_slayer.h" // Slayer3D custom scoreboard
 #include "cl_hud_slayer.h" // Slayer3D crosshair-area HUD (damage indicator)
+#include "imgui_menu_slayer.h" // Slayer3D ImGui settings menu
 
 /*
 ===============
@@ -583,6 +584,7 @@ void V_PostRender( void )
 		Slayer_HUD_Draw();
 		Con_DrawConsole();
 		UI_UpdateMenu( host.realtime );
+		Slayer_ImGui_Frame();
 		Con_DrawVersion();
 		Con_DrawDebug(); // must be last
 		Touch_Draw();
