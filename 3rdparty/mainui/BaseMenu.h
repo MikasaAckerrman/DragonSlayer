@@ -276,6 +276,7 @@ void UI_Options_Menu( void );
 void UI_Settings_Menu( void );
 void UI_WndServerBrowser_Menu( void );
 void UI_WndCreateGame_Menu( void );
+void UI_WndConsole_Menu( void );
 void UI_InternetGames_Menu( void );
 void UI_LanGame_Menu( void );
 void UI_ServerBrowser_Menu( void );
