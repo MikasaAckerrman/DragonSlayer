@@ -245,9 +245,17 @@ void CMenuPicButton::Draw( )
 	if( state == BUTTON_PRESSED ) bg = bgColorPress;
 	UI_FillRect( m_scPos, m_scSize, bg );
 
-	// 1px orange border on focus/hover/press (skip when grayed)
+	// 1px inset orange border on focus/hover/press (skip when grayed).
+	// Use 4 FillRects so the border lives INSIDE the button bounds — outset
+	// border via UI_DrawRectangleExt would overlap adjacent stacked buttons
+	// (Main menu uses 42px stride with 42px button height, gap = 0).
 	if( state != BUTTON_NOFOCUS && !( iFlags & QMF_GRAYED ) )
-		UI_DrawRectangleExt( m_scPos, m_scSize, borderColor, 1 );
+	{
+		UI_FillRect( m_scPos.x, m_scPos.y,                       m_scSize.w, 1,          borderColor );
+		UI_FillRect( m_scPos.x, m_scPos.y + m_scSize.h - 1,      m_scSize.w, 1,          borderColor );
+		UI_FillRect( m_scPos.x, m_scPos.y,                       1,          m_scSize.h, borderColor );
+		UI_FillRect( m_scPos.x + m_scSize.w - 1, m_scPos.y,      1,          m_scSize.h, borderColor );
+	}
 
 	// notify status hint to the right of the button
 	if( szStatusText && FBitSet( iFlags, QMF_NOTIFY ) && !FBitSet( gMenu.m_gameinfo.flags, GFL_NOSKILLS ) )
