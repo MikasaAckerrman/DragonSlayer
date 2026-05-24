@@ -213,7 +213,7 @@ void CMenuMain::_Init( void )
 	configuration.SetNameAndStatus( L( "GameUI_Options" ), L( "StringsList_193" ) );
 	configuration.SetPicture( PC_CONFIG );
 	configuration.iFlags |= QMF_NOTIFY;
-	configuration.onReleased = UI_Options_Menu;
+	configuration.onReleased = UI_Settings_Menu;
 
 	saveRestore.iFlags |= QMF_NOTIFY;
 
