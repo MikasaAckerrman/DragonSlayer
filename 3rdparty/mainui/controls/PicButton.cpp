@@ -210,41 +210,51 @@ bool CMenuPicButton::KeyDown( int key )
 
 /*
 =================
-CMenuPicButton::DrawButton
-=================
-*/
-void CMenuPicButton::DrawButton( int r, int g, int b, int a, wrect_t *rects, int state )
-{
-	EngFuncs::PIC_Set( hPic, r, g, b, a );
-	EngFuncs::PIC_DrawAdditive( m_scPos, uiStatic.buttons_draw_size.Scale(), &rects[state] );
-}
-
-/*
-=================
 CMenuPicButton::Draw
+
+CS 1.6 PC flat skin: dark filled rectangle, orange 1px border + orange text on
+focus/hover/press. WON-style btns_main.bmp bitmap and hHeavyBlur/hLightBlur
+fancy paths are intentionally bypassed — this control now renders the same
+across all detail levels and platforms.
 =================
 */
 void CMenuPicButton::Draw( )
 {
 	int state = BUTTON_NOFOCUS;
 
-	if( iFlags & (QMF_HASMOUSEFOCUS|QMF_HASKEYBOARDFOCUS))
-	{
+	if( iFlags & ( QMF_HASMOUSEFOCUS | QMF_HASKEYBOARDFOCUS ) )
 		state = BUTTON_FOCUS;
-	}
 
-	// make sure what cursor in rect
 	if( m_bPressed )
 		state = BUTTON_PRESSED;
 
 	if( iOldState == BUTTON_NOFOCUS && state != BUTTON_NOFOCUS )
 		iFocusStartTime = uiStatic.realTime;
 
-	if( szStatusText && FBitSet( iFlags, QMF_NOTIFY ) && !FBitSet( gMenu.m_gameinfo.flags, GFL_NOSKILLS ))
+	// CS 1.6 PC palette
+	const unsigned int bgColor      = 0xC0101010;
+	const unsigned int bgColorHover = 0xC0202020;
+	const unsigned int bgColorPress = 0xC0303030;
+	const unsigned int borderColor  = 0xFFFFA000;
+	const unsigned int textColor    = 0xFFC0C0C0;
+	const unsigned int textHi       = 0xFFFFA000;
+
+	// background fill
+	unsigned int bg = bgColor;
+	if( state == BUTTON_FOCUS )   bg = bgColorHover;
+	if( state == BUTTON_PRESSED ) bg = bgColorPress;
+	UI_FillRect( m_scPos, m_scSize, bg );
+
+	// 1px orange border on focus/hover/press (skip when grayed)
+	if( state != BUTTON_NOFOCUS && !( iFlags & QMF_GRAYED ) )
+		UI_DrawRectangleExt( m_scPos, m_scSize, borderColor, 1 );
+
+	// notify status hint to the right of the button
+	if( szStatusText && FBitSet( iFlags, QMF_NOTIFY ) && !FBitSet( gMenu.m_gameinfo.flags, GFL_NOSKILLS ) )
 	{
 		Point coord;
 
-		coord.x = m_scPos.x + ( uiStatic.buttons_draw_size.w + 40 ) * uiStatic.scaleX;
+		coord.x = m_scPos.x + m_scSize.w + 40 * uiStatic.scaleX;
 		coord.y = m_scPos.y + m_scSize.h / 2 - EngFuncs::ConsoleCharacterHeight() / 2;
 
 		int	r, g, b;
@@ -254,129 +264,34 @@ void CMenuPicButton::Draw( )
 		EngFuncs::DrawConsoleString( coord, szStatusText );
 	}
 
-	int a = (512 - (uiStatic.realTime - m_iLastFocusTime)) >> 1;
-
-	if( hPic && !uiStatic.renderPicbuttonText )
+	// text — left-aligned with 10px padding
+	Point textPos  = m_scPos;
+	Size  textSize = m_scSize;
+	int padX = (int)( 10 * uiStatic.scaleX );
+	if( textSize.w > padX * 2 )
 	{
-		int r, g, b;
-
-		UnpackRGB( r, g, b, iFlags & QMF_GRAYED ? uiColorDkGrey : uiColorWhite );
-
-		wrect_t rects[3];
-		for( int i = 0; i < 3; i++ )
-		{
-			if( button_id >= 0 )
-			{
-				rects[i].left = uiStatic.btns.GetX( button_id );
-				rects[i].right = uiStatic.btns.GetX( button_id ) + uiStatic.btns.GetWidth();
-				rects[i].top = uiStatic.btns.GetY( button_id ) + i * uiStatic.btns.GetTexStride();
-				rects[i].bottom = rects[i].top + uiStatic.btns.GetTexH();
-			}
-			else
-			{
-				rects[i].left = 0;
-				rects[i].right = EngFuncs::PIC_Width( hPic );
-				rects[i].top = round( EngFuncs::PIC_Height( hPic ) * i / 3.0f );
-				rects[i].bottom = round( EngFuncs::PIC_Height( hPic ) * ( i + 1 ) / 3.0f );
-			}
-		}
-
-		// decay
-		if( state == BUTTON_NOFOCUS && a > 0 )
-		{
-			DrawButton( r, g, b, a, rects, BUTTON_FOCUS );
-		}
-
-		// pulse code.
-		if( ( state == BUTTON_NOFOCUS && bPulse ) ||
-			( state == BUTTON_FOCUS   && eFocusAnimation == QM_PULSEIFFOCUS ) )
-		{
-			a = 255 * (0.5f + 0.5f * sin( (float)uiStatic.realTime / ( UI_PULSE_DIVISOR * 2 )));
-
-			DrawButton( r, g, b, a, rects, BUTTON_FOCUS );
-			DrawButton( r, g, b, 255, rects, BUTTON_NOFOCUS );
-		}
-		// special handling for focused
-		else if( state == BUTTON_FOCUS )
-		{
-			DrawButton( r, g, b, 255, rects, BUTTON_FOCUS );
-			DrawButton( r, g, b, 255, rects, BUTTON_NOFOCUS );
-		}
-		else
-		{
-			// just draw
-			DrawButton( r, g, b, 255, rects, state );
-		}
+		textPos.x  += padX;
+		textSize.w -= padX * 2;
 	}
-	else if( !uiStatic.lowmemory )
+
+	uint textflags = ETF_NOSIZELIMIT | ETF_FORCECOL;
+	if( iFlags & QMF_DROPSHADOW )
+		SetBits( textflags, ETF_SHADOW );
+
+	unsigned int color;
+	if( iFlags & QMF_GRAYED )
+		color = uiColorDkGrey;
+	else if( state != BUTTON_NOFOCUS )
+		color = textHi;
+	else if( bPulse || eFocusAnimation == QM_PULSEIFFOCUS )
 	{
-		const uint heavy_blur_flags = ETF_NOSIZELIMIT | ETF_FORCECOL;
-		const uint light_blur_flags = ETF_NOSIZELIMIT | ETF_FORCECOL | ETF_ADDITIVE;
-		CColor light_blur_color, heavy_blur_color = colorBase;
-		Point pos = m_scPos;
-
-		if( iFlags & QMF_GRAYED )
-			light_blur_color = InterpColor( uiColorBlack, colorBase, 0.333f ); // because additive, tone down all channels
-		else
-			light_blur_color = colorBase;
-
-		pos.x += 7 * uiStatic.scaleX;
-		pos.y -= uiStatic.scaleY;
-
-		if( this != m_pParent->ItemAtCursor() )
-		{
-			if( a > 0 )
-			{
-				UI_DrawString( uiStatic.hHeavyBlur, pos, m_scSize, szName,
-					PackAlpha( heavy_blur_color, a ), m_scChSize, eTextAlignment, heavy_blur_flags );
-			}
-			UI_DrawString( uiStatic.hLightBlur, pos, m_scSize, szName, light_blur_color, m_scChSize, eTextAlignment, light_blur_flags );
-		}
-		else if( m_bPressed )
-		{
-			UI_DrawString( uiStatic.hHeavyBlur, pos, m_scSize, szName, heavy_blur_color, m_scChSize, eTextAlignment, heavy_blur_flags );
-			UI_DrawString( uiStatic.hLightBlur, pos, m_scSize, szName, 0xFF000000, m_scChSize, eTextAlignment, light_blur_flags & ( ~ETF_ADDITIVE ));
-		}
-		else if( eFocusAnimation == QM_HIGHLIGHTIFFOCUS )
-		{
-			UI_DrawString( uiStatic.hHeavyBlur, pos, m_scSize, szName, heavy_blur_color, m_scChSize, eTextAlignment, heavy_blur_flags );
-			UI_DrawString( uiStatic.hLightBlur, pos, m_scSize, szName, light_blur_color, m_scChSize, eTextAlignment, light_blur_flags );
-		}
-		else if( eFocusAnimation == QM_PULSEIFFOCUS )
-		{
-			float pulsar = 0.5f + 0.5f * sin( (float)uiStatic.realTime / UI_PULSE_DIVISOR );
-
-			UI_DrawString( uiStatic.hHeavyBlur, pos, m_scSize, szName,
-				InterpColor( uiColorBlack, heavy_blur_color, pulsar ), m_scChSize, eTextAlignment, heavy_blur_flags );
-			UI_DrawString( uiStatic.hLightBlur, pos, m_scSize, szName, light_blur_color, m_scChSize, eTextAlignment, light_blur_flags );
-		}
+		float pulsar = 0.5f + 0.5f * sin( (float)uiStatic.realTime / UI_PULSE_DIVISOR );
+		color = InterpColor( textColor, textHi, pulsar );
 	}
 	else
-	{
-		uint textflags = ETF_NOSIZELIMIT | ETF_FORCECOL;
+		color = textColor;
 
-		SetBits( textflags, (iFlags & QMF_DROPSHADOW) ? ETF_SHADOW : 0 );
-
-		if( iFlags & QMF_GRAYED )
-		{
-			UI_DrawString( font, m_scPos, m_scSize, szName, uiColorDkGrey, m_scChSize, eTextAlignment, textflags );
-		}
-		else if( this != m_pParent->ItemAtCursor() )
-		{
-			UI_DrawString( font, m_scPos, m_scSize, szName, colorBase, m_scChSize, eTextAlignment, textflags );
-		}
-		else if( eFocusAnimation == QM_HIGHLIGHTIFFOCUS )
-		{
-			UI_DrawString( font, m_scPos, m_scSize, szName, colorFocus, m_scChSize, eTextAlignment, textflags );
-		}
-		else if( eFocusAnimation == QM_PULSEIFFOCUS )
-		{
-			float pulsar = 0.5f + 0.5f * sin( (float)uiStatic.realTime / UI_PULSE_DIVISOR );
-
-			UI_DrawString( font, m_scPos, m_scSize, szName,
-				InterpColor( colorBase, colorFocus, pulsar ), m_scChSize, eTextAlignment, textflags );
-		}
-	}
+	UI_DrawString( font, textPos, textSize, szName, color, m_scChSize, eTextAlignment, textflags );
 
 	iOldState = state;
 }
