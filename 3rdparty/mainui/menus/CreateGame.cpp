@@ -284,7 +284,12 @@ void CMenuCreateGame::_Init( void )
 
 void CMenuCreateGame::_VidInit()
 {
-	nat.SetCoord( 72, 685 );
+	// CS 1.6 PC reskin (slayer3d): keep the form fields in the right-side
+	// content area, OUTSIDE the left nav slab (CS16_NAV_X=40..300). The
+	// "Use NAT" checkbox previously sat at x=72 inside the slab on top of
+	// the cancel/ok button column — relocate it to the form column under
+	// the password field.
+	nat.SetCoord( 350, 500 );
 	if( !EngFuncs::GetCvarFloat("public") )
 		nat.Hide();
 	else nat.Show();
