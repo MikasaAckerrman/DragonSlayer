@@ -21,6 +21,8 @@ the Free Software Foundation, either version 3 of the License, or
 #include "TabControl.h"
 #include "WindowStyle.h"
 #include "DropDown.h"
+#include "Table.h"
+#include "BaseModel.h"
 
 // ============================================================
 // Tab page holder
@@ -48,6 +50,64 @@ static void ApplyFlatStyle( CMenuPicButton &btn )
 	btn.bEnableTransitions = false;
 	btn.bPulse = false;
 }
+
+// ============================================================
+// Key bindings model for Keyboard tab
+// ============================================================
+struct KeyBindEntry
+{
+	const char *actionName;
+	const char *command;
+};
+
+static const KeyBindEntry s_keyBinds[] =
+{
+	{ "Move Forward",    "+forward" },
+	{ "Move Back",       "+back" },
+	{ "Move Left",       "+moveleft" },
+	{ "Move Right",      "+moveright" },
+	{ "Jump",            "+jump" },
+	{ "Duck",            "+duck" },
+	{ "Use",             "+use" },
+	{ "Attack",          "+attack" },
+	{ "Secondary Attack","+attack2" },
+	{ "Reload",          "+reload" },
+	{ "Drop Weapon",     "drop" },
+	{ "Buy Menu",        "buy" },
+	{ "Scoreboard",      "+showscores" },
+	{ "Chat",            "messagemode" },
+	{ "Team Chat",       "messagemode2" },
+};
+
+static const int s_numKeyBinds = sizeof( s_keyBinds ) / sizeof( s_keyBinds[0] );
+
+class CKeyBindingsModel : public CMenuBaseModel
+{
+public:
+	void Update() override {}
+	int GetColumns() const override { return 2; }
+	int GetRows() const override { return s_numKeyBinds; }
+	const char *GetCellText( int line, int column ) override
+	{
+		if( line < 0 || line >= s_numKeyBinds )
+			return "";
+		if( column == 0 )
+			return s_keyBinds[line].actionName;
+		if( column == 1 )
+		{
+			// Find key bound to this command
+			for( int i = 0; i < 256; i++ )
+			{
+				const char *binding = EngFuncs::KEY_GetBinding( i );
+				if( !binding ) continue;
+				if( !strcmp( binding, s_keyBinds[line].command ) )
+					return EngFuncs::KeynumToString( i );
+			}
+			return "";
+		}
+		return "";
+	}
+};
 
 // ============================================================
 // CMenuSettings — windowed settings with tabs:
@@ -89,14 +149,20 @@ private:
 	CMenuDropDownInt m_ddHand;
 	CMenuAction   m_divMultiplayer1;
 	CMenuAction   m_divMultiplayer2;
+	CMenuAction   m_lblSprayPreview;
+	CMenuAction   m_sprayPreview;
 
 	// --- Keyboard page ---
-	CMenuAction   m_lblKeyboardHint;
+	CKeyBindingsModel m_bindingsModel;
+	CMenuTable    m_tblBindings;
+	CMenuAction   m_lblBindNote;
 
 	// --- Mouse page ---
 	CMenuSlider   m_sldSensitivity;
 	CMenuCheckBox m_chkInvertMouse;
 	CMenuCheckBox m_chkRawInput;
+	CMenuCheckBox m_chkMouseFilter;
+	CMenuCheckBox m_chkMouseAccel;
 
 	// --- Audio page ---
 	CMenuSlider   m_sldSoundVol;
@@ -104,14 +170,23 @@ private:
 	CMenuSlider   m_sldSuitVol;
 	CMenuCheckBox m_chkNoDSP;
 	CMenuCheckBox m_chkMuteLostFocus;
+	CMenuDropDownStr m_ddSoundQuality;
 
 	// --- Video page ---
-	CMenuCheckBox m_chkFullscreen;
+	CMenuDropDownInt m_ddResolution;
+	CMenuDropDownInt m_ddDisplayMode;
+	CMenuSlider   m_sldBrightness;
+	CMenuSlider   m_sldGamma;
 	CMenuCheckBox m_chkVsync;
+	CMenuAction   m_lblRenderer;
+	CMenuDropDownInt m_ddTexQuality;
 
 	// --- Voice page ---
 	CMenuCheckBox m_chkVoiceEnable;
 	CMenuSlider   m_sldVoiceScale;
+	CMenuDropDownStr m_ddVoiceQuality;
+	CMenuDropDownInt m_ddTransmitMode;
+	CMenuAction   m_lblVoiceTest;
 
 	// --- HUD page ---
 	CMenuSlider   m_sldCrosshairSize;
@@ -120,8 +195,16 @@ private:
 	CMenuCheckBox m_chkCenterID;
 	CMenuCheckBox m_chkAutoWepSwitch;
 	CMenuAction   m_divHUD1;
+	CMenuAction   m_divHUD2;
+	CMenuDropDownStr m_ddHUDColor;
+	CMenuCheckBox m_chkLowAmmoWarn;
 
 	// --- System page ---
+	CMenuField    m_fldRate;
+	CMenuField    m_fldUpdateRate;
+	CMenuField    m_fldCmdRate;
+	CMenuField    m_fldInterp;
+	CMenuAction   m_divSystem1;
 	CMenuCheckBox m_chkDeveloper;
 	CMenuField    m_fldFpsMax;
 	CMenuCheckBox m_chkNetGraph;
@@ -208,11 +291,29 @@ void CMenuSettings::_Init()
 	m_lblModelHint.SetCoord( col, 260 );
 	m_pageMultiplayer.AddItem( m_lblModelHint );
 
+	m_lblSprayPreview.szName = L( "Spray preview" );
+	m_lblSprayPreview.iFlags |= QMF_INACTIVE;
+	m_lblSprayPreview.SetCoord( 240, 85 );
+	m_pageMultiplayer.AddItem( m_lblSprayPreview );
+
+	m_sprayPreview.iFlags |= QMF_INACTIVE;
+	m_sprayPreview.SetCoord( 240, 100 );
+	m_sprayPreview.SetSize( 64, 64 );
+	m_sprayPreview.SetBackground( WndStyle::WidgetBorderColor );
+	m_pageMultiplayer.AddItem( m_sprayPreview );
+
 	// ===== Keyboard =====
-	m_lblKeyboardHint.szName = L( "Use 'bind' console command or Controls menu for key bindings" );
-	m_lblKeyboardHint.iFlags |= QMF_INACTIVE;
-	m_lblKeyboardHint.SetCoord( col, 40 );
-	m_pageKeyboard.AddItem( m_lblKeyboardHint );
+	m_tblBindings.SetCoord( col, 10 );
+	m_tblBindings.SetSize( 620, 280 );
+	m_tblBindings.SetModel( &m_bindingsModel );
+	m_tblBindings.SetupColumn( 0, "Action", 0.6f );
+	m_tblBindings.SetupColumn( 1, "Key", 0.4f );
+	m_pageKeyboard.AddItem( m_tblBindings );
+
+	m_lblBindNote.szName = L( "Use 'bind' in console for custom binds" );
+	m_lblBindNote.iFlags |= QMF_INACTIVE;
+	m_lblBindNote.SetCoord( col, 295 );
+	m_pageKeyboard.AddItem( m_lblBindNote );
 
 	// ===== Mouse =====
 	m_sldSensitivity.szName = L( "GameUI_Sensitivity" );
@@ -231,6 +332,16 @@ void CMenuSettings::_Init()
 	m_chkRawInput.SetCoord( col, 140 );
 	m_chkRawInput.onChanged = CMenuEditable::WriteCvarCb;
 	m_pageMouse.AddItem( m_chkRawInput );
+
+	m_chkMouseFilter.szName = L( "Mouse filter" );
+	m_chkMouseFilter.SetCoord( col, 180 );
+	m_chkMouseFilter.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageMouse.AddItem( m_chkMouseFilter );
+
+	m_chkMouseAccel.szName = L( "Mouse acceleration" );
+	m_chkMouseAccel.SetCoord( col, 220 );
+	m_chkMouseAccel.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageMouse.AddItem( m_chkMouseAccel );
 
 	// ===== Audio =====
 	int row = 40;
@@ -269,16 +380,70 @@ void CMenuSettings::_Init()
 	m_chkMuteLostFocus.onChanged = CMenuEditable::WriteCvarCb;
 	m_pageAudio.AddItem( m_chkMuteLostFocus );
 
+	row += 40;
+	m_ddSoundQuality.szName = L( "Sound quality" );
+	m_ddSoundQuality.SetCoord( col, row );
+	m_ddSoundQuality.SetSize( 180, 28 );
+	m_ddSoundQuality.AddItem( "11 kHz (Low)", "11025" );
+	m_ddSoundQuality.AddItem( "22 kHz (Medium)", "22050" );
+	m_ddSoundQuality.AddItem( "44 kHz (High)", "44100" );
+	m_ddSoundQuality.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageAudio.AddItem( m_ddSoundQuality );
+
 	// ===== Video =====
-	m_chkFullscreen.szName = L( "Fullscreen" );
-	m_chkFullscreen.SetCoord( col, 40 );
-	m_chkFullscreen.onChanged = CMenuEditable::WriteCvarCb;
-	m_pageVideo.AddItem( m_chkFullscreen );
+	m_ddResolution.szName = L( "Resolution" );
+	m_ddResolution.SetCoord( col, 40 );
+	m_ddResolution.SetSize( 180, 28 );
+	m_ddResolution.AddItem( "640x480", 0 );
+	m_ddResolution.AddItem( "800x600", 1 );
+	m_ddResolution.AddItem( "1024x768", 2 );
+	m_ddResolution.AddItem( "1280x960", 3 );
+	m_ddResolution.AddItem( "1280x1024", 4 );
+	m_ddResolution.AddItem( "1600x1200", 5 );
+	m_ddResolution.AddItem( "1920x1080", 6 );
+	m_ddResolution.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageVideo.AddItem( m_ddResolution );
+
+	m_ddDisplayMode.szName = L( "Display mode" );
+	m_ddDisplayMode.SetCoord( col, 80 );
+	m_ddDisplayMode.SetSize( 180, 28 );
+	m_ddDisplayMode.AddItem( "Fullscreen", 1 );
+	m_ddDisplayMode.AddItem( "Windowed", 0 );
+	m_ddDisplayMode.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageVideo.AddItem( m_ddDisplayMode );
+
+	m_sldBrightness.szName = L( "Brightness" );
+	m_sldBrightness.Setup( 0.0f, 2.0f, 0.1f );
+	m_sldBrightness.SetCoord( col, 120 );
+	m_sldBrightness.size.w = slW;
+	m_sldBrightness.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageVideo.AddItem( m_sldBrightness );
+
+	m_sldGamma.szName = L( "Gamma" );
+	m_sldGamma.Setup( 1.0f, 3.0f, 0.1f );
+	m_sldGamma.SetCoord( col, 170 );
+	m_sldGamma.size.w = slW;
+	m_sldGamma.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageVideo.AddItem( m_sldGamma );
 
 	m_chkVsync.szName = L( "Vertical sync" );
-	m_chkVsync.SetCoord( col, 80 );
+	m_chkVsync.SetCoord( col, 220 );
 	m_chkVsync.onChanged = CMenuEditable::WriteCvarCb;
 	m_pageVideo.AddItem( m_chkVsync );
+
+	m_ddTexQuality.szName = L( "Texture quality" );
+	m_ddTexQuality.SetCoord( col, 260 );
+	m_ddTexQuality.SetSize( 180, 28 );
+	m_ddTexQuality.AddItem( "High", 0 );
+	m_ddTexQuality.AddItem( "Medium", 1 );
+	m_ddTexQuality.AddItem( "Low", 2 );
+	m_ddTexQuality.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageVideo.AddItem( m_ddTexQuality );
+
+	m_lblRenderer.szName = L( "Renderer: OpenGL" );
+	m_lblRenderer.iFlags |= QMF_INACTIVE;
+	m_lblRenderer.SetCoord( col, 300 );
+	m_pageVideo.AddItem( m_lblRenderer );
 
 	// ===== Voice =====
 	m_chkVoiceEnable.szName = L( "Enable voice chat" );
@@ -292,6 +457,28 @@ void CMenuSettings::_Init()
 	m_sldVoiceScale.size.w = slW;
 	m_sldVoiceScale.onChanged = CMenuEditable::WriteCvarCb;
 	m_pageVoice.AddItem( m_sldVoiceScale );
+
+	m_ddVoiceQuality.szName = L( "Voice quality" );
+	m_ddVoiceQuality.SetCoord( col, 140 );
+	m_ddVoiceQuality.SetSize( 180, 28 );
+	m_ddVoiceQuality.AddItem( "Low", "low" );
+	m_ddVoiceQuality.AddItem( "Medium", "medium" );
+	m_ddVoiceQuality.AddItem( "High", "high" );
+	m_ddVoiceQuality.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageVoice.AddItem( m_ddVoiceQuality );
+
+	m_ddTransmitMode.szName = L( "Transmit mode" );
+	m_ddTransmitMode.SetCoord( col, 190 );
+	m_ddTransmitMode.SetSize( 180, 28 );
+	m_ddTransmitMode.AddItem( "Push to Talk", 0 );
+	m_ddTransmitMode.AddItem( "Open Mic", 1 );
+	m_ddTransmitMode.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageVoice.AddItem( m_ddTransmitMode );
+
+	m_lblVoiceTest.szName = L( "Voice test (placeholder)" );
+	m_lblVoiceTest.iFlags |= QMF_INACTIVE;
+	m_lblVoiceTest.SetCoord( col, 240 );
+	m_pageVoice.AddItem( m_lblVoiceTest );
 
 	// ===== HUD =====
 	m_sldCrosshairSize.szName = L( "Crosshair size" );
@@ -333,22 +520,81 @@ void CMenuSettings::_Init()
 	m_chkAutoWepSwitch.onChanged = CMenuEditable::WriteCvarCb;
 	m_pageHUD.AddItem( m_chkAutoWepSwitch );
 
+	m_divHUD2.iFlags |= QMF_INACTIVE;
+	m_divHUD2.SetCoord( col, 265 );
+	m_divHUD2.SetSize( 300, 1 );
+	m_divHUD2.SetBackground( WndStyle::WidgetBorderColor );
+	m_pageHUD.AddItem( m_divHUD2 );
+
+	m_ddHUDColor.szName = L( "HUD color" );
+	m_ddHUDColor.SetCoord( col, 280 );
+	m_ddHUDColor.SetSize( 180, 28 );
+	m_ddHUDColor.AddItem( "Green", "green" );
+	m_ddHUDColor.AddItem( "Amber", "amber" );
+	m_ddHUDColor.AddItem( "Yellow", "yellow" );
+	m_ddHUDColor.AddItem( "Blue", "blue" );
+	m_ddHUDColor.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageHUD.AddItem( m_ddHUDColor );
+
+	m_chkLowAmmoWarn.szName = L( "Low ammo warning" );
+	m_chkLowAmmoWarn.SetCoord( col, 320 );
+	m_chkLowAmmoWarn.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageHUD.AddItem( m_chkLowAmmoWarn );
+
 	// ===== System =====
+	m_fldRate.szName = L( "Rate" );
+	m_fldRate.iMaxLength = 6;
+	m_fldRate.bNumbersOnly = true;
+	m_fldRate.SetCoord( col, 40 );
+	m_fldRate.size.w = 100;
+	m_fldRate.size.h = 32;
+	m_pageSystem.AddItem( m_fldRate );
+
+	m_fldUpdateRate.szName = L( "Update rate" );
+	m_fldUpdateRate.iMaxLength = 4;
+	m_fldUpdateRate.bNumbersOnly = true;
+	m_fldUpdateRate.SetCoord( col, 90 );
+	m_fldUpdateRate.size.w = 100;
+	m_fldUpdateRate.size.h = 32;
+	m_pageSystem.AddItem( m_fldUpdateRate );
+
+	m_fldCmdRate.szName = L( "Command rate" );
+	m_fldCmdRate.iMaxLength = 4;
+	m_fldCmdRate.bNumbersOnly = true;
+	m_fldCmdRate.SetCoord( col, 140 );
+	m_fldCmdRate.size.w = 100;
+	m_fldCmdRate.size.h = 32;
+	m_pageSystem.AddItem( m_fldCmdRate );
+
+	m_fldInterp.szName = L( "Interpolation" );
+	m_fldInterp.iMaxLength = 6;
+	m_fldInterp.bNumbersOnly = false;
+	m_fldInterp.SetCoord( col, 190 );
+	m_fldInterp.size.w = 100;
+	m_fldInterp.size.h = 32;
+	m_pageSystem.AddItem( m_fldInterp );
+
+	m_divSystem1.iFlags |= QMF_INACTIVE;
+	m_divSystem1.SetCoord( col, 235 );
+	m_divSystem1.SetSize( 300, 1 );
+	m_divSystem1.SetBackground( WndStyle::WidgetBorderColor );
+	m_pageSystem.AddItem( m_divSystem1 );
+
 	m_chkDeveloper.szName = L( "Developer console" );
-	m_chkDeveloper.SetCoord( col, 40 );
+	m_chkDeveloper.SetCoord( col, 250 );
 	m_chkDeveloper.onChanged = CMenuEditable::WriteCvarCb;
 	m_pageSystem.AddItem( m_chkDeveloper );
 
 	m_fldFpsMax.szName = L( "Max FPS" );
 	m_fldFpsMax.iMaxLength = 5;
 	m_fldFpsMax.bNumbersOnly = true;
-	m_fldFpsMax.SetCoord( col, 100 );
+	m_fldFpsMax.SetCoord( col, 300 );
 	m_fldFpsMax.size.w = 100;
 	m_fldFpsMax.size.h = 32;
 	m_pageSystem.AddItem( m_fldFpsMax );
 
 	m_chkNetGraph.szName = L( "Show net graph" );
-	m_chkNetGraph.SetCoord( col, 160 );
+	m_chkNetGraph.SetCoord( col, 350 );
 	m_chkNetGraph.onChanged = CMenuEditable::WriteCvarCb;
 	m_pageSystem.AddItem( m_chkNetGraph );
 
@@ -422,10 +668,10 @@ void CMenuSettings::_VidInit()
 
 	// Mouse
 	m_sldSensitivity.LinkCvar( "sensitivity" );
-	// m_pitch is a float (0.022 or -0.022); LinkCvar + checkbox treats any
-	// non-zero as checked. Read sign manually instead.
 	m_chkInvertMouse.bChecked = ( EngFuncs::GetCvarFloat( "m_pitch" ) < 0 );
 	m_chkRawInput.LinkCvar( "m_rawinput" );
+	m_chkMouseFilter.LinkCvar( "m_filter" );
+	m_chkMouseAccel.LinkCvar( "m_customaccel" );
 
 	// Audio
 	m_sldSoundVol.LinkCvar( "volume" );
@@ -433,14 +679,21 @@ void CMenuSettings::_VidInit()
 	m_sldSuitVol.LinkCvar( "suitvolume" );
 	m_chkNoDSP.LinkCvar( "room_off" );
 	m_chkMuteLostFocus.LinkCvar( "snd_mute_losefocus" );
+	m_ddSoundQuality.LinkCvar( "s_khz", CMenuEditable::CVAR_STRING );
 
 	// Video
-	m_chkFullscreen.LinkCvar( "fullscreen" );
+	m_ddResolution.LinkCvar( "vid_mode", CMenuEditable::CVAR_VALUE );
+	m_ddDisplayMode.LinkCvar( "fullscreen", CMenuEditable::CVAR_VALUE );
+	m_sldBrightness.LinkCvar( "brightness" );
+	m_sldGamma.LinkCvar( "gamma" );
 	m_chkVsync.LinkCvar( "gl_vsync" );
+	m_ddTexQuality.LinkCvar( "gl_picmip", CMenuEditable::CVAR_VALUE );
 
 	// Voice
 	m_chkVoiceEnable.LinkCvar( "voice_enable" );
 	m_sldVoiceScale.LinkCvar( "voice_scale" );
+	m_ddVoiceQuality.LinkCvar( "voice_quality", CMenuEditable::CVAR_STRING );
+	m_ddTransmitMode.LinkCvar( "voice_vox", CMenuEditable::CVAR_VALUE );
 
 	// HUD
 	m_sldCrosshairSize.LinkCvar( "cl_crosshair_size" );
@@ -448,14 +701,17 @@ void CMenuSettings::_VidInit()
 	m_chkFastSwitch.LinkCvar( "hud_fastswitch" );
 	m_chkCenterID.LinkCvar( "hud_centerid" );
 	m_chkAutoWepSwitch.LinkCvar( "cl_autowepswitch" );
+	m_ddHUDColor.LinkCvar( "cl_hudcolor", CMenuEditable::CVAR_STRING );
+	m_chkLowAmmoWarn.LinkCvar( "hud_lowammowarning" );
 
 	// System
+	m_fldRate.LinkCvar( "rate" );
+	m_fldUpdateRate.LinkCvar( "cl_updaterate" );
+	m_fldCmdRate.LinkCvar( "cl_cmdrate" );
+	m_fldInterp.LinkCvar( "ex_interp" );
 	m_chkDeveloper.LinkCvar( "developer" );
 	m_fldFpsMax.LinkCvar( "fps_max" );
 	m_chkNetGraph.LinkCvar( "net_graph" );
-
-	// Don't reset active tab on resolution change — let user keep their tab.
-	// (Default tab is index 0 set in CMenuTabControl ctor.)
 }
 
 // ---------------------------------------------------------------
@@ -470,20 +726,35 @@ void CMenuSettings::OnApply()
 	m_sldSensitivity.WriteCvar();
 	EngFuncs::CvarSetValue( "m_pitch", m_chkInvertMouse.bChecked ? -0.022f : 0.022f );
 	m_chkRawInput.WriteCvar();
+	m_chkMouseFilter.WriteCvar();
+	m_chkMouseAccel.WriteCvar();
 	m_sldSoundVol.WriteCvar();
 	m_sldMusicVol.WriteCvar();
 	m_sldSuitVol.WriteCvar();
 	m_chkNoDSP.WriteCvar();
 	m_chkMuteLostFocus.WriteCvar();
-	m_chkFullscreen.WriteCvar();
+	m_ddSoundQuality.WriteCvar();
+	m_ddResolution.WriteCvar();
+	m_ddDisplayMode.WriteCvar();
+	m_sldBrightness.WriteCvar();
+	m_sldGamma.WriteCvar();
 	m_chkVsync.WriteCvar();
+	m_ddTexQuality.WriteCvar();
 	m_chkVoiceEnable.WriteCvar();
 	m_sldVoiceScale.WriteCvar();
+	m_ddVoiceQuality.WriteCvar();
+	m_ddTransmitMode.WriteCvar();
 	m_sldCrosshairSize.WriteCvar();
 	m_ddCrosshairColor.WriteCvar();
 	m_chkFastSwitch.WriteCvar();
 	m_chkCenterID.WriteCvar();
 	m_chkAutoWepSwitch.WriteCvar();
+	m_ddHUDColor.WriteCvar();
+	m_chkLowAmmoWarn.WriteCvar();
+	m_fldRate.WriteCvar();
+	m_fldUpdateRate.WriteCvar();
+	m_fldCmdRate.WriteCvar();
+	m_fldInterp.WriteCvar();
 	m_chkDeveloper.WriteCvar();
 	m_fldFpsMax.WriteCvar();
 	m_chkNetGraph.WriteCvar();
