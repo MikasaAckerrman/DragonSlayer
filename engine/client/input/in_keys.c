@@ -782,7 +782,7 @@ void GAME_EXPORT Key_Event( int key, int down )
 		if( cls.key_dest == key_message || !down )
 			return;
 
-		Con_ToggleConsole_f();
+		Slayer_ImGui_ToggleConsole();
 		return;
 	}
 

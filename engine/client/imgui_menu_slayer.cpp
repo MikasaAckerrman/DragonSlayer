@@ -802,6 +802,31 @@ void Slayer_ImGui_Frame( void )
 		g_ConnServerName[0] = '\0';
 	}
 
+	// Prevent 1-frame flash of connection progress at map load start.
+	// Wait at least 2 frames after the state transitions to non-NONE before
+	// actually rendering, so transient flickers are suppressed.
+	{
+		static connprogress_state_e prev_state = CONNPROGRESS_NONE;
+		static int frames_in_state = 0;
+
+		if( g_ConnProgressState != prev_state )
+		{
+			prev_state = g_ConnProgressState;
+			frames_in_state = 0;
+		}
+		else
+		{
+			frames_in_state++;
+		}
+
+		if( g_ConnProgressState != CONNPROGRESS_NONE && frames_in_state < 2 )
+			return;
+	}
+
+	// Guard against zero display size during GL init / map load transitions
+	if( refState.width <= 0 || refState.height <= 0 )
+		return;
+
 	if( !g_MenuVisible && !g_ConsoleVisible && g_ConnProgressState == CONNPROGRESS_NONE )
 		return;
 
@@ -900,6 +925,18 @@ void Slayer_ImGui_Toggle( void )
 	g_MenuVisible = !g_MenuVisible;
 	if( g_MenuVisible )
 		LoadSettings();
+}
+
+void Slayer_ImGui_ToggleConsole( void )
+{
+	g_ConsoleVisible = !g_ConsoleVisible;
+	if( g_ConsoleVisible )
+		g_ConsoleScrollToBottom = true;
+}
+
+int Slayer_ImGui_IsConsoleVisible( void )
+{
+	return g_ConsoleVisible ? 1 : 0;
 }
 
 void Slayer_ImGui_ConnectionProgress_Connect( const char *server )

@@ -19,6 +19,12 @@ int  Slayer_ImGui_TouchEvent( int type, int fingerID, float x, float y, float dx
 int  Slayer_ImGui_KeyEvent( int key, int down );
 void Slayer_ImGui_Toggle( void );
 
+// Toggle ImGui console (replaces Con_ToggleConsole_f for tilde key)
+void Slayer_ImGui_ToggleConsole( void );
+
+// Returns 1 when ImGui console overlay is visible
+int  Slayer_ImGui_IsConsoleVisible( void );
+
 // Returns 1 when any ImGui window is being shown
 int  Slayer_ImGui_IsActive( void );
 

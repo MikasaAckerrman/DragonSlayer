@@ -582,7 +582,8 @@ void V_PostRender( void )
 		R_ShowTree();
 		Slayer_Scoreboard_Draw();
 		Slayer_HUD_Draw();
-		Con_DrawConsole();
+		if( !Slayer_ImGui_IsConsoleVisible() )
+			Con_DrawConsole();
 		UI_UpdateMenu( host.realtime );
 		Con_DrawVersion();
 		Con_DrawDebug(); // must be last
