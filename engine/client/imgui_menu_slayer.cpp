@@ -2,9 +2,7 @@
 imgui_menu_slayer.cpp - Slayer3D Dear ImGui CS 1.6-style settings menu
 Copyright (C) 2026 Slayer3D contributors
 
-This module integrates Dear ImGui into the Xash3D engine to provide
-a CS 1.6-inspired Configuration window with tabs for Game, Keyboard,
-Mouse, Audio, Video, and Voice settings.
+Pixel-perfect CS 1.6 VGUI2 look with 3D beveled borders via ImDrawList.
 */
 
 extern "C"
@@ -19,6 +17,13 @@ extern "C"
 #include "imgui.h"
 #include "imgui_impl_xash_gles.h"
 #include "imgui_menu_slayer.h"
+
+// ============================================================================
+// CS 1.6 Bevel Colors
+// ============================================================================
+
+#define CS16_BEVEL_LIGHT  IM_COL32(160, 160, 160, 255)
+#define CS16_BEVEL_DARK   IM_COL32(32, 32, 32, 255)
 
 // ============================================================================
 // State
@@ -50,30 +55,36 @@ static bool g_ConsoleVisible = false;
 #define CONSOLE_LINE_LEN  256
 
 static char  g_ConsoleLines[CONSOLE_MAX_LINES][CONSOLE_LINE_LEN];
-static unsigned int g_ConsoleWritePos = 0;  // next write slot in ring buffer
+static unsigned int g_ConsoleWritePos = 0;
 static bool  g_ConsoleScrollToBottom = true;
 static char  g_ConsoleInputBuf[512] = "";
 
-// Line accumulator for ConsolePrint (file-scope to make intent explicit)
 static char  g_ConsoleLineBuf[CONSOLE_LINE_LEN];
 static int   g_ConsoleLineBufPos = 0;
 
-// Pending settings (applied on OK/Apply)
+// Pending settings
 static float g_Volume = 1.0f;
 static float g_MusicVolume = 1.0f;
 static float g_Sensitivity = 3.0f;
 static float g_Pitch = 0.022f;
 static float g_Brightness = 1.0f;
+static float g_Gamma = 1.0f;
 static float g_VoiceScale = 1.0f;
+static float g_VoiceTransmit = 1.0f;
 static int   g_Crosshair = 1;
+static int   g_CrosshairSize = 1;
+static int   g_CrosshairColor = 0;
 static int   g_AutoSwitch = 1;
 static int   g_RawInput = 0;
 static int   g_ReverseMouse = 0;
+static int   g_MouseFilter = 0;
 static int   g_HQSound = 1;
 static int   g_Surround = 0;
+static int   g_HWAccel = 0;
 static int   g_VoiceEnable = 1;
 static int   g_Vsync = 0;
 static int   g_VoiceInputFromFile = 0;
+static char  g_PlayerName[64] = "Player";
 
 // ============================================================================
 // Helpers
@@ -85,17 +96,23 @@ static void LoadSettings( void )
 	g_MusicVolume  = Cvar_VariableValue( "MP3Volume" );
 	g_Sensitivity  = Cvar_VariableValue( "sensitivity" );
 	g_Pitch        = Cvar_VariableValue( "m_pitch" );
-	g_Brightness   = Cvar_VariableValue( "gamma" );
+	g_Brightness   = Cvar_VariableValue( "brightness" );
+	g_Gamma        = Cvar_VariableValue( "gamma" );
 	g_VoiceScale   = Cvar_VariableValue( "voice_scale" );
 	g_Crosshair    = (int)Cvar_VariableValue( "crosshair" );
 	g_AutoSwitch   = (int)Cvar_VariableValue( "hud_fastswitch" );
 	g_RawInput     = (int)Cvar_VariableValue( "m_rawinput" );
 	g_ReverseMouse = (int)Cvar_VariableValue( "m_reverse" );
+	g_MouseFilter  = (int)Cvar_VariableValue( "m_filter" );
 	g_HQSound      = (int)Cvar_VariableValue( "s_lerping" );
 	g_Surround     = (int)Cvar_VariableValue( "s_surround" );
 	g_VoiceEnable  = (int)Cvar_VariableValue( "voice_enable" );
 	g_Vsync        = (int)Cvar_VariableValue( "gl_vsync" );
 	g_VoiceInputFromFile = (int)Cvar_VariableValue( "voice_inputfromfile" );
+
+	const char *name = Cvar_VariableString( "name" );
+	if( name && name[0] )
+		Q_strncpy( g_PlayerName, name, sizeof( g_PlayerName ) );
 }
 
 static void ApplySettings( void )
@@ -104,24 +121,25 @@ static void ApplySettings( void )
 	Cvar_SetValue( "MP3Volume", g_MusicVolume );
 	Cvar_SetValue( "sensitivity", g_Sensitivity );
 	Cvar_SetValue( "m_pitch", g_Pitch );
-	Cvar_SetValue( "gamma", g_Brightness );
+	Cvar_SetValue( "brightness", g_Brightness );
+	Cvar_SetValue( "gamma", g_Gamma );
 	Cvar_SetValue( "voice_scale", g_VoiceScale );
 	Cvar_SetValue( "crosshair", (float)g_Crosshair );
 	Cvar_SetValue( "hud_fastswitch", (float)g_AutoSwitch );
 	Cvar_SetValue( "m_rawinput", (float)g_RawInput );
 	Cvar_SetValue( "m_reverse", (float)g_ReverseMouse );
+	Cvar_SetValue( "m_filter", (float)g_MouseFilter );
 	Cvar_SetValue( "s_lerping", (float)g_HQSound );
 	Cvar_SetValue( "s_surround", (float)g_Surround );
 	Cvar_SetValue( "voice_enable", (float)g_VoiceEnable );
 	Cvar_SetValue( "voice_inputfromfile", (float)g_VoiceInputFromFile );
 
-	// Use Cbuf_AddText so the cvar system sets FCVAR_CHANGED,
-	// which is required for GL_UpdateSwapInterval to take effect.
 	Cbuf_AddTextf( "gl_vsync %d\n", g_Vsync );
+	Cbuf_AddTextf( "name \"%s\"\n", g_PlayerName );
 }
 
 // ============================================================================
-// ImGui style: CS 1.6 look
+// CS 1.6 Style Setup
 // ============================================================================
 
 static void SetupCS16Style( void )
@@ -129,300 +147,356 @@ static void SetupCS16Style( void )
 	ImGuiStyle &style = ImGui::GetStyle();
 	ImVec4 *colors = style.Colors;
 
-	style.WindowRounding   = 0.0f;
-	style.FrameRounding    = 0.0f;
+	// Zero rounding for that sharp Win95/VGUI2 look
+	style.WindowRounding    = 0.0f;
+	style.FrameRounding     = 0.0f;
 	style.ScrollbarRounding = 0.0f;
-	style.TabRounding      = 0.0f;
-	style.WindowBorderSize = 1.0f;
-	style.FrameBorderSize  = 1.0f;
-	style.WindowPadding    = ImVec2( 8, 8 );
-	style.FramePadding     = ImVec2( 4, 3 );
-	style.ItemSpacing      = ImVec2( 8, 4 );
+	style.TabRounding       = 0.0f;
+	style.GrabRounding      = 0.0f;
+	style.ChildRounding     = 0.0f;
+	style.PopupRounding     = 0.0f;
 
-	// Window background: CS 1.6 grey (#4D4D4D)
-	colors[ImGuiCol_WindowBg]         = ImVec4( 0.30f, 0.30f, 0.30f, 1.00f );
-	colors[ImGuiCol_TitleBg]          = ImVec4( 0.20f, 0.20f, 0.20f, 1.00f );
-	colors[ImGuiCol_TitleBgActive]    = ImVec4( 0.25f, 0.25f, 0.25f, 1.00f );
-	colors[ImGuiCol_TitleBgCollapsed] = ImVec4( 0.15f, 0.15f, 0.15f, 1.00f );
+	// We draw borders manually via ImDrawList
+	style.WindowBorderSize = 0.0f;
+	style.FrameBorderSize  = 0.0f;
 
-	// Buttons
-	colors[ImGuiCol_Button]           = ImVec4( 0.40f, 0.40f, 0.40f, 1.00f );
-	colors[ImGuiCol_ButtonHovered]    = ImVec4( 0.50f, 0.50f, 0.50f, 1.00f );
-	colors[ImGuiCol_ButtonActive]     = ImVec4( 0.35f, 0.35f, 0.35f, 1.00f );
+	style.WindowPadding = ImVec2( 8, 8 );
+	style.FramePadding  = ImVec2( 4, 3 );
+	style.ItemSpacing   = ImVec2( 8, 4 );
+	style.ScrollbarSize = 14.0f;
+	style.GrabMinSize   = 10.0f;
 
-	// Frame background (sliders, checkboxes)
-	colors[ImGuiCol_FrameBg]          = ImVec4( 0.20f, 0.20f, 0.20f, 1.00f );
-	colors[ImGuiCol_FrameBgHovered]   = ImVec4( 0.25f, 0.25f, 0.25f, 1.00f );
-	colors[ImGuiCol_FrameBgActive]    = ImVec4( 0.30f, 0.30f, 0.30f, 1.00f );
+	// Window BG: #585858
+	colors[ImGuiCol_WindowBg]         = ImVec4( 0.345f, 0.345f, 0.345f, 1.00f );
+	// Title bar: #3C3C3C
+	colors[ImGuiCol_TitleBg]          = ImVec4( 0.235f, 0.235f, 0.235f, 1.00f );
+	colors[ImGuiCol_TitleBgActive]    = ImVec4( 0.235f, 0.235f, 0.235f, 1.00f );
+	colors[ImGuiCol_TitleBgCollapsed] = ImVec4( 0.200f, 0.200f, 0.200f, 1.00f );
+	colors[ImGuiCol_MenuBarBg]        = ImVec4( 0.235f, 0.235f, 0.235f, 1.00f );
 
-	// Tabs
-	colors[ImGuiCol_Tab]              = ImVec4( 0.25f, 0.25f, 0.25f, 1.00f );
-	colors[ImGuiCol_TabHovered]       = ImVec4( 0.45f, 0.45f, 0.45f, 1.00f );
-	colors[ImGuiCol_TabSelected]      = ImVec4( 0.35f, 0.35f, 0.35f, 1.00f );
+	// Buttons: #646464
+	colors[ImGuiCol_Button]           = ImVec4( 0.392f, 0.392f, 0.392f, 1.00f );
+	colors[ImGuiCol_ButtonHovered]    = ImVec4( 0.440f, 0.440f, 0.440f, 1.00f );
+	colors[ImGuiCol_ButtonActive]     = ImVec4( 0.340f, 0.340f, 0.340f, 1.00f );
 
-	// Check mark / slider grab
-	colors[ImGuiCol_CheckMark]        = ImVec4( 0.90f, 0.90f, 0.90f, 1.00f );
-	colors[ImGuiCol_SliderGrab]       = ImVec4( 0.60f, 0.60f, 0.60f, 1.00f );
-	colors[ImGuiCol_SliderGrabActive] = ImVec4( 0.80f, 0.80f, 0.80f, 1.00f );
+	// Frame BG (inputs): #282828 dark sunken
+	colors[ImGuiCol_FrameBg]          = ImVec4( 0.157f, 0.157f, 0.157f, 1.00f );
+	colors[ImGuiCol_FrameBgHovered]   = ImVec4( 0.180f, 0.180f, 0.180f, 1.00f );
+	colors[ImGuiCol_FrameBgActive]    = ImVec4( 0.200f, 0.200f, 0.200f, 1.00f );
 
-	// Separator / Border
-	colors[ImGuiCol_Border]           = ImVec4( 0.50f, 0.50f, 0.50f, 1.00f );
-	colors[ImGuiCol_Separator]        = ImVec4( 0.50f, 0.50f, 0.50f, 1.00f );
+	// Tabs: active = window bg #585858, inactive = #484848
+	colors[ImGuiCol_Tab]              = ImVec4( 0.282f, 0.282f, 0.282f, 1.00f );
+	colors[ImGuiCol_TabHovered]       = ImVec4( 0.380f, 0.380f, 0.380f, 1.00f );
+	colors[ImGuiCol_TabSelected]      = ImVec4( 0.345f, 0.345f, 0.345f, 1.00f );
+	colors[ImGuiCol_TabDimmed]        = ImVec4( 0.250f, 0.250f, 0.250f, 1.00f );
+	colors[ImGuiCol_TabDimmedSelected] = ImVec4( 0.310f, 0.310f, 0.310f, 1.00f );
 
 	// Text
 	colors[ImGuiCol_Text]             = ImVec4( 1.00f, 1.00f, 1.00f, 1.00f );
-	colors[ImGuiCol_TextDisabled]     = ImVec4( 0.60f, 0.60f, 0.60f, 1.00f );
+	colors[ImGuiCol_TextDisabled]     = ImVec4( 0.627f, 0.627f, 0.627f, 1.00f );
 
-	// Header (for collapsing headers, group boxes)
-	colors[ImGuiCol_Header]           = ImVec4( 0.35f, 0.35f, 0.35f, 1.00f );
-	colors[ImGuiCol_HeaderHovered]    = ImVec4( 0.40f, 0.40f, 0.40f, 1.00f );
-	colors[ImGuiCol_HeaderActive]     = ImVec4( 0.45f, 0.45f, 0.45f, 1.00f );
+	// CheckMark: white
+	colors[ImGuiCol_CheckMark]        = ImVec4( 1.00f, 1.00f, 1.00f, 1.00f );
 
-	// Popup / Tooltip
-	colors[ImGuiCol_PopupBg]          = ImVec4( 0.25f, 0.25f, 0.25f, 1.00f );
+	// SliderGrab: #808080
+	colors[ImGuiCol_SliderGrab]       = ImVec4( 0.502f, 0.502f, 0.502f, 1.00f );
+	colors[ImGuiCol_SliderGrabActive] = ImVec4( 0.600f, 0.600f, 0.600f, 1.00f );
+
+	// Scrollbar: bg #3C3C3C, grab #646464
+	colors[ImGuiCol_ScrollbarBg]      = ImVec4( 0.235f, 0.235f, 0.235f, 1.00f );
+	colors[ImGuiCol_ScrollbarGrab]    = ImVec4( 0.392f, 0.392f, 0.392f, 1.00f );
+	colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4( 0.450f, 0.450f, 0.450f, 1.00f );
+	colors[ImGuiCol_ScrollbarGrabActive]  = ImVec4( 0.500f, 0.500f, 0.500f, 1.00f );
+
+	// Popup BG: #484848
+	colors[ImGuiCol_PopupBg]          = ImVec4( 0.282f, 0.282f, 0.282f, 1.00f );
+
+	// Border: #000000 (manual override via bevel draws)
+	colors[ImGuiCol_Border]           = ImVec4( 0.00f, 0.00f, 0.00f, 1.00f );
+	colors[ImGuiCol_BorderShadow]     = ImVec4( 0.00f, 0.00f, 0.00f, 0.00f );
+
+	// Separator: #404040
+	colors[ImGuiCol_Separator]        = ImVec4( 0.251f, 0.251f, 0.251f, 1.00f );
+	colors[ImGuiCol_SeparatorHovered] = ImVec4( 0.350f, 0.350f, 0.350f, 1.00f );
+	colors[ImGuiCol_SeparatorActive]  = ImVec4( 0.400f, 0.400f, 0.400f, 1.00f );
+
+	// Header (selectable, table headers)
+	colors[ImGuiCol_Header]           = ImVec4( 0.300f, 0.300f, 0.300f, 1.00f );
+	colors[ImGuiCol_HeaderHovered]    = ImVec4( 0.370f, 0.370f, 0.370f, 1.00f );
+	colors[ImGuiCol_HeaderActive]     = ImVec4( 0.400f, 0.400f, 0.400f, 1.00f );
+
+	// Resize grip
+	colors[ImGuiCol_ResizeGrip]       = ImVec4( 0.400f, 0.400f, 0.400f, 0.50f );
+	colors[ImGuiCol_ResizeGripHovered] = ImVec4( 0.550f, 0.550f, 0.550f, 0.70f );
+	colors[ImGuiCol_ResizeGripActive] = ImVec4( 0.650f, 0.650f, 0.650f, 0.90f );
 }
 
 // ============================================================================
-// Menu drawing
+// 3D Beveled Border Helpers
 // ============================================================================
 
-// ---- Connection Progress window ----
-static void DrawConnectionProgress( void )
+static void DrawBeveledRect( ImDrawList *dl, ImVec2 mn, ImVec2 mx, bool raised )
 {
-	if( g_ConnProgressState == CONNPROGRESS_NONE )
-		return;
-
-	ImGuiIO &io = ImGui::GetIO();
-	ImVec2 center( io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f );
-	ImGui::SetNextWindowPos( center, ImGuiCond_Always, ImVec2( 0.5f, 0.5f ) );
-
-	float winW = ( 400.0f < io.DisplaySize.x * 0.8f ) ? 400.0f : io.DisplaySize.x * 0.8f;
-	float winH = ( 180.0f < io.DisplaySize.y * 0.5f ) ? 180.0f : io.DisplaySize.y * 0.5f;
-	ImGui::SetNextWindowSize( ImVec2( winW, winH ), ImGuiCond_Always );
-
-	ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
-	if( ImGui::Begin( "Loading...", NULL, flags ) )
-	{
-		if( g_ConnServerName[0] )
-		{
-			ImGui::TextUnformatted( g_ConnServerName );
-			ImGui::Separator();
-		}
-
-		ImGui::TextWrapped( "%s", g_ConnStatusText );
-		ImGui::Spacing();
-		ImGui::ProgressBar( g_ConnProgress, ImVec2( -1.0f, 0.0f ) );
-		ImGui::Spacing();
-
-		float buttonWidth = 100.0f;
-		ImGui::SetCursorPosX( ( ImGui::GetWindowWidth() - buttonWidth ) * 0.5f );
-		if( ImGui::Button( "Cancel", ImVec2( buttonWidth, 0 ) ) )
-		{
-			Cbuf_AddText( "disconnect\n" );
-		}
-	}
-	ImGui::End();
+	ImU32 tl = raised ? CS16_BEVEL_LIGHT : CS16_BEVEL_DARK;
+	ImU32 br = raised ? CS16_BEVEL_DARK : CS16_BEVEL_LIGHT;
+	// Top edge
+	dl->AddLine( ImVec2( mn.x, mn.y ), ImVec2( mx.x - 1, mn.y ), tl );
+	// Left edge
+	dl->AddLine( ImVec2( mn.x, mn.y ), ImVec2( mn.x, mx.y - 1 ), tl );
+	// Bottom edge
+	dl->AddLine( ImVec2( mn.x, mx.y - 1 ), ImVec2( mx.x - 1, mx.y - 1 ), br );
+	// Right edge
+	dl->AddLine( ImVec2( mx.x - 1, mn.y ), ImVec2( mx.x - 1, mx.y - 1 ), br );
 }
 
-// ---- Console window ----
-static void DrawConsole( void )
+static void DrawCS16Separator( void )
 {
-	if( !g_ConsoleVisible )
-		return;
-
-	ImGuiIO &io = ImGui::GetIO();
-	float consoleHeight = io.DisplaySize.y * 0.5f;
-
-	// Position at top of screen, full width
-	ImGui::SetNextWindowPos( ImVec2( 0, 0 ), ImGuiCond_Always );
-	ImGui::SetNextWindowSize( ImVec2( io.DisplaySize.x, consoleHeight ), ImGuiCond_Always );
-
-	// No title bar, no resize, no move, no scrollbar on main window, no collapse
-	ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
-		| ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse
-		| ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
-
-	// CS 1.6 console background color (dark brownish-grey, semi-transparent)
-	ImGui::PushStyleColor( ImGuiCol_WindowBg, ImVec4( 0.18f, 0.17f, 0.15f, 0.78f ) );
-	ImGui::PushStyleVar( ImGuiStyleVar_WindowBorderSize, 0.0f );
-	ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 8, 4 ) );
-
-	if( ImGui::Begin( "##Console", NULL, flags ) )
-	{
-		// --- Log area (scrollable child) ---
-		float inputHeight = ImGui::GetFrameHeightWithSpacing() + 4.0f;
-		float separatorHeight = 2.0f;
-
-		if( ImGui::BeginChild( "##ConsoleLog", ImVec2( 0, -inputHeight - separatorHeight ), false,
-			ImGuiWindowFlags_HorizontalScrollbar ) )
-		{
-			// Draw console lines in white/light grey
-			ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( 0.91f, 0.91f, 0.91f, 1.0f ) );
-
-			int count = ( g_ConsoleWritePos <= CONSOLE_MAX_LINES ) ? (int)g_ConsoleWritePos : CONSOLE_MAX_LINES;
-			for( int i = 0; i < count; i++ )
-			{
-				int idx;
-				if( g_ConsoleWritePos <= CONSOLE_MAX_LINES )
-					idx = i;
-				else
-					idx = ( g_ConsoleWritePos + i ) % CONSOLE_MAX_LINES;
-				ImGui::TextUnformatted( g_ConsoleLines[idx] );
-			}
-
-			ImGui::PopStyleColor();
-
-			if( g_ConsoleScrollToBottom )
-			{
-				ImGui::SetScrollHereY( 1.0f );
-				g_ConsoleScrollToBottom = false;
-			}
-		}
-		ImGui::EndChild();
-
-		// --- Separator line (orange-brown, CS 1.6 style) ---
-		ImVec2 p = ImGui::GetCursorScreenPos();
-		ImGui::GetWindowDrawList()->AddRectFilled(
-			p, ImVec2( p.x + io.DisplaySize.x, p.y + separatorHeight ),
-			IM_COL32( 124, 91, 40, 255 ) );
-		ImGui::Dummy( ImVec2( 0, separatorHeight ) );
-
-		// --- Input line (green text with ] prompt) ---
-		ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( 0.0f, 1.0f, 0.0f, 1.0f ) );
-		ImGui::PushStyleColor( ImGuiCol_FrameBg, ImVec4( 0, 0, 0, 0 ) ); // transparent input bg
-		ImGui::PushStyleColor( ImGuiCol_FrameBgActive, ImVec4( 0, 0, 0, 0 ) );
-		ImGui::PushStyleColor( ImGuiCol_FrameBgHovered, ImVec4( 0, 0, 0, 0 ) );
-
-		ImGui::Text( "]" );
-		ImGui::SameLine();
-		ImGui::PushItemWidth( -1 );
-
-		ImGuiInputTextFlags inputFlags = ImGuiInputTextFlags_EnterReturnsTrue;
-		if( ImGui::InputText( "##ConInput", g_ConsoleInputBuf, sizeof( g_ConsoleInputBuf ), inputFlags ) )
-		{
-			if( g_ConsoleInputBuf[0] )
-			{
-				char echo[CONSOLE_LINE_LEN];
-				Q_snprintf( echo, sizeof( echo ), "] %s", g_ConsoleInputBuf );
-				int slot = g_ConsoleWritePos % CONSOLE_MAX_LINES;
-				Q_strncpy( g_ConsoleLines[slot], echo, CONSOLE_LINE_LEN );
-				g_ConsoleWritePos++;
-				g_ConsoleScrollToBottom = true;
-
-				Cbuf_AddTextf( "%s\n", g_ConsoleInputBuf );
-				g_ConsoleInputBuf[0] = '\0';
-			}
-			ImGui::SetKeyboardFocusHere( -1 );
-		}
-
-		// Auto-focus the input field when console is first opened
-		if( ImGui::IsWindowAppearing() )
-			ImGui::SetKeyboardFocusHere( -1 );
-
-		ImGui::PopItemWidth();
-		ImGui::PopStyleColor( 4 ); // text + 3 frame colors
-	}
-	ImGui::End();
-
-	ImGui::PopStyleVar( 2 );
-	ImGui::PopStyleColor();
+	ImDrawList *dl = ImGui::GetWindowDrawList();
+	ImVec2 pos = ImGui::GetCursorScreenPos();
+	float width = ImGui::GetContentRegionAvail().x;
+	dl->AddLine( ImVec2( pos.x, pos.y ), ImVec2( pos.x + width, pos.y ), CS16_BEVEL_DARK );
+	dl->AddLine( ImVec2( pos.x, pos.y + 1 ), ImVec2( pos.x + width, pos.y + 1 ), CS16_BEVEL_LIGHT );
+	ImGui::Dummy( ImVec2( 0, 4 ) );
 }
+
+// ============================================================================
+// Beveled Widget Wrappers
+// ============================================================================
+
+static bool CS16Button( const char *label, ImVec2 size = ImVec2( 0, 0 ) )
+{
+	bool pressed = ImGui::Button( label, size );
+	DrawBeveledRect( ImGui::GetWindowDrawList(),
+		ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+		!ImGui::IsItemActive() );
+	return pressed;
+}
+
+static bool CS16Checkbox( const char *label, bool *v )
+{
+	bool changed = ImGui::Checkbox( label, v );
+	DrawBeveledRect( ImGui::GetWindowDrawList(),
+		ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), false );
+	return changed;
+}
+
+static bool CS16SliderFloat( const char *label, float *v, float v_min, float v_max, const char *format = "%.2f" )
+{
+	bool changed = ImGui::SliderFloat( label, v, v_min, v_max, format );
+	DrawBeveledRect( ImGui::GetWindowDrawList(),
+		ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), false );
+	return changed;
+}
+
+static bool CS16InputText( const char *label, char *buf, int buf_size, ImGuiInputTextFlags flags = 0 )
+{
+	bool changed = ImGui::InputText( label, buf, (size_t)buf_size, flags );
+	DrawBeveledRect( ImGui::GetWindowDrawList(),
+		ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), false );
+	return changed;
+}
+
+static bool CS16Combo( const char *label, int *current_item, const char *items_separated_by_zeros )
+{
+	bool changed = ImGui::Combo( label, current_item, items_separated_by_zeros );
+	DrawBeveledRect( ImGui::GetWindowDrawList(),
+		ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), false );
+	return changed;
+}
+
+// ============================================================================
+// Tab Drawing Functions
+// ============================================================================
 
 static void DrawTabGame( void )
 {
+	ImGui::TextUnformatted( "Player Name:" );
+	CS16InputText( "##PlayerName", g_PlayerName, sizeof( g_PlayerName ) );
+
+	DrawCS16Separator();
+
 	bool cross = ( g_Crosshair != 0 );
-	if( ImGui::Checkbox( "Crosshair", &cross ) )
+	if( CS16Checkbox( "Enable Crosshair", &cross ) )
 		g_Crosshair = cross ? 1 : 0;
 
-	bool autoswitch = ( g_AutoSwitch != 0 );
-	if( ImGui::Checkbox( "Auto weapon switch", &autoswitch ) )
-		g_AutoSwitch = autoswitch ? 1 : 0;
+	if( g_Crosshair )
+	{
+		CS16Combo( "Crosshair Size", &g_CrosshairSize, "Small\0Medium\0Large\0" );
+		CS16Combo( "Crosshair Color", &g_CrosshairColor, "Green\0Red\0Blue\0Yellow\0Cyan\0" );
+	}
 
-	ImGui::Separator();
-	ImGui::TextUnformatted( "HUD Color" );
-	ImGui::TextDisabled( "(Change via hud_color cvar)" );
+	DrawCS16Separator();
+
+	bool autoswitch = ( g_AutoSwitch != 0 );
+	if( CS16Checkbox( "Auto weapon switch", &autoswitch ) )
+		g_AutoSwitch = autoswitch ? 1 : 0;
 }
 
 static void DrawTabKeyboard( void )
 {
-	ImGui::TextWrapped(
-		"Key bindings can be configured via the console.\n"
-		"Use 'bind <key> <command>' to set bindings.\n"
-		"Example: bind \"F5\" \"slayer_menu\""
-	);
+	ImGui::TextUnformatted( "Key Bindings:" );
+	DrawCS16Separator();
+
+	float childH = ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() - 8.0f;
+	if( childH < 100.0f ) childH = 100.0f;
+
+	if( ImGui::BeginChild( "##KeyBindList", ImVec2( 0, childH ), true ) )
+	{
+		DrawBeveledRect( ImGui::GetWindowDrawList(),
+			ImGui::GetWindowPos(),
+			ImVec2( ImGui::GetWindowPos().x + ImGui::GetWindowSize().x,
+			         ImGui::GetWindowPos().y + ImGui::GetWindowSize().y ), false );
+
+		if( ImGui::BeginTable( "##KeyTable", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH ) )
+		{
+			ImGui::TableSetupColumn( "Action", ImGuiTableColumnFlags_WidthStretch );
+			ImGui::TableSetupColumn( "Key", ImGuiTableColumnFlags_WidthFixed, 100.0f );
+			ImGui::TableHeadersRow();
+
+			const char *bindings[][2] = {
+				{ "Move Forward", "W" },
+				{ "Move Back", "S" },
+				{ "Move Left", "A" },
+				{ "Move Right", "D" },
+				{ "Jump", "SPACE" },
+				{ "Duck", "CTRL" },
+				{ "Reload", "R" },
+				{ "Use", "E" },
+				{ "Primary Attack", "MOUSE1" },
+				{ "Secondary Attack", "MOUSE2" },
+				{ "Next Weapon", "MWHEELUP" },
+				{ "Prev Weapon", "MWHEELDOWN" },
+				{ "Drop Weapon", "G" },
+				{ "Flashlight", "F" },
+				{ "Spray Logo", "T" },
+			};
+
+			for( int i = 0; i < 15; i++ )
+			{
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex( 0 );
+				ImGui::TextUnformatted( bindings[i][0] );
+				ImGui::TableSetColumnIndex( 1 );
+				ImGui::TextUnformatted( bindings[i][1] );
+			}
+			ImGui::EndTable();
+		}
+	}
+	ImGui::EndChild();
+
+	CS16Button( "Use Defaults" );
 }
 
 static void DrawTabMouse( void )
 {
-	ImGui::SliderFloat( "Sensitivity", &g_Sensitivity, 0.1f, 20.0f, "%.2f" );
-	ImGui::SliderFloat( "m_pitch", &g_Pitch, 0.001f, 0.05f, "%.4f" );
+	CS16SliderFloat( "Sensitivity", &g_Sensitivity, 0.1f, 20.0f, "%.1f" );
+	CS16SliderFloat( "m_pitch", &g_Pitch, 0.001f, 0.05f, "%.4f" );
+
+	DrawCS16Separator();
 
 	bool raw = ( g_RawInput != 0 );
-	if( ImGui::Checkbox( "Raw input", &raw ) )
+	if( CS16Checkbox( "Raw input", &raw ) )
 		g_RawInput = raw ? 1 : 0;
 
 	bool rev = ( g_ReverseMouse != 0 );
-	if( ImGui::Checkbox( "Reverse mouse", &rev ) )
+	if( CS16Checkbox( "Reverse mouse", &rev ) )
 		g_ReverseMouse = rev ? 1 : 0;
+
+	bool filter = ( g_MouseFilter != 0 );
+	if( CS16Checkbox( "Mouse filter", &filter ) )
+		g_MouseFilter = filter ? 1 : 0;
 }
 
 static void DrawTabAudio( void )
 {
-	ImGui::SliderFloat( "Volume", &g_Volume, 0.0f, 1.0f, "%.2f" );
-	ImGui::SliderFloat( "Music Volume", &g_MusicVolume, 0.0f, 1.0f, "%.2f" );
+	CS16SliderFloat( "Volume", &g_Volume, 0.0f, 1.0f, "%.2f" );
+	CS16SliderFloat( "Music Volume", &g_MusicVolume, 0.0f, 1.0f, "%.2f" );
+
+	DrawCS16Separator();
 
 	bool hq = ( g_HQSound != 0 );
-	if( ImGui::Checkbox( "High quality sound", &hq ) )
+	if( CS16Checkbox( "High quality sound", &hq ) )
 		g_HQSound = hq ? 1 : 0;
 
+	bool hw = ( g_HWAccel != 0 );
+	if( CS16Checkbox( "Hardware acceleration", &hw ) )
+		g_HWAccel = hw ? 1 : 0;
+
 	bool surr = ( g_Surround != 0 );
-	if( ImGui::Checkbox( "Surround sound", &surr ) )
+	if( CS16Checkbox( "Surround sound", &surr ) )
 		g_Surround = surr ? 1 : 0;
-
-	ImGui::Separator();
-	ImGui::TextUnformatted( "Voice" );
-
-	bool voice = ( g_VoiceEnable != 0 );
-	if( ImGui::Checkbox( "Enable voice", &voice ) )
-		g_VoiceEnable = voice ? 1 : 0;
 }
 
 static void DrawTabVideo( void )
 {
-	ImGui::SliderFloat( "Brightness / Gamma", &g_Brightness, 0.5f, 3.0f, "%.2f" );
+	static int g_ResolutionIdx = 0;
+	CS16Combo( "Resolution", &g_ResolutionIdx,
+		"640x480\0800x600\01024x768\01152x864\01280x720\01280x960\01280x1024\01366x768\01600x900\01920x1080\0" );
+
+	DrawCS16Separator();
+
+	CS16SliderFloat( "Brightness", &g_Brightness, 0.0f, 3.0f, "%.1f" );
+	CS16SliderFloat( "Gamma", &g_Gamma, 0.5f, 3.0f, "%.1f" );
+
+	DrawCS16Separator();
 
 	bool vsync = ( g_Vsync != 0 );
-	if( ImGui::Checkbox( "VSync", &vsync ) )
+	if( CS16Checkbox( "VSync", &vsync ) )
 		g_Vsync = vsync ? 1 : 0;
+
+	DrawCS16Separator();
+	ImGui::TextDisabled( "Renderer: OpenGL ES 2.0" );
+	ImGui::TextDisabled( "Note: Resolution changes may require restart." );
 }
 
 static void DrawTabVoice( void )
 {
 	bool ve = ( g_VoiceEnable != 0 );
-	if( ImGui::Checkbox( "Enable voice communication", &ve ) )
+	if( CS16Checkbox( "Enable voice communication", &ve ) )
 		g_VoiceEnable = ve ? 1 : 0;
 
-	ImGui::SliderFloat( "Voice scale", &g_VoiceScale, 0.0f, 2.0f, "%.2f" );
+	DrawCS16Separator();
+
+	CS16SliderFloat( "Transmit Volume", &g_VoiceTransmit, 0.0f, 2.0f, "%.2f" );
+	CS16SliderFloat( "Receive Volume", &g_VoiceScale, 0.0f, 2.0f, "%.2f" );
+
+	DrawCS16Separator();
 
 	bool fromfile = ( g_VoiceInputFromFile != 0 );
-	if( ImGui::Checkbox( "Voice input from file", &fromfile ) )
-		g_VoiceInputFromFile = fromfile ? 1 : 0;
+	if( CS16Button( "Test Microphone" ) )
+	{
+		g_VoiceInputFromFile = !g_VoiceInputFromFile;
+	}
+	fromfile = ( g_VoiceInputFromFile != 0 );
+	if( fromfile )
+		ImGui::TextUnformatted( "Testing microphone..." );
 }
+
+// ============================================================================
+// Settings Menu
+// ============================================================================
 
 static void DrawSettingsMenu( void )
 {
 	ImGuiIO &io = ImGui::GetIO();
 
-	// Center the window on screen
 	ImVec2 center( io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f );
 	ImGui::SetNextWindowPos( center, ImGuiCond_Appearing, ImVec2( 0.5f, 0.5f ) );
-	ImGui::SetNextWindowSize( ImVec2( 520, 400 ), ImGuiCond_Appearing );
+	ImGui::SetNextWindowSize( ImVec2( 540, 420 ), ImGuiCond_Appearing );
 
 	ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
 	if( !ImGui::Begin( "Configuration", &g_MenuVisible, flags ) )
 	{
 		ImGui::End();
 		return;
+	}
+
+	// Outer window bevel
+	{
+		ImVec2 wpos = ImGui::GetWindowPos();
+		ImVec2 wsize = ImGui::GetWindowSize();
+		DrawBeveledRect( ImGui::GetWindowDrawList(), wpos,
+			ImVec2( wpos.x + wsize.x, wpos.y + wsize.y ), true );
 	}
 
 	if( ImGui::BeginTabBar( "SettingsTabs" ) )
@@ -460,7 +534,7 @@ static void DrawSettingsMenu( void )
 		ImGui::EndTabBar();
 	}
 
-	ImGui::Separator();
+	DrawCS16Separator();
 
 	// OK / Cancel / Apply buttons
 	float buttonWidth = 80.0f;
@@ -468,23 +542,185 @@ static void DrawSettingsMenu( void )
 	float totalWidth = buttonWidth * 3.0f + spacing * 2.0f;
 	ImGui::SetCursorPosX( ( ImGui::GetWindowWidth() - totalWidth ) * 0.5f );
 
-	if( ImGui::Button( "OK", ImVec2( buttonWidth, 0 ) ) )
+	if( CS16Button( "OK", ImVec2( buttonWidth, 0 ) ) )
 	{
 		ApplySettings();
 		g_MenuVisible = false;
 	}
 	ImGui::SameLine();
-	if( ImGui::Button( "Cancel", ImVec2( buttonWidth, 0 ) ) )
+	if( CS16Button( "Cancel", ImVec2( buttonWidth, 0 ) ) )
 	{
 		g_MenuVisible = false;
 	}
 	ImGui::SameLine();
-	if( ImGui::Button( "Apply", ImVec2( buttonWidth, 0 ) ) )
+	if( CS16Button( "Apply", ImVec2( buttonWidth, 0 ) ) )
 	{
 		ApplySettings();
 	}
 
 	ImGui::End();
+}
+
+// ============================================================================
+// Connection Progress
+// ============================================================================
+
+static void DrawConnectionProgress( void )
+{
+	if( g_ConnProgressState == CONNPROGRESS_NONE )
+		return;
+
+	ImGuiIO &io = ImGui::GetIO();
+	ImVec2 center( io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f );
+	ImGui::SetNextWindowPos( center, ImGuiCond_Always, ImVec2( 0.5f, 0.5f ) );
+
+	float winW = ( 400.0f < io.DisplaySize.x * 0.8f ) ? 400.0f : io.DisplaySize.x * 0.8f;
+	float winH = ( 180.0f < io.DisplaySize.y * 0.5f ) ? 180.0f : io.DisplaySize.y * 0.5f;
+	ImGui::SetNextWindowSize( ImVec2( winW, winH ), ImGuiCond_Always );
+
+	ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
+	if( ImGui::Begin( "Loading...", NULL, flags ) )
+	{
+		// Outer window bevel
+		{
+			ImVec2 wpos = ImGui::GetWindowPos();
+			ImVec2 wsize = ImGui::GetWindowSize();
+			DrawBeveledRect( ImGui::GetWindowDrawList(), wpos,
+				ImVec2( wpos.x + wsize.x, wpos.y + wsize.y ), true );
+		}
+
+		if( g_ConnServerName[0] )
+		{
+			ImGui::TextUnformatted( g_ConnServerName );
+			DrawCS16Separator();
+		}
+
+		ImGui::TextWrapped( "%s", g_ConnStatusText );
+		ImGui::Spacing();
+
+		// Progress bar with sunken bevel
+		ImGui::ProgressBar( g_ConnProgress, ImVec2( -1.0f, 0.0f ) );
+		DrawBeveledRect( ImGui::GetWindowDrawList(),
+			ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), false );
+
+		ImGui::Spacing();
+
+		float buttonWidth = 100.0f;
+		ImGui::SetCursorPosX( ( ImGui::GetWindowWidth() - buttonWidth ) * 0.5f );
+		if( CS16Button( "Cancel", ImVec2( buttonWidth, 0 ) ) )
+		{
+			Cbuf_AddText( "disconnect\n" );
+		}
+	}
+	ImGui::End();
+}
+
+// ============================================================================
+// Console
+// ============================================================================
+
+static void DrawConsole( void )
+{
+	if( !g_ConsoleVisible )
+		return;
+
+	ImGuiIO &io = ImGui::GetIO();
+	float consoleHeight = io.DisplaySize.y * 0.5f;
+
+	ImGui::SetNextWindowPos( ImVec2( 0, 0 ), ImGuiCond_Always );
+	ImGui::SetNextWindowSize( ImVec2( io.DisplaySize.x, consoleHeight ), ImGuiCond_Always );
+
+	ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+		| ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse
+		| ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+
+	// CS 1.6 console background color (dark brownish-grey, semi-transparent)
+	ImGui::PushStyleColor( ImGuiCol_WindowBg, ImVec4( 0.18f, 0.17f, 0.15f, 0.78f ) );
+	ImGui::PushStyleVar( ImGuiStyleVar_WindowBorderSize, 0.0f );
+	ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 8, 4 ) );
+
+	if( ImGui::Begin( "##Console", NULL, flags ) )
+	{
+		// --- Log area (scrollable child) ---
+		float inputHeight = ImGui::GetFrameHeightWithSpacing() + 4.0f;
+		float separatorHeight = 2.0f;
+
+		if( ImGui::BeginChild( "##ConsoleLog", ImVec2( 0, -inputHeight - separatorHeight ), false,
+			ImGuiWindowFlags_HorizontalScrollbar ) )
+		{
+			ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( 0.91f, 0.91f, 0.91f, 1.0f ) );
+
+			int count = ( g_ConsoleWritePos <= CONSOLE_MAX_LINES ) ? (int)g_ConsoleWritePos : CONSOLE_MAX_LINES;
+			for( int i = 0; i < count; i++ )
+			{
+				int idx;
+				if( g_ConsoleWritePos <= CONSOLE_MAX_LINES )
+					idx = i;
+				else
+					idx = ( g_ConsoleWritePos + i ) % CONSOLE_MAX_LINES;
+				ImGui::TextUnformatted( g_ConsoleLines[idx] );
+			}
+
+			ImGui::PopStyleColor();
+
+			if( g_ConsoleScrollToBottom )
+			{
+				ImGui::SetScrollHereY( 1.0f );
+				g_ConsoleScrollToBottom = false;
+			}
+		}
+		ImGui::EndChild();
+
+		// --- Separator line (orange-brown, CS 1.6 style) ---
+		ImVec2 p = ImGui::GetCursorScreenPos();
+		ImGui::GetWindowDrawList()->AddRectFilled(
+			p, ImVec2( p.x + io.DisplaySize.x, p.y + separatorHeight ),
+			IM_COL32( 124, 91, 40, 255 ) );
+		ImGui::Dummy( ImVec2( 0, separatorHeight ) );
+
+		// --- Input line (green text with ] prompt) ---
+		ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( 0.0f, 1.0f, 0.0f, 1.0f ) );
+		ImGui::PushStyleColor( ImGuiCol_FrameBg, ImVec4( 0, 0, 0, 0 ) );
+		ImGui::PushStyleColor( ImGuiCol_FrameBgActive, ImVec4( 0, 0, 0, 0 ) );
+		ImGui::PushStyleColor( ImGuiCol_FrameBgHovered, ImVec4( 0, 0, 0, 0 ) );
+
+		ImGui::Text( "]" );
+		ImGui::SameLine();
+
+		ImGui::PushItemWidth( -1 );
+
+		ImGuiInputTextFlags inputFlags = ImGuiInputTextFlags_EnterReturnsTrue;
+		if( ImGui::InputText( "##ConInput", g_ConsoleInputBuf, sizeof( g_ConsoleInputBuf ), inputFlags ) )
+		{
+			if( g_ConsoleInputBuf[0] )
+			{
+				char echo[CONSOLE_LINE_LEN];
+				Q_snprintf( echo, sizeof( echo ), "] %s", g_ConsoleInputBuf );
+				int slot = g_ConsoleWritePos % CONSOLE_MAX_LINES;
+				Q_strncpy( g_ConsoleLines[slot], echo, CONSOLE_LINE_LEN );
+				g_ConsoleWritePos++;
+				g_ConsoleScrollToBottom = true;
+
+				Cbuf_AddTextf( "%s\n", g_ConsoleInputBuf );
+				g_ConsoleInputBuf[0] = '\0';
+			}
+			ImGui::SetKeyboardFocusHere( -1 );
+		}
+
+		// Draw subtle sunken bevel around the input field
+		DrawBeveledRect( ImGui::GetWindowDrawList(),
+			ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), false );
+
+		if( ImGui::IsWindowAppearing() )
+			ImGui::SetKeyboardFocusHere( -1 );
+
+		ImGui::PopItemWidth();
+		ImGui::PopStyleColor( 4 );
+	}
+	ImGui::End();
+
+	ImGui::PopStyleVar( 2 );
+	ImGui::PopStyleColor();
 }
 
 // ============================================================================
@@ -521,7 +757,7 @@ void Slayer_ImGui_Init( void )
 	ImGui::CreateContext();
 
 	ImGuiIO &io = ImGui::GetIO();
-	io.IniFilename = NULL; // Disable imgui.ini file
+	io.IniFilename = NULL;
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
 	SetupCS16Style();
@@ -554,8 +790,6 @@ void Slayer_ImGui_Frame( void )
 	if( !g_Initialized )
 		return;
 
-	// Lazy GL initialization: create shaders/textures/buffers on first frame
-	// when the GL context is guaranteed to exist (V_PostRender is running).
 	if( !g_GLInitialized )
 	{
 		if( !ImGui_ImplXashGLES_Init() )
@@ -576,7 +810,6 @@ void Slayer_ImGui_Frame( void )
 		g_ConnServerName[0] = '\0';
 	}
 
-	// If nothing to draw, skip frame
 	if( !g_MenuVisible && !g_ConsoleVisible && g_ConnProgressState == CONNPROGRESS_NONE )
 		return;
 
@@ -596,7 +829,6 @@ void Slayer_ImGui_Frame( void )
 	ImGui::Render();
 	ImGui_ImplXashGLES_RenderDrawData( ImGui::GetDrawData() );
 
-	// Tell Android to show/hide soft keyboard based on ImGui text input state
 	{
 		ImGuiIO &ioPost = ImGui::GetIO();
 		Platform_EnableTextInput( ioPost.WantTextInput ? 1 : 0 );
@@ -608,33 +840,29 @@ int Slayer_ImGui_TouchEvent( int type, int fingerID, float x, float y, float dx,
 	if( !g_Initialized )
 		return 0;
 
-	// Consume input when any ImGui window is visible
 	if( !g_MenuVisible && !g_ConsoleVisible && g_ConnProgressState == CONNPROGRESS_NONE )
 		return 0;
 
 	ImGuiIO &io = ImGui::GetIO();
 
-	// Convert normalized coords (0..1) to display pixels
 	float px = x * io.DisplaySize.x;
 	float py = y * io.DisplaySize.y;
 
-	// type: 0 = down, 1 = up, 2 = move (matching touchEventType enum)
 	switch( type )
 	{
-	case 0: // finger down
+	case 0:
 		io.AddMousePosEvent( px, py );
 		io.AddMouseButtonEvent( 0, true );
 		break;
-	case 1: // finger up
+	case 1:
 		io.AddMousePosEvent( px, py );
 		io.AddMouseButtonEvent( 0, false );
 		break;
-	case 2: // finger move
+	case 2:
 		io.AddMousePosEvent( px, py );
 		break;
 	}
 
-	// Always consume touch events when any ImGui window is visible
 	return 1;
 }
 
@@ -643,13 +871,11 @@ int Slayer_ImGui_KeyEvent( int key, int down )
 	if( !g_Initialized )
 		return 0;
 
-	// Don't process keys when no ImGui window is visible
 	if( !g_MenuVisible && !g_ConsoleVisible && g_ConnProgressState == CONNPROGRESS_NONE )
 		return 0;
 
 	ImGuiIO &io = ImGui::GetIO();
 
-	// Forward basic key events to ImGui
 	ImGuiKey imgui_key = ImGuiKey_None;
 	switch( key )
 	{
@@ -750,7 +976,6 @@ void Slayer_ImGui_ConsolePrint( const char *text )
 	if( !text || !text[0] )
 		return;
 
-	// Split input on newlines and add each line to ring buffer
 	for( const char *p = text; *p; p++ )
 	{
 		if( *p == '\n' || g_ConsoleLineBufPos >= CONSOLE_LINE_LEN - 1 )
