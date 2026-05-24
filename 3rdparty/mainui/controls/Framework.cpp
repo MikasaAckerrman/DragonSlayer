@@ -21,6 +21,48 @@ GNU General Public License for more details.
 #define UI_BANNER_WIDTH		736
 #define UI_BANNER_HEIGHT		128
 
+// CS 1.6 PC-style chrome (slayer3d): geometry in 1024x768 virtual coords.
+// Left navigation strip sits behind the picbutton column. Buttons are at
+// hoffset ~= 112 (Main.cpp) and 72 (Framework default), so the strip
+// runs from x=40 to x=300 to comfortably enclose both layouts.
+#define CS16_NAV_X			40
+#define CS16_NAV_Y			220
+#define CS16_NAV_W			260
+#define CS16_NAV_H			500
+#define CS16_DIVIDER_Y		( UI_BANNER_POSY + UI_BANNER_HEIGHT + 12 )
+#define CS16_DIVIDER_X		UI_BANNER_POSX
+#define CS16_DIVIDER_W		UI_BANNER_WIDTH
+#define CS16_DIVIDER_H		2
+// Yellow accent stripe along the right edge of the navigation strip.
+#define CS16_NAV_ACCENT_W	2
+
+static void CS16_DrawChrome( void )
+{
+	// Left navigation panel — semi-transparent dark slab.
+	UI_FillRect(
+		uiStatic.xOffset + CS16_NAV_X * uiStatic.scaleX,
+		uiStatic.yOffset + CS16_NAV_Y * uiStatic.scaleY,
+		CS16_NAV_W * uiStatic.scaleX,
+		CS16_NAV_H * uiStatic.scaleY,
+		0xC0101010 );
+
+	// Yellow vertical accent on the right edge of the nav slab.
+	UI_FillRect(
+		uiStatic.xOffset + ( CS16_NAV_X + CS16_NAV_W - CS16_NAV_ACCENT_W ) * uiStatic.scaleX,
+		uiStatic.yOffset + CS16_NAV_Y * uiStatic.scaleY,
+		CS16_NAV_ACCENT_W * uiStatic.scaleX,
+		CS16_NAV_H * uiStatic.scaleY,
+		uiPromptTextColor );
+
+	// Header divider line under the banner.
+	UI_FillRect(
+		uiStatic.xOffset + CS16_DIVIDER_X * uiStatic.scaleX,
+		uiStatic.yOffset + CS16_DIVIDER_Y * uiStatic.scaleY,
+		CS16_DIVIDER_W * uiStatic.scaleX,
+		CS16_DIVIDER_H * uiStatic.scaleY,
+		uiPromptTextColor );
+}
+
 CMenuFramework::CMenuFramework( const char *name ) : BaseClass( name )
 {
 	memset( m_apBtns, 0, sizeof( m_apBtns ) );
@@ -48,6 +90,9 @@ void CMenuFramework::Draw()
 	static int statusFadeTime;
 	static CMenuBaseItem *lastItem;
 	CMenuBaseItem *item;
+
+	// CS 1.6 PC reskin (slayer3d): chrome behind everything else.
+	CS16_DrawChrome();
 
 	BaseClass::Draw();
 
