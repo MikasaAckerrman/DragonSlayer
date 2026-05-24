@@ -893,6 +893,16 @@ int Slayer_ImGui_KeyEvent( int key, int down )
 
 	ImGuiIO &io = ImGui::GetIO();
 
+	// Tilde/backtick toggles console regardless of ImGui keyboard capture.
+	// Without this, WantCaptureKeyboard blocks the tilde key from reaching
+	// the hardcoded handler in Key_Event, making it impossible to close the
+	// console once opened.
+	if( ( key == '`' || key == '~' ) && down )
+	{
+		Slayer_ImGui_ToggleConsole();
+		return 1; // consumed -- don't let it reach Key_Event's tilde handler too
+	}
+
 	ImGuiKey imgui_key = ImGuiKey_None;
 	switch( key )
 	{
@@ -929,6 +939,9 @@ void Slayer_ImGui_Toggle( void )
 
 void Slayer_ImGui_ToggleConsole( void )
 {
+	if( !host.allow_console )
+		return;
+
 	g_ConsoleVisible = !g_ConsoleVisible;
 	if( g_ConsoleVisible )
 		g_ConsoleScrollToBottom = true;
