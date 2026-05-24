@@ -70,6 +70,7 @@ GNU General Public License for more details.
 
 #include "common.h"
 #include "client.h"
+#include "studio.h"
 #include "xash3d_mathlib.h"
 #include "cl_grenade_tumble_slayer.h"
 
@@ -225,6 +226,8 @@ static void Slayer_GT_AxisAngleToEngineEuler( const vec3_t axis, float theta, ve
 // We mutate ent->origin AFTER the speed estimator has captured the original
 // world position into gt->last_origin, so the per-frame velocity used for
 // rotation rate is unaffected.
+#define GT_DIAG_MAX_MODELS 8
+
 static void Slayer_GT_CompensatePivot( struct cl_entity_s *ent )
 {
 	vec3_t    L_center, rotated_L, shift;
@@ -247,6 +250,52 @@ static void Slayer_GT_CompensatePivot( struct cl_entity_s *ent )
 
 	VectorSubtract( rotated_L, L_center, shift );
 	VectorSubtract( ent->origin, shift, ent->origin );
+
+	// Diagnostic one-shot print (only when cvar >= 2)
+	if( slayer_grenade_pivot_fix.value >= 2.0f )
+	{
+		static char diag_printed_models[GT_DIAG_MAX_MODELS][MAX_QPATH];
+		static int  diag_printed_count = 0;
+		int         i;
+		qboolean    already_printed = false;
+
+		for( i = 0; i < diag_printed_count; i++ )
+		{
+			if( !Q_strcmp( diag_printed_models[i], ent->model->name ))
+			{
+				already_printed = true;
+				break;
+			}
+		}
+
+		if( !already_printed )
+		{
+			studiohdr_t   *phdr;
+			mstudiobone_t *pbones;
+
+			if( diag_printed_count < GT_DIAG_MAX_MODELS )
+			{
+				Q_strncpy( diag_printed_models[diag_printed_count], ent->model->name, MAX_QPATH );
+				diag_printed_count++;
+			}
+
+			Con_Printf( "[SlayerGT] model=%s mins=(%.1f %.1f %.1f) maxs=(%.1f %.1f %.1f) L_center=(%.1f %.1f %.1f) shift=(%.1f %.1f %.1f)\n",
+				ent->model->name,
+				ent->model->mins[0], ent->model->mins[1], ent->model->mins[2],
+				ent->model->maxs[0], ent->model->maxs[1], ent->model->maxs[2],
+				L_center[0], L_center[1], L_center[2],
+				shift[0], shift[1], shift[2] );
+
+			phdr = (studiohdr_t *)Mod_StudioExtradata( ent->model );
+			if( phdr && phdr->numbones > 0 )
+			{
+				pbones = (mstudiobone_t *)((byte *)phdr + phdr->boneindex);
+				Con_Printf( "[SlayerGT] bone[0] \"%s\" pos=(%.1f %.1f %.1f)\n",
+					pbones[0].name,
+					pbones[0].value[0], pbones[0].value[1], pbones[0].value[2] );
+			}
+		}
+	}
 }
 
 // =============================================================================
