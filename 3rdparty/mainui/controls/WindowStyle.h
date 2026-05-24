@@ -57,9 +57,18 @@ namespace WndStyle
 
 	// ============================================================
 	// Helper: scale a virtual-coord value to current screen
+	// Enforces minimum touch target size (≥44dp ≈ 28 virtual px)
 	// ============================================================
 	inline int ScaleY( int v ) { return (int)( v * uiStatic.scaleY ); }
 	inline int ScaleX( int v ) { return (int)( v * uiStatic.scaleX ); }
+
+	// Scale with touch-minimum enforcement
+	inline int ScaleYTouch( int v )
+	{
+		int scaled = (int)( v * uiStatic.scaleY );
+		int minPx = (int)( TouchMinTarget * uiStatic.scaleY );
+		return scaled > minPx ? scaled : minPx;
+	}
 
 	// ============================================================
 	// Drawing helpers (inline, zero overhead)

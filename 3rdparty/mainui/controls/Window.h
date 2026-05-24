@@ -60,13 +60,18 @@ private:
 	const char *m_szIconPath;
 
 	bool m_bTitleDrag;
+	bool m_bDragStarted; // true once threshold exceeded
 	Point m_dragOffset;
+	Point m_dragStartPos; // cursor pos at mousedown (for threshold)
 	bool m_bCloseHover;
 
 	// Scaled metrics (recomputed each frame)
 	int m_iTitleBarH;
 	int m_iCloseBtnSize;
 	int m_iBorderW;
+
+	// Touch drag threshold (pixels² to avoid accidental drag on tap)
+	static const int DRAG_THRESHOLD_SQ = 64; // 8px movement
 };
 
 #endif // MENUWINDOW_H

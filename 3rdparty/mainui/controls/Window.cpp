@@ -19,8 +19,10 @@ CMenuWindow::CMenuWindow( const char *title, CWindowStack *pStack )
 	m_szTitle = title;
 	m_szIconPath = NULL;
 	m_bTitleDrag = false;
+	m_bDragStarted = false;
 	m_bCloseHover = false;
 	m_dragOffset = Point( 0, 0 );
+	m_dragStartPos = Point( 0, 0 );
 
 	bAllowDrag = false; // we handle drag ourselves via title bar only
 
@@ -42,19 +44,35 @@ Point CMenuWindow::GetPositionOffset() const
 // ---------------------------------------------------------------
 void CMenuWindow::Draw()
 {
-	// Scale metrics
-	m_iTitleBarH = WndStyle::ScaleY( WndStyle::TitleBarHeight );
-	m_iCloseBtnSize = WndStyle::ScaleY( WndStyle::CloseBtnSize );
+	// Scale metrics (touch-friendly minimums)
+	m_iTitleBarH = WndStyle::ScaleYTouch( WndStyle::TitleBarHeight );
+	m_iCloseBtnSize = WndStyle::ScaleYTouch( WndStyle::CloseBtnSize );
 	m_iBorderW = WndStyle::BorderWidth;
 
-	// Title-bar drag
+	// Title-bar drag with touch threshold
 	if( m_bTitleDrag )
 	{
-		m_scPos.x += uiStatic.cursorX - m_dragOffset.x;
-		m_scPos.y += uiStatic.cursorY - m_dragOffset.y;
-		m_dragOffset.x = uiStatic.cursorX;
-		m_dragOffset.y = uiStatic.cursorY;
-		CalcItemsPositions();
+		if( !m_bDragStarted )
+		{
+			// Check if movement exceeds threshold
+			int dx = uiStatic.cursorX - m_dragStartPos.x;
+			int dy = uiStatic.cursorY - m_dragStartPos.y;
+			if( dx * dx + dy * dy >= DRAG_THRESHOLD_SQ )
+			{
+				m_bDragStarted = true;
+				m_dragOffset.x = uiStatic.cursorX;
+				m_dragOffset.y = uiStatic.cursorY;
+			}
+		}
+
+		if( m_bDragStarted )
+		{
+			m_scPos.x += uiStatic.cursorX - m_dragOffset.x;
+			m_scPos.y += uiStatic.cursorY - m_dragOffset.y;
+			m_dragOffset.x = uiStatic.cursorX;
+			m_dragOffset.y = uiStatic.cursorY;
+			CalcItemsPositions();
+		}
 	}
 
 	m_bCloseHover = IsCursorOnCloseBtn();
@@ -171,7 +189,14 @@ void CMenuWindow::TitleBarDragDrop( bool down )
 	m_bTitleDrag = down;
 	if( down )
 	{
+		m_bDragStarted = false;
+		m_dragStartPos.x = uiStatic.cursorX;
+		m_dragStartPos.y = uiStatic.cursorY;
 		m_dragOffset.x = uiStatic.cursorX;
 		m_dragOffset.y = uiStatic.cursorY;
+	}
+	else
+	{
+		m_bDragStarted = false;
 	}
 }
