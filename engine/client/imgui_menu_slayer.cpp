@@ -17,6 +17,7 @@ extern "C"
 #include "imgui.h"
 #include "imgui_impl_xash_gles.h"
 #include "imgui_menu_slayer.h"
+#include "cl_grenade_tumble_slayer.h"
 
 // ============================================================================
 // CS 1.6 Bevel Colors
@@ -716,6 +717,51 @@ static void DrawConsole( void )
 }
 
 // ============================================================================
+// Grenade Tumble Diagnostic Overlay
+// ============================================================================
+
+static void DrawGrenadeDiagOverlay( void )
+{
+	ImGuiIO &io = ImGui::GetIO();
+
+	// Anchor to bottom-right corner with some padding
+	float pad = 10.0f;
+	ImGui::SetNextWindowPos( ImVec2( io.DisplaySize.x - pad, io.DisplaySize.y - pad ),
+		ImGuiCond_Always, ImVec2( 1.0f, 1.0f ) );
+
+	ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+		| ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs
+		| ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
+
+	ImGui::PushStyleColor( ImGuiCol_WindowBg, ImVec4( 0.0f, 0.0f, 0.0f, 0.65f ) );
+	ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 6, 4 ) );
+
+	if( ImGui::Begin( "##GT_Diag", NULL, flags ) )
+	{
+		ImGui::TextColored( ImVec4( 0.0f, 1.0f, 0.5f, 1.0f ),
+			"GT Diag: %d checked, %d non-grenade, %d active",
+			g_GT_DiagOverlay.calls_this_frame,
+			g_GT_DiagOverlay.filtered_out,
+			g_GT_DiagOverlay.active_count );
+
+		for( int i = 0; i < g_GT_DiagOverlay.active_count && i < GT_DIAG_OVERLAY_MAX; i++ )
+		{
+			ImGui::TextColored( ImVec4( 0.8f, 0.8f, 0.8f, 1.0f ),
+				"idx=%d model=%s speed=%.0f rate=%.0f deg=%.0f",
+				g_GT_DiagOverlay.entries[i].ent_index,
+				g_GT_DiagOverlay.entries[i].model_name,
+				g_GT_DiagOverlay.entries[i].speed,
+				g_GT_DiagOverlay.entries[i].rate,
+				g_GT_DiagOverlay.entries[i].accum_deg );
+		}
+	}
+	ImGui::End();
+
+	ImGui::PopStyleVar();
+	ImGui::PopStyleColor();
+}
+
+// ============================================================================
 // Console command callbacks
 // ============================================================================
 
@@ -827,7 +873,14 @@ void Slayer_ImGui_Frame( void )
 	if( refState.width <= 0 || refState.height <= 0 )
 		return;
 
-	if( !g_MenuVisible && !g_ConsoleVisible && g_ConnProgressState == CONNPROGRESS_NONE )
+	// Reset per-frame grenade diagnostics
+	Slayer_GrenadeTumble_DiagReset();
+
+	// Check if the diagnostic overlay should be active
+	float pivot_fix_val = Cvar_VariableValue( "slayer_grenade_pivot_fix" );
+	bool diag_active = ( pivot_fix_val >= 2.0f );
+
+	if( !g_MenuVisible && !g_ConsoleVisible && g_ConnProgressState == CONNPROGRESS_NONE && !diag_active )
 		return;
 
 	ImGuiIO &io = ImGui::GetIO();
@@ -842,6 +895,9 @@ void Slayer_ImGui_Frame( void )
 
 	if( g_MenuVisible )
 		DrawSettingsMenu();
+
+	if( diag_active )
+		DrawGrenadeDiagOverlay();
 
 	ImGui::Render();
 	ImGui_ImplXashGLES_RenderDrawData( ImGui::GetDrawData() );

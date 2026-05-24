@@ -15,6 +15,10 @@ GNU General Public License for more details.
 #ifndef CL_GRENADE_TUMBLE_SLAYER_H
 #define CL_GRENADE_TUMBLE_SLAYER_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct cl_entity_s;
 
 // Register cvars. Called once from cl_view_slayer.c.
@@ -24,5 +28,32 @@ void Slayer_GrenadeTumble_Init( void );
 // velocity. Called from CL_AddVisibleEntity for each visible entity; the
 // function is a no-op for non-grenade models or when the cvar is disabled.
 void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent );
+
+// Reset per-frame diagnostic counters (called from ImGui frame start)
+void Slayer_GrenadeTumble_DiagReset( void );
+
+// Real-time diagnostic overlay data (updated by Slayer_GrenadeTumble_Apply)
+#define GT_DIAG_OVERLAY_MAX 8
+
+typedef struct
+{
+	int    active_count;
+	struct {
+		char   model_name[64];
+		float  speed;
+		float  rate;
+		float  accum_deg;
+		float  origin[3];
+		int    ent_index;
+	} entries[GT_DIAG_OVERLAY_MAX];
+	int    calls_this_frame;
+	int    filtered_out;
+} gt_diag_overlay_t;
+
+extern gt_diag_overlay_t g_GT_DiagOverlay;
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // CL_GRENADE_TUMBLE_SLAYER_H
