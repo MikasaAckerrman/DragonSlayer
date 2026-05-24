@@ -302,11 +302,20 @@ void CMenuSettings::_Init()
 	// ===== Bottom button bar (OK / Cancel / Apply) =====
 	int btnY = 500 - 42;
 	int btnW = 90;
-	int btnH = 32;
+	int btnH = 28;
 	m_btnOK.SetNameAndStatus( "OK", "Apply and close" );
 	m_btnOK.SetCoord( contentW - btnW * 3 - 30, btnY );
 	m_btnOK.size.w = btnW;
 	m_btnOK.size.h = btnH;
+	m_btnOK.bDrawStroke = true;
+	m_btnOK.colorStroke = 0xFF44584C;
+	m_btnOK.iStrokeWidth = 1;
+	m_btnOK.colorBase = 0xFF2D2B2E;
+	m_btnOK.colorFocus = 0xFF383638;
+	m_btnOK.eFocusAnimation = QM_HIGHLIGHTIFFOCUS;
+	m_btnOK.eTextAlignment = QM_CENTER;
+	m_btnOK.bEnableTransitions = false;
+	m_btnOK.bPulse = false;
 	m_btnOK.onReleased = VoidCb( &CMenuSettings::OnOK );
 	AddItem( m_btnOK );
 
@@ -314,6 +323,15 @@ void CMenuSettings::_Init()
 	m_btnCancel.SetCoord( contentW - btnW * 2 - 20, btnY );
 	m_btnCancel.size.w = btnW;
 	m_btnCancel.size.h = btnH;
+	m_btnCancel.bDrawStroke = true;
+	m_btnCancel.colorStroke = 0xFF44584C;
+	m_btnCancel.iStrokeWidth = 1;
+	m_btnCancel.colorBase = 0xFF2D2B2E;
+	m_btnCancel.colorFocus = 0xFF383638;
+	m_btnCancel.eFocusAnimation = QM_HIGHLIGHTIFFOCUS;
+	m_btnCancel.eTextAlignment = QM_CENTER;
+	m_btnCancel.bEnableTransitions = false;
+	m_btnCancel.bPulse = false;
 	m_btnCancel.onReleased = VoidCb( &CMenuSettings::OnCancel );
 	AddItem( m_btnCancel );
 
@@ -321,6 +339,15 @@ void CMenuSettings::_Init()
 	m_btnApply.SetCoord( contentW - btnW - 10, btnY );
 	m_btnApply.size.w = btnW;
 	m_btnApply.size.h = btnH;
+	m_btnApply.bDrawStroke = true;
+	m_btnApply.colorStroke = 0xFF44584C;
+	m_btnApply.iStrokeWidth = 1;
+	m_btnApply.colorBase = 0xFF2D2B2E;
+	m_btnApply.colorFocus = 0xFF383638;
+	m_btnApply.eFocusAnimation = QM_HIGHLIGHTIFFOCUS;
+	m_btnApply.eTextAlignment = QM_CENTER;
+	m_btnApply.bEnableTransitions = false;
+	m_btnApply.bPulse = false;
 	m_btnApply.onReleased = VoidCb( &CMenuSettings::OnApply );
 	AddItem( m_btnApply );
 }

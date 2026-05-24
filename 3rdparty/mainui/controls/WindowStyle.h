@@ -18,30 +18,30 @@ the Free Software Foundation, either version 3 of the License, or
 namespace WndStyle
 {
 	// Background
-	static const unsigned int BgColor          = 0xCC1E3C1E; // green semi-transparent
-	static const unsigned int BgColorSolid     = 0xFF1E3C1E; // opaque variant
+	static const unsigned int BgColor          = 0xFF2D2B2E; // opaque dark brownish-gray
+	static const unsigned int BgColorSolid     = 0xFF2D2B2E; // same as BgColor
 
 	// Border
-	static const unsigned int BorderColor      = 0xFF3C3C3C; // dark gray
-	static const int          BorderWidth      = 2;
+	static const unsigned int BorderColor      = 0xFF44584C; // olive-green border
+	static const int          BorderWidth      = 1;
 
 	// Title bar
-	static const unsigned int TitleBarColor    = 0xDD2A4A2A;
+	static const unsigned int TitleBarColor    = 0xFF232120; // darker opaque
 	static const unsigned int TitleTextColor   = 0xFFD0D0D0;
 	static const int          TitleBarHeight   = 28; // virtual coords
 
 	// Close button
-	static const unsigned int CloseBtnColor    = 0xFF4444AA; // hover
+	static const unsigned int CloseBtnColor    = 0xFF2222CC; // red hover (ABGR)
 	static const unsigned int CloseTextColor   = 0xFFCCCCCC;
 	static const int          CloseBtnSize     = 24;
 
 	// Tabs
-	static const unsigned int TabActiveColor   = 0xDD2A4A2A;
-	static const unsigned int TabInactiveColor = 0xAA1A2A1A;
-	static const unsigned int TabHoverColor    = 0xCC254525;
-	static const unsigned int TabTextColor     = 0xFFD0D0D0;
-	static const unsigned int TabTextActiveCol = 0xFFFFFFFF;
-	static const unsigned int TabBorderColor   = 0xFF3C3C3C;
+	static const unsigned int TabActiveColor   = 0xFF2D2B2E; // same as BgColor - merges with content
+	static const unsigned int TabInactiveColor = 0xFF1E1C1E; // darker opaque
+	static const unsigned int TabHoverColor    = 0xFF383638; // slightly lighter hover
+	static const unsigned int TabTextColor     = 0xFF909090; // gray text for inactive
+	static const unsigned int TabTextActiveCol = 0xFFFFFFFF; // white for active
+	static const unsigned int TabBorderColor   = 0xFF44584C; // olive border
 	static const int          TabHeight        = 26;
 	static const int          TabMinWidth      = 64;
 	static const int          TabPadH          = 10;
@@ -97,12 +97,16 @@ namespace WndStyle
 		unsigned int textCol = active ? TabTextActiveCol : TabTextColor;
 
 		UI_FillRect( x, y, w, h, bgCol );
-		UI_DrawRectangleExt( x, y, w, h, TabBorderColor, 1,
-			QM_TOP | QM_LEFT | QM_RIGHT | ( !active ? QM_BOTTOM : 0 ) );
+
+		int sides = QM_TOP | QM_LEFT | QM_RIGHT;
+		if( !active )
+			sides |= QM_BOTTOM;
+
+		UI_DrawRectangleExt( x, y, w, h, TabBorderColor, 1, sides );
 
 		int charH = (int)( h * 0.6f );
-		UI_DrawString( uiStatic.hSmallFont, x + TabPadH, y, w - TabPadH * 2,
-			h, label, textCol, charH, QM_CENTER, ETF_SHADOW );
+		UI_DrawString( uiStatic.hDefaultFont, x + TabPadH, y, w - TabPadH * 2,
+			h, label, textCol, charH, QM_LEFT, 0 );
 	}
 
 	// Draw close button

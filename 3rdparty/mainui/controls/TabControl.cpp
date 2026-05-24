@@ -107,8 +107,27 @@ void CMenuTabControl::Draw()
 			i == m_iActiveTab, i == m_iHoverTab, m_tabs[i].label );
 	}
 
-	// Bottom line
-	UI_FillRect( x, y + m_iScaledTabH, availW, 1, WndStyle::TabBorderColor );
+	// Bottom line with gap under active tab
+	if( m_iActiveTab >= 0 && m_iActiveTab < m_iTabCount )
+	{
+		int activeX = m_tabs[m_iActiveTab].renderX;
+		int activeW = m_tabs[m_iActiveTab].renderW;
+
+		// Left segment (before active tab)
+		if( activeX > x )
+			UI_FillRect( x, y + m_iScaledTabH, activeX - x, 1, WndStyle::TabBorderColor );
+
+		// Right segment (after active tab)
+		int rightStart = activeX + activeW;
+		int rightEnd = x + availW;
+		if( rightStart < rightEnd )
+			UI_FillRect( rightStart, y + m_iScaledTabH, rightEnd - rightStart, 1, WndStyle::TabBorderColor );
+	}
+	else
+	{
+		// Fallback: full line if no active tab
+		UI_FillRect( x, y + m_iScaledTabH, availW, 1, WndStyle::TabBorderColor );
+	}
 }
 
 // ---------------------------------------------------------------
