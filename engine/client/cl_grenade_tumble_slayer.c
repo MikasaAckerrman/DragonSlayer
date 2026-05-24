@@ -148,7 +148,12 @@ static void Slayer_GT_InitSlot( grenade_tumble_t *gt, struct cl_entity_s *ent, f
 	VectorNormalize( axis );
 	VectorCopy( axis, gt->avel_dir );
 
-	VectorCopy( ent->curstate.origin, gt->last_origin );
+	// IMPORTANT: read ent->origin (post-interp render position), NOT
+	// ent->curstate.origin (raw snapshot, only updates at server tickrate).
+	// Using curstate.origin here would make speed estimation degenerate
+	// because dt is per-render-frame (~16ms) while curstate.origin only
+	// changes per-snapshot (~50ms) — most frames see delta=0.
+	VectorCopy( ent->origin, gt->last_origin );
 	gt->last_time = now;
 }
 
@@ -218,8 +223,23 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	if( dt > 0.5f )
 		dt = 0.0f; // long pause (loading screen, demo seek): freeze pose
 
-	VectorSubtract( ent->curstate.origin, gt->last_origin, delta );
+	// Use the interpolated render position, not the raw snapshot — see comment
+	// in Slayer_GT_InitSlot for why.
+	VectorSubtract( ent->origin, gt->last_origin, delta );
 	speed = ( dt > 0.0f ) ? ( VectorLength( delta ) / dt ) : 0.0f;
+
+	// Teleport / entity-index reuse guard. If a grenade exploded and the
+	// engine handed the same ent->index to a brand new grenade before our
+	// slot expired, last_origin points to the previous grenade's resting
+	// place and delta is huge. Same thing happens on changelevel and
+	// CL_EntityTeleported events. Treat any impossibly-fast frame as a
+	// reset: reseed the slot at the new origin and skip this frame.
+	if( speed > GT_MAX_SPEED * 2.0f )
+	{
+		Slayer_GT_InitSlot( gt, ent, now );
+		VectorCopy( gt->accum_angles, ent->angles );
+		return;
+	}
 
 	if( speed < GT_REST_SPEED )
 	{
@@ -238,7 +258,7 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 		while( gt->accum_angles[i] < -360.0f ) gt->accum_angles[i] += 360.0f;
 	}
 
-	VectorCopy( ent->curstate.origin, gt->last_origin );
+	VectorCopy( ent->origin, gt->last_origin );
 	gt->last_time = now;
 
 	VectorCopy( gt->accum_angles, ent->angles );
