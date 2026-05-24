@@ -18,6 +18,7 @@ GNU General Public License for more details.
 #include "client.h"
 #include "vgui_draw.h"
 #include "platform/platform.h"
+#include "imgui_menu_slayer.h"
 
 typedef struct
 {
@@ -715,6 +716,9 @@ void GAME_EXPORT Key_Event( int key, int down )
 	if( OSK_KeyEvent( key, down ) )
 		return;
 
+	if( Slayer_ImGui_KeyEvent( key, down ) )
+		return;
+
 	// key was pressed before engine was run
 	if( !keys[key].down && !down )
 		return;
@@ -950,6 +954,10 @@ void CL_CharEvent( int key )
 {
 	// the console key should never be used as a char
 	if( key == '`' || key == '~' ) return;
+
+	// Forward to ImGui if it wants text input
+	if( Slayer_ImGui_CharEvent( key ) )
+		return;
 
 	if( cls.key_dest == key_console && !Con_Visible( ))
 	{

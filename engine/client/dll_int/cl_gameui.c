@@ -41,6 +41,9 @@ void UI_UpdateMenu( float realtime )
 	// don't draw menu over console
 	if( cls.key_dest == key_console ) return;
 
+	// Skip mainui rendering when ImGui menu system is handling the UI
+	if( Slayer_ImGui_IsActive() ) return;
+
 	// if some deferred cmds is waiting
 	if( UI_IsVisible() && !COM_StringEmptyOrNULL( host.deferred_cmd ))
 	{

@@ -19,6 +19,12 @@ int  Slayer_ImGui_TouchEvent( int type, int fingerID, float x, float y, float dx
 int  Slayer_ImGui_KeyEvent( int key, int down );
 void Slayer_ImGui_Toggle( void );
 
+// Returns 1 when any ImGui window is being shown
+int  Slayer_ImGui_IsActive( void );
+
+// Text character input (called from CL_CharEvent)
+int  Slayer_ImGui_CharEvent( int key );
+
 // Connection progress hooks
 void Slayer_ImGui_ConnectionProgress_Connect( const char *server );
 void Slayer_ImGui_ConnectionProgress_Disconnect( void );

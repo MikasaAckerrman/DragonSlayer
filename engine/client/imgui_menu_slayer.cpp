@@ -24,6 +24,7 @@ extern "C"
 // ============================================================================
 
 static bool g_Initialized = false;
+static bool g_GLInitialized = false;
 static bool g_MenuVisible = false;
 
 // --- Connection Progress state ---
@@ -52,7 +53,7 @@ static bool g_ConsoleVisible = false;
 
 static char  g_ConsoleLines[CONSOLE_MAX_LINES][CONSOLE_LINE_LEN];
 static int   g_ConsoleLineCount = 0;
-static int   g_ConsoleWritePos = 0;  // next write slot in ring buffer
+static unsigned int g_ConsoleWritePos = 0;  // next write slot in ring buffer
 static bool  g_ConsoleScrollToBottom = true;
 static char  g_ConsoleInputBuf[512] = "";
 
@@ -263,7 +264,8 @@ static void DrawMainMenu( void )
 		}
 		if( ImGui::Button( "Find Servers", ImVec2( btnWidth, btnHeight ) ) )
 		{
-			Cbuf_AddText( "openserverbrowser\n" );
+			g_ConsoleVisible = true;
+			g_ConsoleScrollToBottom = true;
 		}
 		if( ImGui::Button( "Options", ImVec2( btnWidth, btnHeight ) ) )
 		{
@@ -559,18 +561,11 @@ void Slayer_ImGui_Init( void )
 
 	io.FontGlobalScale = 2.0f;
 
-	if( !ImGui_ImplXashGLES_Init() )
-	{
-		Con_Printf( S_ERROR "Slayer_ImGui_Init: GLES backend init failed\n" );
-		ImGui::DestroyContext();
-		return;
-	}
-
 	Cmd_AddCommand( "slayer_menu", Cmd_SlayerMenu_f, "Toggle Slayer3D settings menu" );
 	Cmd_AddCommand( "slayer_console", Cmd_SlayerConsole_f, "Toggle Slayer3D ImGui console" );
 
 	g_Initialized = true;
-	Con_Printf( "Slayer3D: ImGui menu initialized\n" );
+	Con_Printf( "Slayer3D: ImGui menu initialized (GL deferred)\n" );
 }
 
 void Slayer_ImGui_Shutdown( void )
@@ -578,7 +573,11 @@ void Slayer_ImGui_Shutdown( void )
 	if( !g_Initialized )
 		return;
 
-	ImGui_ImplXashGLES_Shutdown();
+	if( g_GLInitialized )
+	{
+		ImGui_ImplXashGLES_Shutdown();
+		g_GLInitialized = false;
+	}
 	ImGui::DestroyContext();
 	g_Initialized = false;
 }
@@ -587,6 +586,19 @@ void Slayer_ImGui_Frame( void )
 {
 	if( !g_Initialized )
 		return;
+
+	// Lazy GL initialization: create shaders/textures/buffers on first frame
+	// when the GL context is guaranteed to exist (V_PostRender is running).
+	if( !g_GLInitialized )
+	{
+		if( !ImGui_ImplXashGLES_Init() )
+		{
+			Con_Printf( S_ERROR "Slayer_ImGui_Frame: GLES backend init failed\n" );
+			return;
+		}
+		g_GLInitialized = true;
+		Con_Printf( "Slayer3D: ImGui GL backend initialized\n" );
+	}
 
 	// Auto-clear connection progress when engine reaches active state
 	if( g_ConnProgressState != CONNPROGRESS_NONE && cls.state == ca_active )
@@ -653,8 +665,8 @@ int Slayer_ImGui_TouchEvent( int type, int fingerID, float x, float y, float dx,
 		break;
 	}
 
-	// Consume all touch events only if ImGui wants the mouse
-	return io.WantCaptureMouse ? 1 : 0;
+	// Always consume touch events when any ImGui window is visible
+	return 1;
 }
 
 int Slayer_ImGui_KeyEvent( int key, int down )
@@ -667,12 +679,6 @@ int Slayer_ImGui_KeyEvent( int key, int down )
 		return 0;
 
 	ImGuiIO &io = ImGui::GetIO();
-
-	// Forward printable characters as text input for InputText widgets
-	if( down && key >= 32 && key < 127 )
-	{
-		io.AddInputCharacter( (unsigned int)key );
-	}
 
 	// Forward basic key events to ImGui
 	ImGuiKey imgui_key = ImGuiKey_None;
@@ -794,6 +800,29 @@ void Slayer_ImGui_ConsolePrint( const char *text )
 			g_ConsoleLineBuf[g_ConsoleLineBufPos++] = *p;
 		}
 	}
+}
+
+int Slayer_ImGui_IsActive( void )
+{
+	if( !g_Initialized )
+		return 0;
+	if( g_MainMenuVisible || g_MenuVisible || g_ConsoleVisible || g_ConnProgressState != CONNPROGRESS_NONE )
+		return 1;
+	return 0;
+}
+
+int Slayer_ImGui_CharEvent( int key )
+{
+	if( !g_Initialized )
+		return 0;
+	if( !g_MenuVisible && !g_ConsoleVisible && !g_MainMenuVisible && g_ConnProgressState == CONNPROGRESS_NONE )
+		return 0;
+
+	ImGuiIO &io = ImGui::GetIO();
+	if( key >= 32 )
+		io.AddInputCharacter( (unsigned int)key );
+
+	return io.WantTextInput ? 1 : 0;
 }
 
 } // extern "C"
