@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "BaseMenu.h"
 #include "DropDown.h"
+#include "WindowStyle.h"
 
 CMenuDropDown::CMenuDropDown() : BaseClass()
 {
@@ -155,7 +156,7 @@ void CMenuDropDown::SetMenuOpen( bool isOpen )
 void CMenuDropDown::Draw()
 {
 	uint textflags = ETF_NO_WRAP;
-	uint borderColor = uiInputFgColor;
+	uint borderColor = WndStyle::WidgetBorderColor;
 
 	if( iFlags & QMF_DROPSHADOW )
 		textflags |= ETF_SHADOW;
@@ -168,15 +169,15 @@ void CMenuDropDown::Draw()
 			pt.y += m_scItemSize.h;
 
 		// all other items
-		UI_FillRect( pt.x, pt.y, m_scItemSize.w, m_scSize.h - m_scItemSize.h, 0xff000000 );
+		UI_FillRect( pt.x, pt.y, m_scItemSize.w, m_scSize.h - m_scItemSize.h, WndStyle::WidgetBgColor );
 		for( int i = 0; i < m_szNames.Count(); i++ )
 		{
-			uint textColor = iBgTextColor;
+			uint textColor = WndStyle::WidgetTextColor;
 			uint tempflags = textflags;
 
 			if( UI_CursorInRect( pt, m_scItemSize ) && !(iFlags & (QMF_GRAYED|QMF_INACTIVE)))
 			{
-				UI_FillRect( pt, m_scItemSize, colorFocus );
+				UI_FillRect( pt, m_scItemSize, WndStyle::TabHoverColor );
 				tempflags |= ETF_FORCECOL;
 			}
 
@@ -189,11 +190,11 @@ void CMenuDropDown::Draw()
 
 	Point selectedPos = m_scPos;
 	Size selectedSize = Size(m_scItemSize.w - m_ArrowSize.w + uiStatic.outlineWidth, m_scItemSize.h);
-	uint selectedTextColor = iBgTextColor;
-	uint selectedBgColor = iBackgroundColor;
+	uint selectedTextColor = WndStyle::WidgetTextColor;
+	uint selectedBgColor = WndStyle::WidgetBgColor;
 	if( m_isOpen )
 	{
-		selectedTextColor = iFgTextColor;
+		selectedTextColor = WndStyle::TitleTextColor;
 		selectedBgColor = borderColor;
 	}
 	if( bDropUp )
@@ -204,11 +205,11 @@ void CMenuDropDown::Draw()
 	UI_DrawString( font, selectedPos, selectedSize, m_szNames[m_iState], selectedTextColor, m_scChSize, eTextAlignment, textflags );
 
 	// border
-	UI_DrawRectangle( m_scPos, m_scSize, borderColor );
+	UI_DrawRectangleExt( m_scPos, m_scSize, borderColor, 1 );
 
 	// arrow background
 	uint arrowX = selectedPos.x + selectedSize.w;
-	UI_FillRect( arrowX, selectedPos.y, m_ArrowSize.w, selectedSize.h, uiInputFgColor );
+	UI_FillRect( arrowX, selectedPos.y, m_ArrowSize.w, selectedSize.h, WndStyle::WidgetBorderColor );
 	// arrow
 	CImage &arrow = m_isOpen ? m_ArrowOpened : m_ArrowClosed;
 	Point arrowPoint( arrowX, selectedPos.y + (selectedSize.h - m_ArrowSize.h)/2 );

@@ -18,6 +18,7 @@ GNU General Public License for more details.
 #include "BaseMenu.h"
 #include "Slider.h"
 #include "Utils.h"
+#include "WindowStyle.h"
 
 CMenuSlider::CMenuSlider() : BaseClass(), m_flMinValue(), m_flMaxValue(), m_flCurValue(),
 	m_flDrawStep(), m_iNumSteps(), m_flRange(), m_iKeepSlider()
@@ -189,21 +190,29 @@ void CMenuSlider::Draw( void )
 	// keep value in range
 	m_flCurValue = bound( m_flMinValue, m_flCurValue, m_flMaxValue );
 
-	// calc slider position
-	sliderX = m_scPos.x + (m_iSliderOutlineWidth/2) // start
-		+ ( ( m_flCurValue - m_flMinValue ) / ( m_flMaxValue - m_flMinValue ) )  // calc fractional part
-		* ( m_scSize.w - m_iSliderOutlineWidth - (m_scCenterBox.w) );
+	// Flat CS 1.6 style track
+	int trackH = WndStyle::SliderTrackHeight;
+	int trackY = m_scPos.y + (m_scSize.h - trackH) / 2;
+	UI_FillRect( m_scPos.x, trackY, m_scSize.w, trackH, WndStyle::WidgetBgColor );
+	UI_DrawRectangleExt( m_scPos.x, trackY, m_scSize.w, trackH, WndStyle::WidgetBorderColor, 1 );
 
+	// Flat thumb position
+	int thumbW = WndStyle::SliderThumbW;
+	int thumbH = WndStyle::SliderThumbH;
+	sliderX = m_scPos.x + (int)( ( ( m_flCurValue - m_flMinValue ) / ( m_flMaxValue - m_flMinValue ) )
+		* ( m_scSize.w - thumbW ) );
+	int thumbY = m_scPos.y + (m_scSize.h - thumbH) / 2;
 
-	UI_DrawRectangleExt( m_scPos.x + m_iSliderOutlineWidth / 2, m_scPos.y + m_iSliderOutlineWidth, m_scSize.w - m_iSliderOutlineWidth, m_scCenterBox.h, uiInputBgColor, m_iSliderOutlineWidth );
-	if( eFocusAnimation == QM_HIGHLIGHTIFFOCUS && this == m_pParent->ItemAtCursor())
-		UI_DrawPic( sliderX, m_scPos.y, m_scCenterBox.w, m_scSize.h, uiColorHelp, imgSlider );
-	else
-		UI_DrawPic( sliderX, m_scPos.y, m_scCenterBox.w, m_scSize.h, uiColorWhite, imgSlider );
+	unsigned int thumbBorder = WndStyle::WidgetBorderColor;
+	if( this == m_pParent->ItemAtCursor() )
+		thumbBorder = WndStyle::WidgetFocusBorderColor;
 
+	UI_FillRect( sliderX, thumbY, thumbW, thumbH, WndStyle::TabHoverColor );
+	UI_DrawRectangleExt( sliderX, thumbY, thumbW, thumbH, thumbBorder, 1 );
 
+	// Label text above the slider
 	textHeight = m_scPos.y - (m_scChSize * 1.5f);
-	UI_DrawString( font, m_scPos.x, textHeight, m_scSize.w, m_scChSize, szName, uiColorHelp, m_scChSize, eTextAlignment, textflags | ETF_FORCECOL );
+	UI_DrawString( font, m_scPos.x, textHeight, m_scSize.w, m_scChSize, szName, WndStyle::WidgetTextColor, m_scChSize, eTextAlignment, textflags | ETF_FORCECOL );
 }
 
 void CMenuSlider::UpdateEditable()

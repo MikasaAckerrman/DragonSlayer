@@ -18,6 +18,7 @@ GNU General Public License for more details.
 #include "BaseMenu.h"
 #include "CheckBox.h"
 #include "Utils.h"
+#include "WindowStyle.h"
 
 CMenuCheckBox::CMenuCheckBox() : BaseClass()
 {
@@ -132,45 +133,30 @@ void CMenuCheckBox::Draw( void )
 		EngFuncs::DrawConsoleString( coord, szStatusText );
 	}
 
+	// Flat CS 1.6 style rendering
+	int boxSize = m_scSize.h; // use widget height as box size
+
 	if( iFlags & QMF_GRAYED )
 	{
-		UI_DrawPic( m_scPos, m_scSize, uiColorWhite, szGrayedPic );
-		return; // grayed
+		UI_FillRect( m_scPos.x, m_scPos.y, boxSize, boxSize, WndStyle::WidgetBgColor );
+		UI_DrawRectangleExt( m_scPos.x, m_scPos.y, boxSize, boxSize, WndStyle::WidgetBorderColor, 1 );
+		return;
 	}
 
-	if((( iFlags & QMF_MOUSEONLY ) && !( iFlags & QMF_HASMOUSEFOCUS ))
-	   || ( this != m_pParent->ItemAtCursor() ) )
-	{
-		if( !bChecked )
-			UI_DrawPic( m_scPos, m_scSize, colorBase, szEmptyPic );
-		else UI_DrawPic( m_scPos, m_scSize, colorBase, szCheckPic );
-		return; // no focus
-	}
+	// Determine border color based on focus
+	unsigned int borderCol = WndStyle::WidgetBorderColor;
+	if( this == m_pParent->ItemAtCursor() )
+		borderCol = WndStyle::WidgetFocusBorderColor;
 
-	if( m_bPressed )
+	// Draw box background and border
+	UI_FillRect( m_scPos.x, m_scPos.y, boxSize, boxSize, WndStyle::WidgetBgColor );
+	UI_DrawRectangleExt( m_scPos.x, m_scPos.y, boxSize, boxSize, borderCol, 1 );
+
+	// Draw checkmark when checked
+	if( bChecked )
 	{
-		UI_DrawPic( m_scPos, m_scSize, colorBase, szPressPic );
-	}
-	else if( eFocusAnimation == QM_HIGHLIGHTIFFOCUS )
-	{
-		if( bChecked )
-		{
-			// use two textures for it. Second is just focus texture, slightly orange. Looks pretty.
-			UI_DrawPic( m_scPos, m_scSize, colorBase, szPressPic );
-			UI_DrawPic( m_scPos, m_scSize, uiInputTextColor, szFocusPic, QM_DRAWADDITIVE );
-		}
-		else
-		{
-			UI_DrawPic( m_scPos, m_scSize, colorFocus, szFocusPic );
-		}
-	}
-	else if( bChecked )
-	{
-		UI_DrawPic( m_scPos, m_scSize, colorBase, szCheckPic );
-	}
-	else
-	{
-		UI_DrawPic( m_scPos, m_scSize, colorBase, szEmptyPic );
+		UI_DrawString( font, m_scPos.x, m_scPos.y, boxSize, boxSize,
+			"x", WndStyle::WidgetTextColor, boxSize - 4, QM_CENTER, ETF_FORCECOL );
 	}
 }
 

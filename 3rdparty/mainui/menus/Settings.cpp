@@ -20,6 +20,7 @@ the Free Software Foundation, either version 3 of the License, or
 #include "Window.h"
 #include "TabControl.h"
 #include "WindowStyle.h"
+#include "DropDown.h"
 
 // ============================================================
 // Tab page holder
@@ -83,6 +84,11 @@ private:
 	// --- Multiplayer page ---
 	CMenuField    m_fldPlayerName;
 	CMenuAction   m_lblModelHint;
+	CMenuDropDownStr m_ddSprayLogo;
+	CMenuDropDownStr m_ddPlayerModel;
+	CMenuDropDownInt m_ddHand;
+	CMenuAction   m_divMultiplayer1;
+	CMenuAction   m_divMultiplayer2;
 
 	// --- Keyboard page ---
 	CMenuAction   m_lblKeyboardHint;
@@ -109,9 +115,11 @@ private:
 
 	// --- HUD page ---
 	CMenuSlider   m_sldCrosshairSize;
+	CMenuDropDownStr m_ddCrosshairColor;
 	CMenuCheckBox m_chkFastSwitch;
 	CMenuCheckBox m_chkCenterID;
 	CMenuCheckBox m_chkAutoWepSwitch;
+	CMenuAction   m_divHUD1;
 
 	// --- System page ---
 	CMenuCheckBox m_chkDeveloper;
@@ -155,9 +163,49 @@ void CMenuSettings::_Init()
 	m_fldPlayerName.size.h = 32;
 	m_pageMultiplayer.AddItem( m_fldPlayerName );
 
+	m_divMultiplayer1.iFlags |= QMF_INACTIVE;
+	m_divMultiplayer1.SetCoord( col, 85 );
+	m_divMultiplayer1.SetSize( 300, 1 );
+	m_divMultiplayer1.SetBackground( WndStyle::WidgetBorderColor );
+	m_pageMultiplayer.AddItem( m_divMultiplayer1 );
+
+	m_ddSprayLogo.szName = L( "Spray logo" );
+	m_ddSprayLogo.SetCoord( col, 100 );
+	m_ddSprayLogo.SetSize( 180, 28 );
+	m_ddSprayLogo.AddItem( "Lambda", "lambda" );
+	m_ddSprayLogo.AddItem( "Skull", "skull" );
+	m_ddSprayLogo.AddItem( "Smiley", "smiley" );
+	m_ddSprayLogo.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageMultiplayer.AddItem( m_ddSprayLogo );
+
+	m_ddPlayerModel.szName = L( "Player model" );
+	m_ddPlayerModel.SetCoord( col, 150 );
+	m_ddPlayerModel.SetSize( 180, 28 );
+	m_ddPlayerModel.AddItem( "Gordon", "gordon" );
+	m_ddPlayerModel.AddItem( "Barney", "barney" );
+	m_ddPlayerModel.AddItem( "Scientist", "scientist" );
+	m_ddPlayerModel.AddItem( "Helmet", "helmet" );
+	m_ddPlayerModel.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageMultiplayer.AddItem( m_ddPlayerModel );
+
+	m_divMultiplayer2.iFlags |= QMF_INACTIVE;
+	m_divMultiplayer2.SetCoord( col, 195 );
+	m_divMultiplayer2.SetSize( 300, 1 );
+	m_divMultiplayer2.SetBackground( WndStyle::WidgetBorderColor );
+	m_pageMultiplayer.AddItem( m_divMultiplayer2 );
+
+	m_ddHand.szName = L( "Weapon hand" );
+	m_ddHand.SetCoord( col, 210 );
+	m_ddHand.SetSize( 180, 28 );
+	m_ddHand.AddItem( "Right", 0 );
+	m_ddHand.AddItem( "Left", 1 );
+	m_ddHand.AddItem( "Center", 2 );
+	m_ddHand.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageMultiplayer.AddItem( m_ddHand );
+
 	m_lblModelHint.szName = L( "Model selection: use 'model' console command" );
 	m_lblModelHint.iFlags |= QMF_INACTIVE;
-	m_lblModelHint.SetCoord( col, 100 );
+	m_lblModelHint.SetCoord( col, 260 );
 	m_pageMultiplayer.AddItem( m_lblModelHint );
 
 	// ===== Keyboard =====
@@ -253,18 +301,35 @@ void CMenuSettings::_Init()
 	m_sldCrosshairSize.onChanged = CMenuEditable::WriteCvarCb;
 	m_pageHUD.AddItem( m_sldCrosshairSize );
 
+	m_ddCrosshairColor.szName = L( "Crosshair color" );
+	m_ddCrosshairColor.SetCoord( col, 90 );
+	m_ddCrosshairColor.SetSize( 180, 28 );
+	m_ddCrosshairColor.AddItem( "Green", "green" );
+	m_ddCrosshairColor.AddItem( "Red", "red" );
+	m_ddCrosshairColor.AddItem( "Blue", "blue" );
+	m_ddCrosshairColor.AddItem( "Yellow", "yellow" );
+	m_ddCrosshairColor.AddItem( "Cyan", "cyan" );
+	m_ddCrosshairColor.onChanged = CMenuEditable::WriteCvarCb;
+	m_pageHUD.AddItem( m_ddCrosshairColor );
+
+	m_divHUD1.iFlags |= QMF_INACTIVE;
+	m_divHUD1.SetCoord( col, 130 );
+	m_divHUD1.SetSize( 300, 1 );
+	m_divHUD1.SetBackground( WndStyle::WidgetBorderColor );
+	m_pageHUD.AddItem( m_divHUD1 );
+
 	m_chkFastSwitch.szName = L( "Fast weapon switch" );
-	m_chkFastSwitch.SetCoord( col, 100 );
+	m_chkFastSwitch.SetCoord( col, 145 );
 	m_chkFastSwitch.onChanged = CMenuEditable::WriteCvarCb;
 	m_pageHUD.AddItem( m_chkFastSwitch );
 
 	m_chkCenterID.szName = L( "Player names in center" );
-	m_chkCenterID.SetCoord( col, 140 );
+	m_chkCenterID.SetCoord( col, 185 );
 	m_chkCenterID.onChanged = CMenuEditable::WriteCvarCb;
 	m_pageHUD.AddItem( m_chkCenterID );
 
 	m_chkAutoWepSwitch.szName = L( "Auto-switch to picked weapon" );
-	m_chkAutoWepSwitch.SetCoord( col, 180 );
+	m_chkAutoWepSwitch.SetCoord( col, 225 );
 	m_chkAutoWepSwitch.onChanged = CMenuEditable::WriteCvarCb;
 	m_pageHUD.AddItem( m_chkAutoWepSwitch );
 
@@ -351,6 +416,9 @@ void CMenuSettings::_VidInit()
 {
 	// Multiplayer
 	m_fldPlayerName.LinkCvar( "name" );
+	m_ddSprayLogo.LinkCvar( "cl_logofile", CMenuEditable::CVAR_STRING );
+	m_ddPlayerModel.LinkCvar( "model", CMenuEditable::CVAR_STRING );
+	m_ddHand.LinkCvar( "cl_righthand", CMenuEditable::CVAR_VALUE );
 
 	// Mouse
 	m_sldSensitivity.LinkCvar( "sensitivity" );
@@ -374,6 +442,7 @@ void CMenuSettings::_VidInit()
 
 	// HUD
 	m_sldCrosshairSize.LinkCvar( "cl_crosshair_size" );
+	m_ddCrosshairColor.LinkCvar( "cl_crosshair_color", CMenuEditable::CVAR_STRING );
 	m_chkFastSwitch.LinkCvar( "hud_fastswitch" );
 	m_chkCenterID.LinkCvar( "hud_centerid" );
 	m_chkAutoWepSwitch.LinkCvar( "cl_autowepswitch" );
@@ -393,6 +462,9 @@ void CMenuSettings::_VidInit()
 void CMenuSettings::OnApply()
 {
 	m_fldPlayerName.WriteCvar();
+	m_ddSprayLogo.WriteCvar();
+	m_ddPlayerModel.WriteCvar();
+	m_ddHand.WriteCvar();
 	m_sldSensitivity.WriteCvar();
 	m_chkInvertMouse.WriteCvar();
 	m_chkRawInput.WriteCvar();
@@ -406,6 +478,7 @@ void CMenuSettings::OnApply()
 	m_chkVoiceEnable.WriteCvar();
 	m_sldVoiceScale.WriteCvar();
 	m_sldCrosshairSize.WriteCvar();
+	m_ddCrosshairColor.WriteCvar();
 	m_chkFastSwitch.WriteCvar();
 	m_chkCenterID.WriteCvar();
 	m_chkAutoWepSwitch.WriteCvar();

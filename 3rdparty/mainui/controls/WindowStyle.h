@@ -52,6 +52,16 @@ namespace WndStyle
 	static const int          IconPad          = 4;
 	static const int          TitlePadLeft     = 6;
 
+	// Widget style (CS 1.6 flat look)
+	static const unsigned int WidgetBgColor          = 0xFF2D2B2E; // dark fill for inputs/checkboxes
+	static const unsigned int WidgetBorderColor      = 0xFF44584C; // olive border for widgets
+	static const unsigned int WidgetTextColor        = 0xFFD0D0D0; // light gray text
+	static const unsigned int WidgetFocusBorderColor = 0xFF5A7A64; // brighter olive for focus
+	static const int          CheckBoxSize           = 16;
+	static const int          SliderTrackHeight      = 6;
+	static const int          SliderThumbW           = 12;
+	static const int          SliderThumbH           = 16;
+
 	// Touch metrics (minimum tap target in virtual coords ≈ 44dp)
 	static const int          TouchMinTarget   = 28; // ≈44dp at 480dpi mapped to 768 tall
 
@@ -117,6 +127,19 @@ namespace WndStyle
 		int charH = (int)( size * 0.7f );
 		UI_DrawString( uiStatic.hDefaultFont, x, y, size, size,
 			"X", CloseTextColor, charH, QM_CENTER, ETF_SHADOW );
+	}
+
+	// Draw a widget with filled background and 1px olive border
+	inline void DrawWidgetBorder( int x, int y, int w, int h )
+	{
+		UI_FillRect( x, y, w, h, WidgetBgColor );
+		UI_DrawRectangleExt( x, y, w, h, WidgetBorderColor, 1 );
+	}
+
+	// Draw a 1px horizontal olive divider line
+	inline void DrawSectionDivider( int x, int y, int w )
+	{
+		UI_FillRect( x, y, w, 1, WidgetBorderColor );
 	}
 }
 
