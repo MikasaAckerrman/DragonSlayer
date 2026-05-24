@@ -162,7 +162,7 @@ CMenuPicButton * CMenuFramework::AddButton(const char *szName, const char *szSta
 	btn->SetPicture( buttonPicId );
 	btn->iFlags |= iFlags;
 	btn->onReleased = onReleased;
-	btn->SetCoord( 72, 230 + m_iBtnsNum * 50 );
+	btn->SetCoord( 72, 240 + m_iBtnsNum * 42 );
 	AddItem( btn );
 
 	m_apBtns[m_iBtnsNum++] = btn;
@@ -184,7 +184,7 @@ CMenuPicButton * CMenuFramework::AddButton( const char *szName, const char *szSt
 	btn->SetPicture( szButtonPath, hotkey );
 	btn->iFlags |= iFlags;
 	btn->onReleased = onReleased;
-	btn->SetCoord( 72, 230 + m_iBtnsNum * 50 );
+	btn->SetCoord( 72, 240 + m_iBtnsNum * 42 );
 	AddItem( btn );
 
 	m_apBtns[m_iBtnsNum++] = btn;
@@ -199,7 +199,7 @@ void CMenuFramework::RealignButtons( void )
 		if( !m_apBtns[i]->IsVisible())
 			continue;
 
-		m_apBtns[i]->SetCoord( 72, 230 + j * 50 );
+		m_apBtns[i]->SetCoord( 72, 240 + j * 42 );
 		m_apBtns[i]->CalcPosition();
 		j++;
 	}
