@@ -13,6 +13,7 @@ extern "C"
 #include "client.h"
 #include "keydefs.h"
 #include "ref_common.h"
+#include "platform/platform.h"
 }
 
 #include "imgui.h"
@@ -42,9 +43,6 @@ static char  g_ConnStatusText[512] = "";
 static float g_ConnProgress = 0.0f;
 static char  g_ConnServerName[256] = "";
 
-// --- Main Menu state ---
-static bool g_MainMenuVisible = false;
-
 // --- Console state ---
 static bool g_ConsoleVisible = false;
 
@@ -52,7 +50,6 @@ static bool g_ConsoleVisible = false;
 #define CONSOLE_LINE_LEN  256
 
 static char  g_ConsoleLines[CONSOLE_MAX_LINES][CONSOLE_LINE_LEN];
-static int   g_ConsoleLineCount = 0;
 static unsigned int g_ConsoleWritePos = 0;  // next write slot in ring buffer
 static bool  g_ConsoleScrollToBottom = true;
 static char  g_ConsoleInputBuf[512] = "";
@@ -227,62 +224,6 @@ static void DrawConnectionProgress( void )
 	ImGui::End();
 }
 
-// ---- Main Menu window ----
-static void DrawMainMenu( void )
-{
-	if( !g_MainMenuVisible )
-		return;
-
-	ImGuiIO &io = ImGui::GetIO();
-	ImVec2 center( io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f );
-	ImGui::SetNextWindowPos( center, ImGuiCond_Always, ImVec2( 0.5f, 0.5f ) );
-
-	float winW = ( 300.0f < io.DisplaySize.x * 0.6f ) ? 300.0f : io.DisplaySize.x * 0.6f;
-	float winH = ( 350.0f < io.DisplaySize.y * 0.7f ) ? 350.0f : io.DisplaySize.y * 0.7f;
-	ImGui::SetNextWindowSize( ImVec2( winW, winH ), ImGuiCond_Always );
-
-	ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
-		| ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar;
-
-	if( ImGui::Begin( "##MainMenu", NULL, flags ) )
-	{
-		// Title centered at top
-		const char *title = "Counter-Strike";
-		float titleWidth = ImGui::CalcTextSize( title ).x;
-		ImGui::SetCursorPosX( ( ImGui::GetWindowWidth() - titleWidth ) * 0.5f );
-		ImGui::TextUnformatted( title );
-		ImGui::Spacing();
-		ImGui::Separator();
-		ImGui::Spacing();
-
-		float btnWidth = ImGui::GetContentRegionAvail().x;
-		float btnHeight = 36.0f;
-
-		if( ImGui::Button( "New Game", ImVec2( btnWidth, btnHeight ) ) )
-		{
-			Cbuf_AddText( "maxplayers 1\nmap de_dust2\n" );
-		}
-		if( ImGui::Button( "Find Servers", ImVec2( btnWidth, btnHeight ) ) )
-		{
-			g_ConsoleVisible = true;
-			g_ConsoleScrollToBottom = true;
-		}
-		if( ImGui::Button( "Options", ImVec2( btnWidth, btnHeight ) ) )
-		{
-			Slayer_ImGui_Toggle();
-		}
-		if( ImGui::Button( "Console", ImVec2( btnWidth, btnHeight ) ) )
-		{
-			g_ConsoleVisible = true;
-		}
-		if( ImGui::Button( "Quit", ImVec2( btnWidth, btnHeight ) ) )
-		{
-			Cbuf_AddText( "quit\n" );
-		}
-	}
-	ImGui::End();
-}
-
 // ---- Console window ----
 static void DrawConsole( void )
 {
@@ -290,20 +231,35 @@ static void DrawConsole( void )
 		return;
 
 	ImGuiIO &io = ImGui::GetIO();
-	float winW = io.DisplaySize.x * 0.8f;
-	float winH = io.DisplaySize.y * 0.6f;
-	ImVec2 pos( io.DisplaySize.x * 0.5f, io.DisplaySize.y );
-	ImGui::SetNextWindowPos( pos, ImGuiCond_Always, ImVec2( 0.5f, 1.0f ) );
-	ImGui::SetNextWindowSize( ImVec2( winW, winH ), ImGuiCond_Always );
+	float consoleHeight = io.DisplaySize.y * 0.5f;
 
-	ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
-	if( ImGui::Begin( "Console", &g_ConsoleVisible, flags ) )
+	// Position at top of screen, full width
+	ImGui::SetNextWindowPos( ImVec2( 0, 0 ), ImGuiCond_Always );
+	ImGui::SetNextWindowSize( ImVec2( io.DisplaySize.x, consoleHeight ), ImGuiCond_Always );
+
+	// No title bar, no resize, no move, no scrollbar on main window, no collapse
+	ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+		| ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse
+		| ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+
+	// CS 1.6 console background color (dark brownish-grey, semi-transparent)
+	ImGui::PushStyleColor( ImGuiCol_WindowBg, ImVec4( 0.18f, 0.17f, 0.15f, 0.78f ) );
+	ImGui::PushStyleVar( ImGuiStyleVar_WindowBorderSize, 0.0f );
+	ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 8, 4 ) );
+
+	if( ImGui::Begin( "##Console", NULL, flags ) )
 	{
-		// Scrollable child region for log lines
-		float footerHeight = ImGui::GetStyle().ItemSpacing.y + ImGui::GetFrameHeightWithSpacing() + ImGui::GetFrameHeightWithSpacing();
-		if( ImGui::BeginChild( "ConsoleScroll", ImVec2( 0, -footerHeight ), false, ImGuiWindowFlags_HorizontalScrollbar ) )
+		// --- Log area (scrollable child) ---
+		float inputHeight = ImGui::GetFrameHeightWithSpacing() + 4.0f;
+		float separatorHeight = 2.0f;
+
+		if( ImGui::BeginChild( "##ConsoleLog", ImVec2( 0, -inputHeight - separatorHeight ), false,
+			ImGuiWindowFlags_HorizontalScrollbar ) )
 		{
-			int count = ( g_ConsoleLineCount < CONSOLE_MAX_LINES ) ? g_ConsoleLineCount : CONSOLE_MAX_LINES;
+			// Draw console lines in white/light grey
+			ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( 0.91f, 0.91f, 0.91f, 1.0f ) );
+
+			int count = ( g_ConsoleWritePos <= CONSOLE_MAX_LINES ) ? (int)g_ConsoleWritePos : CONSOLE_MAX_LINES;
 			for( int i = 0; i < count; i++ )
 			{
 				int idx;
@@ -311,9 +267,10 @@ static void DrawConsole( void )
 					idx = i;
 				else
 					idx = ( g_ConsoleWritePos + i ) % CONSOLE_MAX_LINES;
-
 				ImGui::TextUnformatted( g_ConsoleLines[idx] );
 			}
+
+			ImGui::PopStyleColor();
 
 			if( g_ConsoleScrollToBottom )
 			{
@@ -323,42 +280,52 @@ static void DrawConsole( void )
 		}
 		ImGui::EndChild();
 
-		// Input line
-		ImGuiInputTextFlags inputFlags = ImGuiInputTextFlags_EnterReturnsTrue;
-		bool reclaim_focus = false;
+		// --- Separator line (orange-brown, CS 1.6 style) ---
+		ImVec2 p = ImGui::GetCursorScreenPos();
+		ImGui::GetWindowDrawList()->AddRectFilled(
+			p, ImVec2( p.x + io.DisplaySize.x, p.y + separatorHeight ),
+			IM_COL32( 124, 91, 40, 255 ) );
+		ImGui::Dummy( ImVec2( 0, separatorHeight ) );
 
+		// --- Input line (green text with ] prompt) ---
+		ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( 0.0f, 1.0f, 0.0f, 1.0f ) );
+		ImGui::PushStyleColor( ImGuiCol_FrameBg, ImVec4( 0, 0, 0, 0 ) ); // transparent input bg
+		ImGui::PushStyleColor( ImGuiCol_FrameBgActive, ImVec4( 0, 0, 0, 0 ) );
+		ImGui::PushStyleColor( ImGuiCol_FrameBgHovered, ImVec4( 0, 0, 0, 0 ) );
+
+		ImGui::Text( "]" );
+		ImGui::SameLine();
+		ImGui::PushItemWidth( -1 );
+
+		ImGuiInputTextFlags inputFlags = ImGuiInputTextFlags_EnterReturnsTrue;
 		if( ImGui::InputText( "##ConInput", g_ConsoleInputBuf, sizeof( g_ConsoleInputBuf ), inputFlags ) )
 		{
 			if( g_ConsoleInputBuf[0] )
 			{
-				// Add typed text to log
 				char echo[CONSOLE_LINE_LEN];
-				Q_snprintf( echo, sizeof( echo ), "> %s", g_ConsoleInputBuf );
+				Q_snprintf( echo, sizeof( echo ), "] %s", g_ConsoleInputBuf );
 				int slot = g_ConsoleWritePos % CONSOLE_MAX_LINES;
 				Q_strncpy( g_ConsoleLines[slot], echo, CONSOLE_LINE_LEN );
 				g_ConsoleWritePos++;
-				if( g_ConsoleLineCount < CONSOLE_MAX_LINES )
-					g_ConsoleLineCount++;
 				g_ConsoleScrollToBottom = true;
 
-				// Execute command
 				Cbuf_AddTextf( "%s\n", g_ConsoleInputBuf );
 				g_ConsoleInputBuf[0] = '\0';
 			}
-			reclaim_focus = true;
+			ImGui::SetKeyboardFocusHere( -1 );
 		}
 
-		// Auto-focus input
-		if( reclaim_focus )
+		// Auto-focus the input field when console is first opened
+		if( ImGui::IsWindowAppearing() )
 			ImGui::SetKeyboardFocusHere( -1 );
 
-		ImGui::SameLine();
-		if( ImGui::Button( "Close" ) )
-		{
-			g_ConsoleVisible = false;
-		}
+		ImGui::PopItemWidth();
+		ImGui::PopStyleColor( 4 ); // text + 3 frame colors
 	}
 	ImGui::End();
+
+	ImGui::PopStyleVar( 2 );
+	ImGui::PopStyleColor();
 }
 
 static void DrawTabGame( void )
@@ -609,11 +576,8 @@ void Slayer_ImGui_Frame( void )
 		g_ConnServerName[0] = '\0';
 	}
 
-	// Update main menu visibility based on engine state
-	g_MainMenuVisible = ( cls.state == ca_disconnected && cls.key_dest == key_menu );
-
 	// If nothing to draw, skip frame
-	if( !g_MenuVisible && !g_ConsoleVisible && !g_MainMenuVisible && g_ConnProgressState == CONNPROGRESS_NONE )
+	if( !g_MenuVisible && !g_ConsoleVisible && g_ConnProgressState == CONNPROGRESS_NONE )
 		return;
 
 	ImGuiIO &io = ImGui::GetIO();
@@ -624,7 +588,6 @@ void Slayer_ImGui_Frame( void )
 	ImGui::NewFrame();
 
 	DrawConnectionProgress();
-	DrawMainMenu();
 	DrawConsole();
 
 	if( g_MenuVisible )
@@ -632,6 +595,12 @@ void Slayer_ImGui_Frame( void )
 
 	ImGui::Render();
 	ImGui_ImplXashGLES_RenderDrawData( ImGui::GetDrawData() );
+
+	// Tell Android to show/hide soft keyboard based on ImGui text input state
+	{
+		ImGuiIO &ioPost = ImGui::GetIO();
+		Platform_EnableTextInput( ioPost.WantTextInput ? 1 : 0 );
+	}
 }
 
 int Slayer_ImGui_TouchEvent( int type, int fingerID, float x, float y, float dx, float dy )
@@ -640,7 +609,7 @@ int Slayer_ImGui_TouchEvent( int type, int fingerID, float x, float y, float dx,
 		return 0;
 
 	// Consume input when any ImGui window is visible
-	if( !g_MenuVisible && !g_ConsoleVisible && !g_MainMenuVisible && g_ConnProgressState == CONNPROGRESS_NONE )
+	if( !g_MenuVisible && !g_ConsoleVisible && g_ConnProgressState == CONNPROGRESS_NONE )
 		return 0;
 
 	ImGuiIO &io = ImGui::GetIO();
@@ -675,7 +644,7 @@ int Slayer_ImGui_KeyEvent( int key, int down )
 		return 0;
 
 	// Don't process keys when no ImGui window is visible
-	if( !g_MenuVisible && !g_ConsoleVisible && !g_MainMenuVisible && g_ConnProgressState == CONNPROGRESS_NONE )
+	if( !g_MenuVisible && !g_ConsoleVisible && g_ConnProgressState == CONNPROGRESS_NONE )
 		return 0;
 
 	ImGuiIO &io = ImGui::GetIO();
@@ -790,8 +759,6 @@ void Slayer_ImGui_ConsolePrint( const char *text )
 			int slot = g_ConsoleWritePos % CONSOLE_MAX_LINES;
 			Q_strncpy( g_ConsoleLines[slot], g_ConsoleLineBuf, CONSOLE_LINE_LEN );
 			g_ConsoleWritePos++;
-			if( g_ConsoleLineCount < CONSOLE_MAX_LINES )
-				g_ConsoleLineCount++;
 			g_ConsoleScrollToBottom = true;
 			g_ConsoleLineBufPos = 0;
 		}
@@ -806,7 +773,7 @@ int Slayer_ImGui_IsActive( void )
 {
 	if( !g_Initialized )
 		return 0;
-	if( g_MainMenuVisible || g_MenuVisible || g_ConsoleVisible || g_ConnProgressState != CONNPROGRESS_NONE )
+	if( g_MenuVisible || g_ConsoleVisible || g_ConnProgressState != CONNPROGRESS_NONE )
 		return 1;
 	return 0;
 }
@@ -815,7 +782,7 @@ int Slayer_ImGui_CharEvent( int key )
 {
 	if( !g_Initialized )
 		return 0;
-	if( !g_MenuVisible && !g_ConsoleVisible && !g_MainMenuVisible && g_ConnProgressState == CONNPROGRESS_NONE )
+	if( !g_MenuVisible && !g_ConsoleVisible && g_ConnProgressState == CONNPROGRESS_NONE )
 		return 0;
 
 	ImGuiIO &io = ImGui::GetIO();
