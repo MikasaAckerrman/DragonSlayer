@@ -48,7 +48,7 @@ CMenuWindow::CMenuWindow( const char *title, CWindowStack *pStack )
 // ---------------------------------------------------------------
 Point CMenuWindow::GetPositionOffset() const
 {
-	return Point( m_iBorderW, m_iTitleBarH + m_iBorderW );
+	return Point( m_scPos.x + m_iBorderW, m_scPos.y + m_iTitleBarH + m_iBorderW );
 }
 
 // ---------------------------------------------------------------
