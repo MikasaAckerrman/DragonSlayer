@@ -70,6 +70,12 @@ namespace WndStyle
 	static const unsigned int InnerHighlightColor  = 0xFF6EA87B; // 1px lighter bevel inside window
 	static const unsigned int TitleSeparatorColor  = 0xFF5E8E6B; // line below title bar
 
+	// 3D Bevel colors (CS 1.6 raised/sunken frame edges)
+	static const unsigned int BevelHighlight  = 0xFF8EBE9B; // brightest - outer top-left edge
+	static const unsigned int BevelLight      = 0xFF6EA87B; // inner top-left edge
+	static const unsigned int BevelShadow     = 0xFF3E5E4B; // inner bottom-right edge
+	static const unsigned int BevelDarkShadow = 0xFF1E2E25; // darkest - outer bottom-right edge
+
 	// ============================================================
 	// Helper: scale a virtual-coord value to current screen
 	// Enforces minimum touch target size
@@ -85,6 +91,36 @@ namespace WndStyle
 		return scaled > minPx ? scaled : minPx;
 	}
 
+	// Draw a 2px raised 3D bevel frame (highlight on top-left, shadow on bottom-right)
+	inline void DrawRaisedBevel( int x, int y, int w, int h )
+	{
+		// Outer edges
+		UI_FillRect( x, y, w, 1, BevelHighlight );           // top outer
+		UI_FillRect( x, y, 1, h, BevelHighlight );           // left outer
+		UI_FillRect( x, y + h - 1, w, 1, BevelDarkShadow ); // bottom outer
+		UI_FillRect( x + w - 1, y, 1, h, BevelDarkShadow ); // right outer
+		// Inner edges
+		UI_FillRect( x + 1, y + 1, w - 2, 1, BevelLight );       // top inner
+		UI_FillRect( x + 1, y + 1, 1, h - 2, BevelLight );       // left inner
+		UI_FillRect( x + 1, y + h - 2, w - 2, 1, BevelShadow );  // bottom inner
+		UI_FillRect( x + w - 2, y + 1, 1, h - 2, BevelShadow );  // right inner
+	}
+
+	// Draw a 2px sunken 3D bevel frame (shadow on top-left, highlight on bottom-right)
+	inline void DrawSunkenBevel( int x, int y, int w, int h )
+	{
+		// Outer edges
+		UI_FillRect( x, y, w, 1, BevelDarkShadow );         // top outer
+		UI_FillRect( x, y, 1, h, BevelDarkShadow );         // left outer
+		UI_FillRect( x, y + h - 1, w, 1, BevelHighlight );  // bottom outer
+		UI_FillRect( x + w - 1, y, 1, h, BevelHighlight );  // right outer
+		// Inner edges
+		UI_FillRect( x + 1, y + 1, w - 2, 1, BevelShadow );     // top inner
+		UI_FillRect( x + 1, y + 1, 1, h - 2, BevelShadow );     // left inner
+		UI_FillRect( x + 1, y + h - 2, w - 2, 1, BevelLight );  // bottom inner
+		UI_FillRect( x + w - 2, y + 1, 1, h - 2, BevelLight );  // right inner
+	}
+
 	// ============================================================
 	// Drawing helpers (inline, zero overhead)
 	// ============================================================
@@ -92,23 +128,18 @@ namespace WndStyle
 	// Draw a window background with border, inner highlight bevel, and title separator
 	inline void DrawWindowChrome( int x, int y, int w, int h )
 	{
-		// Border (2px olive green)
-		UI_DrawRectangleExt( x, y, w, h, BorderColor, BorderWidth );
+		// 3D raised bevel frame (2px)
+		DrawRaisedBevel( x, y, w, h );
 
-		// Fill background
-		int ix = x + BorderWidth;
-		int iy = y + BorderWidth;
-		int iw = w - BorderWidth * 2;
-		int ih = h - BorderWidth * 2;
+		// Fill background inside bevel
+		int ix = x + 2;
+		int iy = y + 2;
+		int iw = w - 4;
+		int ih = h - 4;
 		UI_FillRect( ix, iy, iw, ih, BgColor );
 
-		// Inner highlight bevel: 1px horizontal line at top-inside
-		UI_FillRect( ix, iy, iw, 1, InnerHighlightColor );
-		// Inner highlight bevel: 1px vertical line at left-inside
-		UI_FillRect( ix, iy, 1, ih, InnerHighlightColor );
-
-		// Title bar separator: 1px line below title bar area
-		int sepY = y + BorderWidth + TitleBarHeight;
+		// Title bar separator line below title bar area
+		int sepY = y + 2 + TitleBarHeight;
 		UI_FillRect( ix, sepY, iw, 1, TitleSeparatorColor );
 	}
 
@@ -153,10 +184,10 @@ namespace WndStyle
 	inline void DrawFlatButton( int x, int y, int w, int h, const char *label, bool hover )
 	{
 		unsigned int bg = hover ? TabHoverColor : BgColor;
-		UI_FillRect( x, y, w, h, bg );
-		UI_DrawRectangleExt( x, y, w, h, BorderColor, 1 );
+		UI_FillRect( x + 2, y + 2, w - 4, h - 4, bg );
+		DrawRaisedBevel( x, y, w, h );
 		int charH = (int)( h * 0.6f );
-		UI_DrawString( uiStatic.hDefaultFont, x, y, w, h,
+		UI_DrawString( uiStatic.hDefaultFont, x + 2, y + 2, w - 4, h - 4,
 			label, WidgetTextColor, charH, QM_CENTER, 0 );
 	}
 }
