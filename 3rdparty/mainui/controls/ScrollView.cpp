@@ -1,5 +1,7 @@
 #include "ScrollView.h"
 #include "Scissor.h"
+#include "WindowStyle.h"
+#include "SchemeManager.h"
 
 CMenuScrollView::CMenuScrollView() : CMenuItemsHolder (),
 	m_bHoldingMouse1( false )
@@ -130,7 +132,7 @@ void CMenuScrollView::Draw()
 
 	if( bDrawStroke )
 	{
-		UI_DrawRectangleExt( m_scPos, m_scSize, colorStroke, iStrokeWidth );
+		WndStyle::DrawSunkenBevel( m_scPos.x, m_scPos.y, m_scSize.w, m_scSize.h );
 	}
 
 	int drawn = 0, skipped = 0;

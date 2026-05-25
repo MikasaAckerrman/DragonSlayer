@@ -18,6 +18,7 @@ GNU General Public License for more details.
 #include "Action.h"
 #include "ItemsHolder.h"
 #include "MessageBox.h"
+#include "SchemeManager.h"
 
 CMenuMessageBox::CMenuMessageBox(const char *name) : BaseClass( name )
 {
@@ -27,7 +28,9 @@ CMenuMessageBox::CMenuMessageBox(const char *name) : BaseClass( name )
 void CMenuMessageBox::_Init()
 {
 	background.bForceColor = true;
-	background.colorBase = uiPromptBgColor;
+	CSchemeManager *scheme = CSchemeManager::GetInstance();
+	unsigned int msgBg = scheme->GetColor("MessageBoxBG");
+	background.colorBase = msgBg ? msgBg : uiPromptBgColor;
 
 	dlgMessage.eTextAlignment = QM_CENTER; // center
 	dlgMessage.iFlags = QMF_INACTIVE|QMF_DROPSHADOW;

@@ -19,6 +19,7 @@ GNU General Public License for more details.
 #include "PicButton.h"
 #include "YesNoMessageBox.h"
 #include "Utils.h"
+#include "SchemeManager.h"
 
 static void ToggleInactiveInternalCb( CMenuBaseItem *pSelf, void *pExtra );
 
@@ -91,7 +92,9 @@ void CMenuYesNoMessageBox::_Init()
 		onPositive = CEventCallback::NoopCb;
 
 	background.bForceColor = true;
-	background.colorBase = uiPromptBgColor;
+	CSchemeManager *scheme = CSchemeManager::GetInstance();
+	unsigned int msgBg = scheme->GetColor("MessageBoxBG");
+	background.colorBase = msgBg ? msgBg : uiPromptBgColor;
 	AddItem( background );
 	AddItem( dlgMessage1 );
 	AddItem( yes );

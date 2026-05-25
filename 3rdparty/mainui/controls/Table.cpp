@@ -613,6 +613,14 @@ void CMenuTable::Draw()
 	CSchemeManager *scheme = CSchemeManager::GetInstance();
 	unsigned int selColor = scheme->GetColor("SelectionBG");
 	if( !selColor ) selColor = 0x80385838;
+	unsigned int rowHoverBg = scheme->GetColor("TableRowHoverBG");
+	if( !rowHoverBg ) rowHoverBg = 0x80383838;
+	unsigned int scrollBg = scheme->GetColor("ScrollbarBG");
+	if( !scrollBg ) scrollBg = uiInputFgColor;
+	unsigned int scrollThumbHover = scheme->GetColor("ScrollbarThumbHover");
+	if( !scrollThumbHover ) scrollThumbHover = uiInputTextColor;
+	unsigned int scrollThumb = scheme->GetColor("ScrollbarThumb");
+	if( !scrollThumb ) scrollThumb = uiColorBlack;
 	int upFocus, downFocus, scrollbarFocus;
 
 	// HACKHACK: recalc iNumRows, to be not greater than iNumItems
@@ -707,13 +715,13 @@ void CMenuTable::Draw()
 
 	// draw the arrows base
 	UI_FillRect( upArrow.x, upArrow.y + arrow.h,
-		arrow.w, downArrow.y - upArrow.y - arrow.h, uiInputFgColor );
+		arrow.w, downArrow.y - upArrow.y - arrow.h, scrollBg );
 
 	// ADAMIX
 	if( iScrollBarSliding )
 	{
 		// Draw scrollbar background
-		UI_FillRect( sbarPos.x, upArrow.y + arrow.h, sbarSize.w, downArrow.y - upArrow.y - arrow.h, uiColorBlack);
+		UI_FillRect( sbarPos.x, upArrow.y + arrow.h, sbarSize.w, downArrow.y - upArrow.y - arrow.h, scrollBg);
 	}
 
 	// ADAMIX END
@@ -731,7 +739,7 @@ void CMenuTable::Draw()
 		if( iScrollBarSliding ) scrollbarFocus = true;
 
 		// Draw scrollbar itself
-		UI_FillRect( sbarPos, sbarSize, scrollbarFocus ? uiInputTextColor : uiColorBlack );
+		UI_FillRect( sbarPos, sbarSize, scrollbarFocus ? scrollThumbHover : scrollThumb );
 
 		if(this != m_pParent->ItemAtCursor())
 		{
@@ -790,7 +798,7 @@ void CMenuTable::Draw()
 			}
 			else if( i == iHighlight )
 			{
-				fillColor = 0x80383838;
+				fillColor = rowHoverBg;
 			}
 		}
 

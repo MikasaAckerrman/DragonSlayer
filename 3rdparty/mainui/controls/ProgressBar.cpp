@@ -16,6 +16,8 @@ GNU General Public License for more details.
 #include "extdll_menu.h"
 #include "BaseMenu.h"
 #include "ProgressBar.h"
+#include "WindowStyle.h"
+#include "SchemeManager.h"
 
 CMenuProgressBar::CMenuProgressBar() : BaseClass()
 {
@@ -55,11 +57,17 @@ void CMenuProgressBar::Draw( void )
 		flProgress = m_flValue;
 	}
 
-	// draw the background
-	UI_FillRect( m_scPos, m_scSize, uiInputBgColor );
+	CSchemeManager *scheme = CSchemeManager::GetInstance();
 
-	UI_FillRect( m_scPos.x, m_scPos.y, m_scSize.w * flProgress, m_scSize.h, colorBase );
+	// draw the background
+	unsigned int trackBg = scheme->GetColor("ProgressTrackBG");
+	if( !trackBg ) trackBg = uiInputBgColor;
+	UI_FillRect( m_scPos, m_scSize, trackBg );
+
+	unsigned int fillColor = scheme->GetColor("ProgressFill");
+	if( !fillColor ) fillColor = colorBase;
+	UI_FillRect( m_scPos.x, m_scPos.y, m_scSize.w * flProgress, m_scSize.h, fillColor );
 
 	// draw the rectangle
-	UI_DrawRectangle( m_scPos, m_scSize, uiInputFgColor );
+	WndStyle::DrawSunkenBevel( m_scPos.x, m_scPos.y, m_scSize.w, m_scSize.h );
 }

@@ -19,6 +19,8 @@ GNU General Public License for more details.
 #include "SpinControl.h"
 #include "Utils.h"
 #include "Scissor.h"
+#include "WindowStyle.h"
+#include "SchemeManager.h"
 
 CMenuSpinControl::CMenuSpinControl()  : BaseClass(), m_szBackground(),
 		m_szLeftArrow(), m_szRightArrow(), m_szLeftArrowFocus(), m_szRightArrowFocus(),
@@ -160,6 +162,8 @@ void CMenuSpinControl::Draw( void )
 	scCenterBox.h = m_scSize.h;
 
 
+	CSchemeManager *scheme = CSchemeManager::GetInstance();
+
 	if( m_szBackground )
 	{
 		UI_DrawPic( scCenterPos, scCenterBox, uiColorWhite, m_szBackground );
@@ -167,10 +171,12 @@ void CMenuSpinControl::Draw( void )
 	else
 	{
 		// draw the background
-		UI_FillRect( scCenterPos, scCenterBox, uiColorBlack );
+		unsigned int spinBg = scheme->GetColor("SpinControlBG");
+		if( !spinBg ) spinBg = uiColorBlack;
+		UI_FillRect( scCenterPos, scCenterBox, spinBg );
 
 		// draw the rectangle
-		UI_DrawRectangle( scCenterPos, scCenterBox, uiInputFgColor );
+		WndStyle::DrawSunkenBevel( scCenterPos.x, scCenterPos.y, scCenterBox.w, scCenterBox.h );
 	}
 
 	if( iFlags & QMF_GRAYED )

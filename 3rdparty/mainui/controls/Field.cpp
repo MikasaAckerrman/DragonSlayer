@@ -20,6 +20,7 @@ GNU General Public License for more details.
 #include "Utils.h"
 #include "utflib.h"
 #include "WindowStyle.h"
+#include "SchemeManager.h"
 
 CMenuField::CMenuField() : BaseClass()
 {
@@ -454,15 +455,23 @@ void CMenuField::Draw( void )
 	}
 	else
 	{
+		CSchemeManager *scheme = CSchemeManager::GetInstance();
+		unsigned int fieldBg = scheme->GetColor("InputBG");
+		if( !fieldBg ) fieldBg = WndStyle::WidgetBgColor;
+		unsigned int fieldBorder = scheme->GetColor("InputBorder");
+		if( !fieldBorder ) fieldBorder = WndStyle::WidgetBorderColor;
+
 		// draw the background
-		UI_FillRect( newPos, m_scSize, WndStyle::WidgetBgColor );
+		UI_FillRect( newPos, m_scSize, fieldBg );
 
 		// draw the rectangle
-		UI_DrawRectangleExt( newPos, m_scSize, WndStyle::WidgetBorderColor, 1 );
+		WndStyle::DrawSunkenBevel( newPos.x, newPos.y, m_scSize.w, m_scSize.h );
 	}
 
+	unsigned int labelColor = CSchemeManager::GetInstance()->GetColor("BaseText");
+	if( !labelColor ) labelColor = WndStyle::WidgetTextColor;
 	textHeight = y - (m_scChSize * 1.5f);
-	UI_DrawString( font, m_scPos.x, textHeight, m_scSize.w, m_scChSize, szName, WndStyle::WidgetTextColor, m_scChSize, QM_LEFT, textflags | ETF_FORCECOL );
+	UI_DrawString( font, m_scPos.x, textHeight, m_scSize.w, m_scChSize, szName, labelColor, m_scChSize, QM_LEFT, textflags | ETF_FORCECOL );
 
 	if( iFlags & QMF_GRAYED )
 	{
