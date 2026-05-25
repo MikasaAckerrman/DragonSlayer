@@ -28,6 +28,19 @@
         "ButtonHoverBG"     "72 88 88 255"
         "CloseBtnBG"        "204 34 34 255"
         "CloseBtnText"      "204 204 204 255"
+        "ProgressFill"      "94 142 107 255"
+        "ProgressTrackBG"   "30 40 40 255"
+        "ScrollbarBG"       "30 40 40 255"
+        "ScrollbarThumb"    "72 88 88 255"
+        "ScrollbarThumbHover" "94 142 107 255"
+        "SpinControlBG"     "30 40 40 255"
+        "SpinControlBorder" "94 142 107 255"
+        "MessageBoxBG"      "46 61 61 200"
+        "FieldCursorColor"  "200 208 200 255"
+        "TableRowHoverBG"   "56 56 56 128"
+        "HighlightBG"       "72 88 88 255"
+        "ResizeGrip"        "94 142 107 255"
+        "CheckMark"         "200 208 200 255"
     }
 
     "Borders"
@@ -150,6 +163,73 @@
                 "2" { "color" "Border.Light" "offset" "0 1" }
             }
             "inset" "2 2"
+        }
+
+        "ScrollbarBorder"
+        {
+            "Left"
+            {
+                "1" { "color" "Border.Dark" "offset" "0 0" }
+            }
+            "Right"
+            {
+                "1" { "color" "Border.Dark" "offset" "0 0" }
+            }
+            "Top"
+            {
+                "1" { "color" "Border.Dark" "offset" "0 0" }
+            }
+            "Bottom"
+            {
+                "1" { "color" "Border.Dark" "offset" "0 0" }
+            }
+            "inset" "1 1"
+        }
+
+        "ProgressBarBorder"
+        {
+            "Left"
+            {
+                "1" { "color" "Border.DarkSolid" "offset" "0 0" }
+                "2" { "color" "Border.Dark" "offset" "1 0" }
+            }
+            "Right"
+            {
+                "1" { "color" "Border.Bright" "offset" "0 0" }
+                "2" { "color" "Border.Light" "offset" "1 0" }
+            }
+            "Top"
+            {
+                "1" { "color" "Border.DarkSolid" "offset" "0 0" }
+                "2" { "color" "Border.Dark" "offset" "0 1" }
+            }
+            "Bottom"
+            {
+                "1" { "color" "Border.Bright" "offset" "0 0" }
+                "2" { "color" "Border.Light" "offset" "0 1" }
+            }
+            "inset" "2 2"
+        }
+
+        "SpinControlBorder"
+        {
+            "Left"
+            {
+                "1" { "color" "Border.DarkSolid" "offset" "0 0" }
+            }
+            "Right"
+            {
+                "1" { "color" "Border.Bright" "offset" "0 0" }
+            }
+            "Top"
+            {
+                "1" { "color" "Border.DarkSolid" "offset" "0 0" }
+            }
+            "Bottom"
+            {
+                "1" { "color" "Border.Bright" "offset" "0 0" }
+            }
+            "inset" "1 1"
         }
     }
 
