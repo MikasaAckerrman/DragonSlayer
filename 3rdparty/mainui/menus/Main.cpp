@@ -18,48 +18,35 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 */
 
-
-#include "Framework.h"
+#include "Window.h"
+#include "WindowStyle.h"
 #include "Action.h"
-#include "Bitmap.h"
 #include "PicButton.h"
 #include "YesNoMessageBox.h"
 #include "keydefs.h"
 #include "MenuStrings.h"
-#include "PlayerIntroduceDialog.h"
 #include "gameinfo.h"
-#include "AnimatedBanner.h"
-#include "MovieBanner.h"
 
-#define ART_MINIMIZE_N	"gfx/shell/min_n"
-#define ART_MINIMIZE_F	"gfx/shell/min_f"
-#define ART_MINIMIZE_D	"gfx/shell/min_d"
-#define ART_CLOSEBTN_N	"gfx/shell/cls_n"
-#define ART_CLOSEBTN_F	"gfx/shell/cls_f"
-#define ART_CLOSEBTN_D	"gfx/shell/cls_d"
-
-class CMenuMain: public CMenuFramework
+class CMenuMainWindow : public CMenuWindow
 {
 public:
-	CMenuMain() : CMenuFramework( "CMenuMain" ) { }
+	CMenuMainWindow() : CMenuWindow( "Counter-Strike 1.6" ) { }
 
+	bool IsRoot() const override { return true; }
 	bool KeyDown( int key ) override;
 
 private:
 	void _Init() override;
-	void _VidInit( ) override;
+	void _VidInit() override;
 	void Think() override;
 
-	void VidInit(bool connected);
+	void VidInit( bool connected );
 
 	void QuitDialogCb();
 	void DisconnectCb();
 	void DisconnectDialogCb();
 	void HazardCourseDialogCb();
 	void HazardCourseCb();
-
-	CMenuAnimatedBanner animatedBanner;
-	CMenuMovieBanner movieBanner;
 
 	CMenuPicButton	console;
 	CMenuPicButton	resumeGame;
@@ -73,10 +60,6 @@ private:
 	CMenuPicButton	previews;
 	CMenuPicButton	quit;
 
-	// buttons on top right. Maybe should be drawn if fullscreen == 1?
-	CMenuBitmap	minimizeBtn;
-	CMenuBitmap	quitButton;
-
 	// quit dialog
 	CMenuYesNoMessageBox dialog;
 
@@ -84,7 +67,7 @@ private:
 	bool bCustomGame;
 };
 
-void CMenuMain::QuitDialogCb()
+void CMenuMainWindow::QuitDialogCb()
 {
 	if( CL_IsActive() && EngFuncs::GetCvarFloat( "host_serverstate" ) && EngFuncs::GetCvarFloat( "maxplayers" ) == 1.0f )
 		dialog.SetMessage( L( "StringsList_235" ) );
@@ -95,7 +78,7 @@ void CMenuMain::QuitDialogCb()
 	dialog.Show();
 }
 
-void CMenuMain::DisconnectCb()
+void CMenuMainWindow::DisconnectCb()
 {
 	EngFuncs::ClientCmd( false, "disconnect\n" );
 	VidInit( false );
@@ -104,49 +87,49 @@ void CMenuMain::DisconnectCb()
 	VidInitItems();
 }
 
-void CMenuMain::DisconnectDialogCb()
+void CMenuMainWindow::DisconnectDialogCb()
 {
-	dialog.onPositive = VoidCb( &CMenuMain::DisconnectCb );
+	dialog.onPositive = VoidCb( &CMenuMainWindow::DisconnectCb );
 	dialog.SetMessage( L( "Really disconnect?" ) );
 	dialog.Show();
 }
 
-void CMenuMain::HazardCourseDialogCb()
+void CMenuMainWindow::HazardCourseDialogCb()
 {
-	dialog.onPositive = VoidCb( &CMenuMain::HazardCourseCb );;
+	dialog.onPositive = VoidCb( &CMenuMainWindow::HazardCourseCb );
 	dialog.SetMessage( L( "StringsList_234" ) );
 	dialog.Show();
 }
 
 /*
 =================
-CMenuMain::Key
+CMenuMainWindow::KeyDown
 =================
 */
-bool CMenuMain::KeyDown( int key )
+bool CMenuMainWindow::KeyDown( int key )
 {
 	if( UI::Key::IsEscape( key ) )
 	{
-		if ( CL_IsActive( ))
+		if( CL_IsActive() )
 		{
 			if( !dialog.IsVisible() )
 				UI_CloseMenu();
 		}
 		else
 		{
-			QuitDialogCb( );
+			QuitDialogCb();
 		}
 		return true;
 	}
-	return CMenuFramework::KeyDown( key );
+	return CMenuWindow::KeyDown( key );
 }
 
 /*
 =================
-UI_Main_HazardCourse
+CMenuMainWindow::HazardCourseCb
 =================
 */
-void CMenuMain::HazardCourseCb()
+void CMenuMainWindow::HazardCourseCb()
 {
 	if( EngFuncs::GetCvarFloat( "host_serverstate" ) && EngFuncs::GetCvarFloat( "maxplayers" ) > 1 )
 		EngFuncs::HostEndGame( "end of the game" );
@@ -163,13 +146,24 @@ void CMenuMain::HazardCourseCb()
 	EngFuncs::ClientCmd( false, "hazardcourse\n" );
 }
 
-void CMenuMain::_Init( void )
+void CMenuMainWindow::_Init( void )
 {
+	// Use game title if available
+	if( gMenu.m_gameinfo.title[0] )
+		SetTitle( gMenu.m_gameinfo.title );
+
+	// Root window fills the entire virtual coordinate space
+	SetRect( 0, 0, 1024, 768 );
+
+	// No close or maximize buttons for root menu
+	SetShowCloseButton( false );
+	SetShowMaxButton( false );
+
 	if( gMenu.m_gameinfo.trainmap[0] && stricmp( gMenu.m_gameinfo.trainmap, gMenu.m_gameinfo.startmap ) != 0 )
 		bTrainMap = true;
 	else bTrainMap = false;
 
-	if( EngFuncs::GetCvarFloat( "host_allow_changegame" ))
+	if( EngFuncs::GetCvarFloat( "host_allow_changegame" ) )
 		bCustomGame = true;
 	else bCustomGame = false;
 
@@ -178,6 +172,9 @@ void CMenuMain::_Init( void )
 	console.iFlags |= QMF_NOTIFY;
 	console.SetPicture( PC_CONSOLE );
 	console.SetVisibility( gpGlobals->developer );
+	console.bDrawStroke = true;
+	console.colorStroke = WndStyle::BorderColor;
+	console.iStrokeWidth = 1;
 	SET_EVENT_MULTI( console.onReleased,
 	{
 		UI_SetActiveMenu( false );
@@ -187,68 +184,88 @@ void CMenuMain::_Init( void )
 	resumeGame.SetNameAndStatus( L( "GameUI_GameMenu_ResumeGame" ), L( "StringsList_188" ) );
 	resumeGame.SetPicture( PC_RESUME_GAME );
 	resumeGame.iFlags |= QMF_NOTIFY;
+	resumeGame.bDrawStroke = true;
+	resumeGame.colorStroke = WndStyle::BorderColor;
+	resumeGame.iStrokeWidth = 1;
 	resumeGame.onReleased = UI_CloseMenu;
 
 	disconnect.SetNameAndStatus( L( "GameUI_GameMenu_Disconnect" ), L( "Disconnect from server" ) );
 	disconnect.SetPicture( PC_DISCONNECT );
 	disconnect.iFlags |= QMF_NOTIFY;
-	disconnect.onReleased = VoidCb( &CMenuMain::DisconnectDialogCb );
+	disconnect.bDrawStroke = true;
+	disconnect.colorStroke = WndStyle::BorderColor;
+	disconnect.iStrokeWidth = 1;
+	disconnect.onReleased = VoidCb( &CMenuMainWindow::DisconnectDialogCb );
 
 	newGame.SetNameAndStatus( L( "GameUI_NewGame" ), L( "StringsList_189" ) );
 	newGame.SetPicture( PC_NEW_GAME );
 	newGame.iFlags |= QMF_NOTIFY;
+	newGame.bDrawStroke = true;
+	newGame.colorStroke = WndStyle::BorderColor;
+	newGame.iStrokeWidth = 1;
 	newGame.onReleased = UI_NewGame_Menu;
 
 	hazardCourse.SetNameAndStatus( L( "GameUI_TrainingRoom" ), L( "StringsList_190" ) );
 	hazardCourse.SetPicture( PC_HAZARD_COURSE );
 	hazardCourse.iFlags |= QMF_NOTIFY;
-	hazardCourse.onReleasedClActive = VoidCb( &CMenuMain::HazardCourseDialogCb );
-	hazardCourse.onReleased = VoidCb( &CMenuMain::HazardCourseCb );
+	hazardCourse.bDrawStroke = true;
+	hazardCourse.colorStroke = WndStyle::BorderColor;
+	hazardCourse.iStrokeWidth = 1;
+	hazardCourse.onReleasedClActive = VoidCb( &CMenuMainWindow::HazardCourseDialogCb );
+	hazardCourse.onReleased = VoidCb( &CMenuMainWindow::HazardCourseCb );
 
 	multiPlayer.SetNameAndStatus( L( "GameUI_Multiplayer" ), L( "StringsList_198" ) );
 	multiPlayer.SetPicture( PC_MULTIPLAYER );
 	multiPlayer.iFlags |= QMF_NOTIFY;
+	multiPlayer.bDrawStroke = true;
+	multiPlayer.colorStroke = WndStyle::BorderColor;
+	multiPlayer.iStrokeWidth = 1;
 	multiPlayer.onReleased = UI_MultiPlayer_Menu;
 
 	configuration.SetNameAndStatus( L( "GameUI_Options" ), L( "StringsList_193" ) );
 	configuration.SetPicture( PC_CONFIG );
 	configuration.iFlags |= QMF_NOTIFY;
+	configuration.bDrawStroke = true;
+	configuration.colorStroke = WndStyle::BorderColor;
+	configuration.iStrokeWidth = 1;
 	configuration.onReleased = UI_Settings_Menu;
 
 	saveRestore.iFlags |= QMF_NOTIFY;
+	saveRestore.bDrawStroke = true;
+	saveRestore.colorStroke = WndStyle::BorderColor;
+	saveRestore.iStrokeWidth = 1;
 
 	customGame.SetNameAndStatus( L( "GameUI_ChangeGame" ), L( "StringsList_530" ) );
 	customGame.SetPicture( PC_CUSTOM_GAME );
 	customGame.iFlags |= QMF_NOTIFY;
+	customGame.bDrawStroke = true;
+	customGame.colorStroke = WndStyle::BorderColor;
+	customGame.iStrokeWidth = 1;
 	customGame.onReleased = UI_CustomGame_Menu;
 
 	previews.SetNameAndStatus( L( "Previews" ), L( "StringsList_400" ) );
 	previews.SetPicture( PC_PREVIEWS );
 	previews.iFlags |= QMF_NOTIFY;
-	SET_EVENT( previews.onReleased, EngFuncs::ShellExecute( MenuStrings[ IDS_MEDIA_PREVIEWURL ], NULL, false ) );
+	previews.bDrawStroke = true;
+	previews.colorStroke = WndStyle::BorderColor;
+	previews.iStrokeWidth = 1;
+	SET_EVENT( previews.onReleased, EngFuncs::ShellExecute( MenuStrings[IDS_MEDIA_PREVIEWURL], NULL, false ) );
 
 	quit.SetNameAndStatus( L( "GameUI_GameMenu_Quit" ), L( "GameUI_QuitConfirmationText" ) );
 	quit.SetPicture( PC_QUIT );
 	quit.iFlags |= QMF_NOTIFY;
-	quit.onReleased = VoidCb( &CMenuMain::QuitDialogCb );
+	quit.bDrawStroke = true;
+	quit.colorStroke = WndStyle::BorderColor;
+	quit.iStrokeWidth = 1;
+	quit.onReleased = VoidCb( &CMenuMainWindow::QuitDialogCb );
 
-	quitButton.SetPicture( ART_CLOSEBTN_N, ART_CLOSEBTN_F, ART_CLOSEBTN_D );
-	quitButton.iFlags = QMF_MOUSEONLY;
-	quitButton.eFocusAnimation = QM_HIGHLIGHTIFFOCUS;
-	quitButton.onReleased = VoidCb( &CMenuMain::QuitDialogCb );
-
-	minimizeBtn.SetPicture( ART_MINIMIZE_N, ART_MINIMIZE_F, ART_MINIMIZE_D );
-	minimizeBtn.iFlags = QMF_MOUSEONLY;
-	minimizeBtn.eFocusAnimation = QM_HIGHLIGHTIFFOCUS;
-	minimizeBtn.onReleased.SetCommand( false, "minimize\n" );
-
-	if ( gMenu.m_gameinfo.gamemode == GAME_MULTIPLAYER_ONLY || gMenu.m_gameinfo.startmap[0] == 0 )
+	if( gMenu.m_gameinfo.gamemode == GAME_MULTIPLAYER_ONLY || gMenu.m_gameinfo.startmap[0] == 0 )
 		newGame.SetGrayed( true );
 
-	if ( gMenu.m_gameinfo.gamemode == GAME_SINGLEPLAYER_ONLY )
+	if( gMenu.m_gameinfo.gamemode == GAME_SINGLEPLAYER_ONLY )
 		multiPlayer.SetGrayed( true );
 
-	if ( gMenu.m_gameinfo.gamemode == GAME_MULTIPLAYER_ONLY )
+	if( gMenu.m_gameinfo.gamemode == GAME_MULTIPLAYER_ONLY )
 	{
 		saveRestore.SetGrayed( true );
 		hazardCourse.SetGrayed( true );
@@ -261,114 +278,89 @@ void CMenuMain::_Init( void )
 	}
 
 	// server.dll needs for reading savefiles or startup newgame
-	if( !EngFuncs::CheckGameDll( ))
+	if( !EngFuncs::CheckGameDll() )
 	{
 		saveRestore.SetGrayed( true );
 		hazardCourse.SetGrayed( true );
 		newGame.SetGrayed( true );
 	}
 
-	if( FBitSet( gMenu.m_gameinfo.flags, GFL_ANIMATED_TITLE ))
-	{
-		if( animatedBanner.TryLoad())
-			AddItem( animatedBanner );
-	}
-	else
-	{
-		AddItem( movieBanner );
-	}
-
 	dialog.Link( this );
 
-	AddItem( banner );
 	AddItem( console );
 	AddItem( disconnect );
 	AddItem( resumeGame );
 	AddItem( newGame );
 
-	if ( bTrainMap )
+	if( bTrainMap )
 		AddItem( hazardCourse );
 
 	AddItem( configuration );
 	AddItem( saveRestore );
 	AddItem( multiPlayer );
 
-	if ( bCustomGame )
+	if( bCustomGame )
 		AddItem( customGame );
 
 	AddItem( previews );
 	AddItem( quit );
-	AddItem( minimizeBtn );
-	AddItem( quitButton );
 }
 
 /*
 =================
-UI_Main_Init
+CMenuMainWindow::VidInit
 =================
 */
-void CMenuMain::VidInit( bool connected )
+void CMenuMainWindow::VidInit( bool connected )
 {
-	int hoffset = ( 70 / 640.0 ) * 1024.0;
+	// Vertical button layout starting position
+	int xoffset = 72;
+	int ystart = 180;
+	int ygap = 42;
+	int ypos = ystart;
 
-	// in original menu Previews is located at specific point
-	int previews_voffset = ( 404 / 480.0 ) * 768.0;
+	console.SetCoord( xoffset, ypos );
+	ypos += ygap;
 
-	// no visible console button gap
-	int ygap = (( 404 - 373 ) / 480.0 ) * 768.0;
+	disconnect.SetCoord( xoffset, ypos );
+	if( connected )
+		ypos += ygap;
 
-	// statically positioned items
-	minimizeBtn.SetRect( uiStatic.width - 72, 13, 32, 32 );
-	quitButton.SetRect( uiStatic.width - 36, 13, 32, 32 );
+	resumeGame.SetCoord( xoffset, ypos );
+	if( connected )
+		ypos += ygap;
 
-	previews.SetCoord( hoffset, previews_voffset );
-	quit.SetCoord( hoffset, previews_voffset + ygap );
-
-	// let's start calculating positions
-	int yoffset = previews_voffset - ygap;
-
-	if( bCustomGame )
-	{
-		customGame.SetCoord( hoffset, yoffset );
-		yoffset -= ygap;
-	}
-
-	multiPlayer.SetCoord( hoffset, yoffset );
-	yoffset -= ygap;
-
-	bool single = gpGlobals->maxClients < 2;
-
-	saveRestore.SetCoord( hoffset, yoffset );
-	yoffset -= ygap;
-
-	configuration.SetCoord( hoffset, yoffset );
-	yoffset -= ygap;
+	newGame.SetCoord( xoffset, ypos );
+	ypos += ygap;
 
 	if( bTrainMap )
 	{
-		hazardCourse.SetCoord( hoffset, yoffset );
-		yoffset -= ygap;
+		hazardCourse.SetCoord( xoffset, ypos );
+		ypos += ygap;
 	}
 
-	newGame.SetCoord( hoffset, yoffset );
-	yoffset -= ygap;
+	configuration.SetCoord( xoffset, ypos );
+	ypos += ygap;
 
-	if( connected )
+	saveRestore.SetCoord( xoffset, ypos );
+	ypos += ygap;
+
+	multiPlayer.SetCoord( xoffset, ypos );
+	ypos += ygap;
+
+	if( bCustomGame )
 	{
-		resumeGame.SetCoord( hoffset, yoffset );
-		yoffset -= ygap;
-
-		if( !single )
-		{
-			disconnect.SetCoord( hoffset, yoffset );
-			yoffset -= ygap;
-		}
+		customGame.SetCoord( xoffset, ypos );
+		ypos += ygap;
 	}
 
-	console.SetCoord( hoffset, yoffset );
-	yoffset -= ygap;
+	previews.SetCoord( xoffset, ypos );
+	ypos += ygap;
 
-	// now figure out what's visible
+	quit.SetCoord( xoffset, ypos );
+
+	// Visibility based on connection state
+	bool single = gpGlobals->maxClients < 2;
 	resumeGame.SetVisibility( connected );
 	disconnect.SetVisibility( connected && !single );
 
@@ -386,25 +378,25 @@ void CMenuMain::VidInit( bool connected )
 	}
 }
 
-void CMenuMain::_VidInit()
+void CMenuMainWindow::_VidInit()
 {
 	VidInit( CL_IsActive() );
 }
 
-void CMenuMain::Think()
+void CMenuMainWindow::Think()
 {
 	if( gpGlobals->developer )
 	{
-		if( !console.IsVisible( ))
+		if( !console.IsVisible() )
 			console.Show();
 	}
 	else
 	{
-		if( console.IsVisible( ))
+		if( console.IsVisible() )
 			console.Hide();
 	}
 
-	CMenuFramework::Think();
+	CMenuWindow::Think();
 }
 
-ADD_MENU( menu_main, CMenuMain, UI_Main_Menu );
+ADD_MENU( menu_main, CMenuMainWindow, UI_Main_Menu );
