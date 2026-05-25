@@ -12,6 +12,8 @@ the Free Software Foundation, either version 3 of the License, or
 #include "enginecallback_menu.h"
 #include "SchemeManager.h"
 #include "Utils.h"
+#include "FontManager.h"
+#include "BaseMenu.h"
 
 CSchemeManager CSchemeManager::s_instance;
 
@@ -41,6 +43,9 @@ bool CSchemeManager::LoadScheme( const char *filename )
 		ParseBorders( borders );
 	if( fonts )
 		ParseFonts( fonts );
+
+	for( int i = 0; i < m_numFonts; i++ )
+		m_fonts[i].handle = -1;
 
 	return true;
 }
@@ -244,4 +249,30 @@ int CSchemeManager::GetFontWeight( const char *alias )
 	}
 
 	return 500;
+}
+
+void CSchemeManager::CreateFonts()
+{
+	for( int i = 0; i < m_numFonts; i++ )
+	{
+		int scaledTall = (int)( m_fonts[i].tall * uiStatic.scaleY );
+		HFont h = CFontBuilder( m_fonts[i].name, scaledTall, m_fonts[i].weight ).Create();
+		m_fonts[i].handle = h;
+		Con_Printf( "SchemeManager: created font '%s' (face=%s tall=%d weight=%d) -> handle %d\n",
+			m_fonts[i].alias, m_fonts[i].name, scaledTall, m_fonts[i].weight, h );
+	}
+}
+
+HFont CSchemeManager::GetFont( const char *alias )
+{
+	if( !alias || !alias[0] )
+		return -1;
+
+	for( int i = 0; i < m_numFonts; i++ )
+	{
+		if( stricmp( m_fonts[i].alias, alias ) == 0 )
+			return m_fonts[i].handle > 0 ? m_fonts[i].handle : -1;
+	}
+
+	return -1;
 }

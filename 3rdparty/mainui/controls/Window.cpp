@@ -156,8 +156,17 @@ void CMenuWindow::DrawChrome()
 	int charH = (int)( m_iTitleBarH * 0.7f );
 	unsigned int titleTextCol = scheme->GetColor("TitleBarText");
 	if( !titleTextCol ) titleTextCol = WndStyle::TitleTextColor;
-	UI_DrawString( uiStatic.hDefaultFont, textX, tbY, textW, m_iTitleBarH,
-		m_szTitle, titleTextCol, charH, QM_LEFT, ETF_SHADOW );
+	HFont titleFont = scheme->GetFont( "Title" );
+	if( titleFont > 0 )
+	{
+		UI_DrawString( titleFont, textX, tbY, textW, m_iTitleBarH,
+			m_szTitle, titleTextCol, charH, QM_LEFT, ETF_SHADOW );
+	}
+	else
+	{
+		UI_DrawString( uiStatic.hDefaultFont, textX, tbY, textW, m_iTitleBarH,
+			m_szTitle, titleTextCol, charH, QM_LEFT, ETF_SHADOW );
+	}
 
 	// Close button
 	int cbX = m_scPos.x + m_scSize.w - m_iBorderW - m_iCloseBtnSize - 2;

@@ -1068,6 +1068,9 @@ int UI_VidInit( void )
 	// VidInit FontManager
 	g_FontMgr->VidInit();
 
+	// Create scheme fonts after FontManager is ready and scale is set
+	CSchemeManager::GetInstance()->CreateFonts();
+
 	// load button sounds
 	UI_LoadSounds();
 

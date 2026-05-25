@@ -661,7 +661,14 @@ void CMenuTable::Draw()
 	if( !headerBg ) headerBg = WndStyle::TitleBarColor;
 	UI_FillRect( m_scPos.x, m_scPos.y, headerSize.w, headerSize.h, headerBg );
 
+	HFont defFont = scheme->GetFont( "Default" );
+	HFont savedFont = font;
+	if( defFont > 0 )
+		font = defFont;
+
 	DrawLine( m_scPos, szHeaderTexts, columns, iHeaderColor, true );
+
+	font = savedFont;
 
 	if( !szBackground )
 	{

@@ -14,11 +14,15 @@ the Free Software Foundation, either version 3 of the License, or
 
 #include "KeyValues.h"
 #include "SchemeBorder.h"
+#include "FontRenderer.h"
 
 class CSchemeManager
 {
 public:
 	bool LoadScheme( const char *filename );
+
+	void CreateFonts();
+	HFont GetFont( const char *alias );
 
 	unsigned int GetColor( const char *colorName );
 	CSchemeBorder *GetBorder( const char *borderName );
@@ -35,7 +39,7 @@ private:
 	CSchemeBorder *ParseSingleBorder( CKeyValues *borderKey );
 
 	struct ColorEntry { char name[64]; unsigned int color; };
-	struct FontEntry { char alias[64]; char name[64]; int tall; int weight; };
+	struct FontEntry { char alias[64]; char name[64]; int tall; int weight; HFont handle; };
 
 	ColorEntry m_colors[128];
 	int m_numColors;
