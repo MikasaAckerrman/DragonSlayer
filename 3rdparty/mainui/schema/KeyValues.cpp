@@ -86,109 +86,12 @@ bool CKeyValues::ParseBuffer( const char *buffer, int length )
 	strncpy( m_szName, token, MAX_NAME_LENGTH - 1 );
 	m_szName[MAX_NAME_LENGTH - 1] = '\0';
 
-	// expect opening brace
+	// expect opening brace, then delegate to ParseSection
 	buf = SkipWhitespaceAndComments( buf, end );
 	if( !buf || buf >= end || *buf != '{' )
 		return false;
 
-	buf++; // skip '{'
-
-	// parse children
-	CKeyValues *lastChild = nullptr;
-
-	while( buf && buf < end )
-	{
-		buf = SkipWhitespaceAndComments( buf, end );
-		if( !buf || buf >= end )
-			break;
-
-		if( *buf == '}' )
-		{
-			buf++;
-			break;
-		}
-
-		// read key name
-		buf = ReadToken( buf, end, token, sizeof( token ) );
-		if( !buf )
-			break;
-
-		CKeyValues *newKey = new CKeyValues( token );
-
-		// check what follows: '{' means subsection, otherwise it's a value
-		const char *peek = SkipWhitespaceAndComments( buf, end );
-		if( peek && peek < end && *peek == '{' )
-		{
-			buf = peek + 1; // skip '{'
-
-			// parse sub-keys recursively
-			CKeyValues *subLast = nullptr;
-			while( buf && buf < end )
-			{
-				buf = SkipWhitespaceAndComments( buf, end );
-				if( !buf || buf >= end )
-					break;
-
-				if( *buf == '}' )
-				{
-					buf++;
-					break;
-				}
-
-				// read sub-key name
-				char subToken[MAX_VALUE_LENGTH];
-				buf = ReadToken( buf, end, subToken, sizeof( subToken ) );
-				if( !buf )
-					break;
-
-				CKeyValues *subKey = new CKeyValues( subToken );
-
-				// check if sub-key has subsection or value
-				const char *subPeek = SkipWhitespaceAndComments( buf, end );
-				if( subPeek && subPeek < end && *subPeek == '{' )
-				{
-					// recursive subsection
-					buf = subPeek;
-					CKeyValues *parsed = subKey->ParseSection( buf, end );
-					(void)parsed;
-				}
-				else
-				{
-					// read value
-					char valToken[MAX_VALUE_LENGTH];
-					buf = ReadToken( subPeek, end, valToken, sizeof( valToken ) );
-					if( buf )
-					{
-						strncpy( subKey->m_szValue, valToken, MAX_VALUE_LENGTH - 1 );
-						subKey->m_szValue[MAX_VALUE_LENGTH - 1] = '\0';
-					}
-				}
-
-				if( !subLast )
-					newKey->m_pFirstChild = subKey;
-				else
-					subLast->m_pNextSibling = subKey;
-				subLast = subKey;
-			}
-		}
-		else
-		{
-			// read value token
-			char valToken[MAX_VALUE_LENGTH];
-			buf = ReadToken( peek, end, valToken, sizeof( valToken ) );
-			if( buf )
-			{
-				strncpy( newKey->m_szValue, valToken, MAX_VALUE_LENGTH - 1 );
-				newKey->m_szValue[MAX_VALUE_LENGTH - 1] = '\0';
-			}
-		}
-
-		if( !lastChild )
-			m_pFirstChild = newKey;
-		else
-			lastChild->m_pNextSibling = newKey;
-		lastChild = newKey;
-	}
+	ParseSection( buf, end );
 
 	return true;
 }

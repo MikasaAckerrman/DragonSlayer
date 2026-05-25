@@ -39,6 +39,14 @@ public:
 	const char *GetValue() const;
 
 private:
+#ifdef MY_COMPILER_SUCKS
+	CKeyValues( const CKeyValues & );
+	CKeyValues &operator=( const CKeyValues & );
+#else
+	CKeyValues( const CKeyValues & ) = delete;
+	CKeyValues &operator=( const CKeyValues & ) = delete;
+#endif
+
 	enum { MAX_NAME_LENGTH = 128, MAX_VALUE_LENGTH = 256 };
 
 	char m_szName[MAX_NAME_LENGTH];
