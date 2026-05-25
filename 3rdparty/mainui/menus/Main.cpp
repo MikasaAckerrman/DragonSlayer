@@ -26,6 +26,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "keydefs.h"
 #include "MenuStrings.h"
 #include "gameinfo.h"
+#include "SchemeManager.h"
 
 // Helper: apply the standard olive-stroke style to a menu button
 static void ApplyMenuButtonStyle( CMenuPicButton &btn )
@@ -120,6 +121,12 @@ only waste draw calls and allow accidental drag/resize.
 */
 void CMenuMainWindow::Draw()
 {
+	// Fill background with scheme color (dark olive, CS 1.6 style)
+	CSchemeManager *scheme = CSchemeManager::GetInstance();
+	unsigned int bgColor = scheme->GetColor("ControlDarkBG");
+	if( !bgColor ) bgColor = 0xFF1E2828; // fallback dark olive
+	UI_FillRect( m_scPos.x, m_scPos.y, m_scSize.w, m_scSize.h, bgColor );
+
 	CMenuItemsHolder::Draw();
 }
 
@@ -399,18 +406,29 @@ void CMenuMainWindow::_VidInit()
 
 void CMenuMainWindow::Think()
 {
+	bool needLayout = false;
+
 	if( gpGlobals->developer )
 	{
 		if( !console.IsVisible() )
+		{
 			console.Show();
+			needLayout = true;
+		}
 	}
 	else
 	{
 		if( console.IsVisible() )
+		{
 			console.Hide();
+			needLayout = true;
+		}
 	}
 
-	CMenuWindow::Think();
+	if( needLayout )
+		VidInit( CL_IsActive() );
+
+	CMenuItemsHolder::Think();
 }
 
 ADD_MENU( menu_main, CMenuMainWindow, UI_Main_Menu );
