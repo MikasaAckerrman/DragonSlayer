@@ -272,7 +272,6 @@ void UI_LoadGame_Menu( void );
 void UI_SaveGame_Menu( void );
 void UI_SaveLoad_Menu( void );
 void UI_MultiPlayer_Menu( void );
-void UI_Options_Menu( void );
 void UI_Settings_Menu( void );
 void UI_WndServerBrowser_Menu( void );
 void UI_WndCreateGame_Menu( void );
