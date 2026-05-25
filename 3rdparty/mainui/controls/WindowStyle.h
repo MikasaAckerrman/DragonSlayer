@@ -18,31 +18,31 @@ the Free Software Foundation, either version 3 of the License, or
 namespace WndStyle
 {
 	// Background
-	static const unsigned int BgColor          = 0xFF2D2B2E; // opaque dark brownish-gray
-	static const unsigned int BgColorSolid     = 0xFF2D2B2E; // same as BgColor
+	static const unsigned int BgColor          = 0xFF3C3C3C; // medium-dark gray (#3C3C3C)
+	static const unsigned int BgColorSolid     = 0xFF3C3C3C; // same as BgColor
 
 	// Border
-	static const unsigned int BorderColor      = 0xFF44584C; // olive-green border
+	static const unsigned int BorderColor      = 0xFF3C4E4E; // olive (#4E4E3C in ABGR)
 	static const int          BorderWidth      = 1;
 
 	// Title bar
-	static const unsigned int TitleBarColor    = 0xFF232120; // darker opaque
-	static const unsigned int TitleTextColor   = 0xFFD0D0D0;
-	static const int          TitleBarHeight   = 28; // virtual coords
+	static const unsigned int TitleBarColor    = 0xFF2A2A2A; // very dark gray
+	static const unsigned int TitleTextColor   = 0xFFC8C8C8;
+	static const int          TitleBarHeight   = 24; // virtual coords
 
 	// Close button
 	static const unsigned int CloseBtnColor    = 0xFF2222CC; // red hover (ABGR)
 	static const unsigned int CloseTextColor   = 0xFFCCCCCC;
-	static const int          CloseBtnSize     = 24;
+	static const int          CloseBtnSize     = 20;
 
 	// Tabs
-	static const unsigned int TabActiveColor   = 0xFF2D2B2E; // same as BgColor - merges with content
-	static const unsigned int TabInactiveColor = 0xFF1E1C1E; // darker opaque
-	static const unsigned int TabHoverColor    = 0xFF383638; // slightly lighter hover
-	static const unsigned int TabTextColor     = 0xFF909090; // gray text for inactive
+	static const unsigned int TabActiveColor   = 0xFF3C3C3C; // same as BgColor - merges with content
+	static const unsigned int TabInactiveColor = 0xFF2E2E2E; // darker
+	static const unsigned int TabHoverColor    = 0xFF484848; // slightly lighter hover
+	static const unsigned int TabTextColor     = 0xFFA0A0A0; // gray text for inactive
 	static const unsigned int TabTextActiveCol = 0xFFFFFFFF; // white for active
-	static const unsigned int TabBorderColor   = 0xFF44584C; // olive border
-	static const int          TabHeight        = 26;
+	static const unsigned int TabBorderColor   = 0xFF3C4E4E; // olive border
+	static const int          TabHeight        = 22;
 	static const int          TabMinWidth      = 64;
 	static const int          TabPadH          = 10;
 	static const int          TabPadBetween    = 2;
@@ -53,10 +53,10 @@ namespace WndStyle
 	static const int          TitlePadLeft     = 6;
 
 	// Widget style (CS 1.6 flat look)
-	static const unsigned int WidgetBgColor          = 0xFF2D2B2E; // dark fill for inputs/checkboxes
-	static const unsigned int WidgetBorderColor      = 0xFF44584C; // olive border for widgets
+	static const unsigned int WidgetBgColor          = 0xFF1E1E1E; // darker fill for inputs/checkboxes
+	static const unsigned int WidgetBorderColor      = 0xFF3C4E4E; // olive border for widgets
 	static const unsigned int WidgetTextColor        = 0xFFD0D0D0; // light gray text
-	static const unsigned int WidgetFocusBorderColor = 0xFF5A7A64; // brighter olive for focus
+	static const unsigned int WidgetFocusBorderColor = 0xFF6A8E74; // brighter olive for focus
 	static const int          SliderTrackHeight      = 6;
 	static const int          SliderThumbW           = 12;
 	static const int          SliderThumbH           = 16;

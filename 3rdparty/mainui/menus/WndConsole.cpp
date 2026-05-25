@@ -37,10 +37,10 @@ private:
 
 void CMenuWndConsole::_Init()
 {
-	SetRect( 50, 50, 600, 380 );
+	SetRect( 40, 30, 640, 420 );
 
-	int contentW = 600 - WndStyle::BorderWidth * 2;
-	int contentH = 380 - WndStyle::TitleBarHeight - WndStyle::BorderWidth * 2;
+	int contentW = 640 - WndStyle::BorderWidth * 2;
+	int contentH = 420 - WndStyle::TitleBarHeight - WndStyle::BorderWidth * 2;
 
 	// Hint label (console output is in engine, we just provide input)
 	m_lblHint.szName = "Console output appears in the engine overlay (` key).";

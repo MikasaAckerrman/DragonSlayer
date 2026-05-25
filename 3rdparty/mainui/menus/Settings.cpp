@@ -41,10 +41,10 @@ public:
 static void ApplyFlatStyle( CMenuPicButton &btn )
 {
 	btn.bDrawStroke = true;
-	btn.colorStroke = 0xFF44584C;
+	btn.colorStroke = 0xFF3C4E4E;
 	btn.iStrokeWidth = 1;
-	btn.colorBase = 0xFF2D2B2E;
-	btn.colorFocus = 0xFF383638;
+	btn.colorBase = 0xFF3C3C3C;
+	btn.colorFocus = 0xFF484848;
 	btn.eFocusAnimation = QM_HIGHLIGHTIFFOCUS;
 	btn.eTextAlignment = QM_CENTER;
 	btn.bEnableTransitions = false;
@@ -226,10 +226,10 @@ private:
 // ---------------------------------------------------------------
 void CMenuSettings::_Init()
 {
-	SetRect( 80, 60, 700, 500 );
+	SetRect( 64, 48, 640, 480 );
 
-	int contentW = 700 - WndStyle::BorderWidth * 2;
-	int pageH = 500 - WndStyle::TabHeight - 50; // area below tabs, above bottom buttons
+	int contentW = 640 - WndStyle::BorderWidth * 2;
+	int pageH = 480 - WndStyle::TabHeight - 50; // area below tabs, above bottom buttons
 	// Tab control covers only the header row
 	m_tabControl.SetRect( 0, 0, contentW, WndStyle::TabHeight );
 	m_tabControl.AddTab( "Multiplayer", &m_pageMultiplayer );
@@ -623,7 +623,7 @@ void CMenuSettings::_Init()
 	AddItem( m_pageSystem );
 
 	// ===== Bottom button bar (OK / Cancel / Apply) =====
-	int btnY = 500 - 42;
+	int btnY = 480 - 42;
 	int btnW = 90;
 	int btnH = 28;
 	m_btnOK.SetNameAndStatus( "OK", "Apply and close" );
