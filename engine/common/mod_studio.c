@@ -815,6 +815,43 @@ int Mod_HitgroupForStudioHull( int index )
 
 /*
 ====================
+Mod_StudioPointInHitbox
+
+Test whether a world-space point lies inside the hitbox-`index` hull
+that was just built by Mod_HullForStudio. Reads from the file-scope
+studio_planes[] arrays, so the call sequence is strictly:
+
+    hulls = Mod_HullForStudio( ... );
+    for( i = 0; i < numhitboxes; i++ )
+        if( Mod_StudioPointInHitbox( i, world_pt ))
+            group = Mod_HitgroupForStudioHull( i );
+
+Plane layout per hitbox (set by Mod_SetStudioHullPlane):
+    even index = max-face, point inside iff Dot(p,n) - dist <= 0
+    odd  index = min-face, point inside iff Dot(p,n) - dist >= 0
+====================
+*/
+qboolean Mod_StudioPointInHitbox( int index, const vec3_t world_pt )
+{
+	const mplane_t *p;
+
+	if( index < 0 || index >= MAXSTUDIOBONES )
+		return false;
+
+	p = &studio_planes[index * 6];
+
+	if( DotProduct( world_pt, p[0].normal ) - p[0].dist >  0.0f ) return false;
+	if( DotProduct( world_pt, p[1].normal ) - p[1].dist <  0.0f ) return false;
+	if( DotProduct( world_pt, p[2].normal ) - p[2].dist >  0.0f ) return false;
+	if( DotProduct( world_pt, p[3].normal ) - p[3].dist <  0.0f ) return false;
+	if( DotProduct( world_pt, p[4].normal ) - p[4].dist >  0.0f ) return false;
+	if( DotProduct( world_pt, p[5].normal ) - p[5].dist <  0.0f ) return false;
+
+	return true;
+}
+
+/*
+====================
 StudioBoundVertex
 ====================
 */

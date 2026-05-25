@@ -23,6 +23,7 @@ GNU General Public License for more details.
 #include "studio.h"
 #include "wadfile.h"	// acess decal size
 #include "sound.h"
+#include "cl_hud_slayer.h"
 
 /*
 ==============================================================
@@ -2193,6 +2194,8 @@ void CL_ParseTempEntity( sizebuf_t *msg, connprotocol_t proto )
 		count = MSG_ReadByte( pbuf );
 		if( type == TE_BLOOD ) R_Blood( pos, pos2, color, count );
 		else R_BloodStream( pos, pos2, color, count );
+		if( type == TE_BLOOD )
+			Slayer_HUD_OnBloodImpact( pos, count );
 		break;
 	case TE_SHOWLINE:
 		pos[0] = MSG_ReadCoord( pbuf );
@@ -2324,6 +2327,7 @@ void CL_ParseTempEntity( sizebuf_t *msg, connprotocol_t proto )
 		color = MSG_ReadByte( pbuf );
 		scale = (float)MSG_ReadByte( pbuf );
 		R_BloodSprite( pos, color, modelIndex, decalIndex, scale );
+		Slayer_HUD_OnBloodImpact( pos, (int)scale );
 		break;
 	case TE_PROJECTILE:
 		pos[0] = MSG_ReadCoord( pbuf );

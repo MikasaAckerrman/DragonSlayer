@@ -66,6 +66,7 @@ ALL_BUILD.*
 INSTALL.*
 ZERO_CHECK.*
 CMakeLists.txt
+!3rdparty/mainui/CMakeLists.txt
 
 # Visual Studio
 *.obj

@@ -29,13 +29,14 @@ Other platforms: Uses non-blocking HTTP sockets (port 80, no TLS).
 #include <jni.h>
 #include <SDL.h>
 #include <stdlib.h>
+#include <time.h>
 #include <android/log.h>
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
-#define AVD_MAX_CONCURRENT  2
+#define AVD_MAX_CONCURRENT  12
 #define AVD_RETRY_DELAY     60.0
 
 // Slot result values (written by worker thread, read by Frame)
@@ -208,8 +209,6 @@ static void *AVD_WorkerThread( void *arg )
 void Slayer_AvatarDownload_Init( void )
 {
 	JNIEnv *env;
-	jobject activity;
-	jclass cls;
 
 	Cvar_RegisterVariable( &slayer_avatar_download );
 	memset( (void *)avd_slot_result, 0, sizeof( avd_slot_result ) );
@@ -220,55 +219,93 @@ void Slayer_AvatarDownload_Init( void )
 	avd_activity_class = NULL;
 	avd_download_method = NULL;
 
-	// Get JNI env from SDL (only valid on main thread)
+	// Get JNI env from SDL (only valid on main thread).
+	// SDL is already initialized at this point, so this is safe.
 	env = (JNIEnv *)SDL_AndroidGetJNIEnv();
 	if( !env )
-	{
-		Con_Printf( S_WARN "AvatarDL: failed to get JNIEnv\n" );
 		return;
-	}
 
 	// Cache JavaVM for worker threads
 	if( (*env)->GetJavaVM( env, &avd_jvm ) != 0 )
 	{
-		Con_Printf( S_WARN "AvatarDL: failed to get JavaVM\n" );
+		avd_jvm = NULL;
 		return;
 	}
 
-	// Get XashActivity class
-	activity = (jobject)SDL_AndroidGetActivity();
-	if( !activity )
+	// NOTE: FindClass and GetStaticMethodID are deferred to the first
+	// Slayer_AvatarDownload_Request() call via AVD_EnsureJNI(). This avoids
+	// the DL_BLOCKED issue where the Java classloader has not yet fully
+	// loaded XashActivity during native lib static init.
+}
+
+// ---------------------------------------------------------------------------
+// Lazy JNI class/method lookup (called on first Request)
+// ---------------------------------------------------------------------------
+
+static qboolean AVD_EnsureJNI( void )
+{
+	JNIEnv *env;
+	jclass cls;
+	static qboolean avd_jni_attempted = false;
+
+	// Fast path: already initialized
+	if( avd_download_method != NULL )
+		return true;
+
+	// Already tried and failed - don't retry
+	if( avd_jni_attempted )
+		return false;
+
+	// Get JNI env
+	env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+	if( !env )
 	{
-		Con_Printf( S_WARN "AvatarDL: failed to get activity\n" );
-		return;
+		__android_log_print( ANDROID_LOG_ERROR, "Xash",
+			"AvatarDL: AVD_EnsureJNI failed - SDL_AndroidGetJNIEnv returned NULL" );
+		return false;
 	}
 
-	cls = (*env)->GetObjectClass( env, activity );
-
-	// Defensive: GetObjectClass should not throw, but if it did on some quirky
-	// Android build, surface the exception and bail rather than carry it forward.
-	if( (*env)->ExceptionCheck( env ) )
+	// Cache JavaVM if not yet done (e.g. Init was called before SDL was ready)
+	if( !avd_jvm )
 	{
-		(*env)->ExceptionDescribe( env );
-		(*env)->ExceptionClear( env );
+		if( (*env)->GetJavaVM( env, &avd_jvm ) != 0 )
+		{
+			__android_log_print( ANDROID_LOG_ERROR, "Xash",
+				"AvatarDL: AVD_EnsureJNI failed - GetJavaVM returned error" );
+			avd_jvm = NULL;
+			return false;
+		}
+	}
+
+	avd_jni_attempted = true;
+
+	// Find XashActivity class by name (not via GetObjectClass) to ensure
+	// we get the correct class even if SDL returns a different object type.
+	cls = (*env)->FindClass( env, "su/xash/engine/XashActivity" );
+	if( !cls || (*env)->ExceptionCheck( env ) )
+	{
+		if( (*env)->ExceptionCheck( env ) )
+		{
+			(*env)->ExceptionDescribe( env );
+			(*env)->ExceptionClear( env );
+		}
 		if( cls ) (*env)->DeleteLocalRef( env, cls );
-		(*env)->DeleteLocalRef( env, activity );
-		avd_activity_class = NULL;
-		Con_Printf( S_WARN "AvatarDL: GetObjectClass threw exception\n" );
-		return;
+		__android_log_print( ANDROID_LOG_ERROR, "Xash",
+			"AvatarDL: AVD_EnsureJNI failed - FindClass(XashActivity) returned NULL" );
+		return false;
 	}
 
 	avd_activity_class = (*env)->NewGlobalRef( env, cls );
 	(*env)->DeleteLocalRef( env, cls );
-	(*env)->DeleteLocalRef( env, activity );
 
 	// NewGlobalRef returns NULL if the JVM is out of memory or the local ref was NULL.
 	if( !avd_activity_class )
 	{
 		if( (*env)->ExceptionCheck( env ) )
 			(*env)->ExceptionClear( env );
-		Con_Printf( S_WARN "AvatarDL: NewGlobalRef returned NULL\n" );
-		return;
+		__android_log_print( ANDROID_LOG_ERROR, "Xash",
+			"AvatarDL: AVD_EnsureJNI failed - NewGlobalRef returned NULL" );
+		return false;
 	}
 
 	// Clear any stale pending exception before the next JNI call.
@@ -291,13 +328,17 @@ void Slayer_AvatarDownload_Init( void )
 			(*env)->ExceptionDescribe( env );
 			(*env)->ExceptionClear( env );
 		}
-		Con_Printf( S_WARN "AvatarDL: failed to find downloadAvatar method\n" );
 		(*env)->DeleteGlobalRef( env, avd_activity_class );
 		avd_activity_class = NULL;
-		return;
+		__android_log_print( ANDROID_LOG_ERROR, "Xash",
+			"AvatarDL: AVD_EnsureJNI failed - GetStaticMethodID(downloadAvatar) returned NULL" );
+		return false;
 	}
 
-	Con_Printf( "Slayer3D: avatar JNI init OK (slot count %d)\n", MAX_CLIENTS );
+	__android_log_print( ANDROID_LOG_INFO, "Xash",
+		"AvatarDL: lazy JNI init SUCCESS - avd_jvm=%p class=%p method=%p",
+		(void *)avd_jvm, (void *)avd_activity_class, (void *)avd_download_method );
+	return true;
 }
 
 void Slayer_AvatarDownload_Shutdown( void )
@@ -335,8 +376,23 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 	if( slot < 0 || slot >= MAX_CLIENTS || steamid64 == 0 )
 		return;
 
-	if( !avd_download_method )
+	if( !AVD_EnsureJNI() )
+	{
+		// File log only - no console spam
+		{
+			file_t *logf = FS_Open( "avatars/status_log.txt", "a", false );
+			if( logf )
+			{
+				FS_Printf( logf, "[%.1f] DL_BLOCKED slot=%d id=%" PRIu64 " (lazy JNI init failed)\n",
+					host.realtime, slot, steamid64 );
+				FS_Close( logf );
+			}
+		}
+		__android_log_print( ANDROID_LOG_ERROR, "Xash",
+			"AvatarDL: BLOCKED slot=%d steamid=%" PRIu64 " - lazy JNI init failed",
+			slot, steamid64 );
 		return;  // JNI not initialized
+	}
 
 	// Already done or in progress?
 	if( avd_slot_result[slot] == AVD_RESULT_DONE ||
@@ -372,11 +428,25 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 	Q_snprintf( path, sizeof( path ), "avatars/%" PRIu64 ".png", steamid64 );
 	if( FS_FileExists( path, false ) )
 	{
+		// Check if cached file is older than 24 hours (86400 seconds).
+		// If so, delete it and re-download to pick up avatar changes.
+		int file_time = FS_FileTime( path, false );
+		int now = (int)time( NULL );
+
+		if( file_time > 0 && now - file_time < 86400 )
+		{
+			__android_log_print( ANDROID_LOG_INFO, "Xash",
+				"AvatarDL: cache hit slot=%d steamid=%" PRIu64 " path=%s",
+				slot, steamid64, path );
+			avd_slot_result[slot] = AVD_RESULT_DONE;
+			return;
+		}
+
+		// Stale cache - delete and re-download
+		FS_Delete( path );
 		__android_log_print( ANDROID_LOG_INFO, "Xash",
-			"AvatarDL: cache hit slot=%d steamid=%" PRIu64 " path=%s",
-			slot, steamid64, path );
-		avd_slot_result[slot] = AVD_RESULT_DONE;
-		return;
+			"AvatarDL: cache expired for slot=%d steamid=%" PRIu64 ", re-downloading",
+			slot, steamid64 );
 	}
 
 	// Spawn worker thread
@@ -406,7 +476,15 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 	__android_log_print( ANDROID_LOG_INFO, "Xash",
 		"AvatarDL: queued slot=%d steamid=%" PRIu64 " (active=%d)",
 		slot, steamid64, avd_active_count );
-	Con_DPrintf( "AvatarDL: started download for slot %d (%" PRIu64 ")\n", slot, steamid64 );
+	{
+		file_t *logf = FS_Open( "avatars/status_log.txt", "a", false );
+		if( logf )
+		{
+			FS_Printf( logf, "[%.1f] DL_QUEUED slot=%d id=%" PRIu64 " active=%d\n",
+				host.realtime, slot, steamid64, avd_active_count );
+			FS_Close( logf );
+		}
+	}
 }
 
 qboolean Slayer_AvatarDownload_Frame( void )
@@ -429,7 +507,15 @@ qboolean Slayer_AvatarDownload_Frame( void )
 			any_completed = true;
 			__android_log_print( ANDROID_LOG_INFO, "Xash",
 				"AvatarDL: download complete for slot %d", i );
-			Con_DPrintf( "AvatarDL: download complete for slot %d\n", i );
+			{
+				file_t *logf = FS_Open( "avatars/status_log.txt", "a", false );
+				if( logf )
+				{
+					FS_Printf( logf, "[%.1f] DL_OK slot=%d id=%" PRIu64 "\n",
+						host.realtime, i, avd_slot_id[i] );
+					FS_Close( logf );
+				}
+			}
 		}
 		else if( avd_slot_result[i] == AVD_RESULT_FAIL )
 		{
@@ -439,7 +525,15 @@ qboolean Slayer_AvatarDownload_Frame( void )
 				avd_active_count--;
 			__android_log_print( ANDROID_LOG_ERROR, "Xash",
 				"AvatarDL: download failed for slot %d", i );
-			Con_DPrintf( "AvatarDL: download failed for slot %d\n", i );
+			{
+				file_t *logf = FS_Open( "avatars/status_log.txt", "a", false );
+				if( logf )
+				{
+					FS_Printf( logf, "[%.1f] DL_FAIL slot=%d id=%" PRIu64 "\n",
+						host.realtime, i, avd_slot_id[i] );
+					FS_Close( logf );
+				}
+			}
 		}
 	}
 
@@ -456,7 +550,7 @@ qboolean Slayer_AvatarDownload_Frame( void )
 // Configuration
 // ===========================================================================
 
-#define AVATAR_MAX_CONCURRENT  2       // max simultaneous active downloads
+#define AVATAR_MAX_CONCURRENT  12      // max simultaneous active downloads
 #define AVATAR_TIMEOUT         15.0    // seconds before giving up
 #define AVATAR_RETRY_DELAY     60.0    // seconds before retrying a failed download
 #define AVATAR_MAX_RESPONSE    65536   // max XML profile response (~20KB typical)
@@ -787,6 +881,29 @@ static qboolean AVD_ParseXMLForAvatar( avd_request_t *req )
 	url = tag_start;
 	url_len = (int)( tag_end - tag_start );
 
+	// Skip Steam's stock default avatar (the "?" silhouette). Any URL
+	// containing this SHA1 fragment is the same generic placeholder served
+	// for accounts that never set a profile picture. Downloading it would
+	// waste bandwidth and display a misleading icon on the scoreboard.
+	{
+		// Bounded search within [url, url+url_len) for the default hash.
+		static const char default_hash[] = "fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb";
+		int hash_len = (int)sizeof( default_hash ) - 1;
+		int i;
+
+		if( url_len >= hash_len )
+		{
+			for( i = 0; i <= url_len - hash_len; i++ )
+			{
+				if( memcmp( url + i, default_hash, hash_len ) == 0 )
+				{
+					Con_DPrintf( "AvatarDL: skipping default avatar for slot %d\n", req->slot );
+					return false;
+				}
+			}
+		}
+	}
+
 	if( !AVD_ParseURL( req, url, url_len ) )
 		return false;
 
@@ -825,6 +942,18 @@ static qboolean AVD_SaveImage( avd_request_t *req )
 		return false;
 	}
 	FS_AllowDirectPaths( false );
+
+	// Save source URL for cache invalidation on next check
+	{
+		char url_path[128];
+		char url_buf[768];
+		int url_len;
+
+		Q_snprintf( url_path, sizeof( url_path ), "avatars/%" PRIu64 ".url", req->steamid64 );
+		url_len = Q_snprintf( url_buf, sizeof( url_buf ),
+			"http://%s%s", req->target_host, req->target_path );
+		FS_WriteFile( url_path, url_buf, url_len );
+	}
 
 	Con_DPrintf( "AvatarDL: saved %s (%d bytes)\n", file_path, image_size );
 	return true;
@@ -1143,6 +1272,42 @@ static qboolean AVD_OnPhaseDone( avd_request_t *req )
 			return false;
 		}
 
+		// Cache invalidation: check if avatar URL changed since last download.
+		// If the URL is the same and the PNG exists, skip the image download.
+		{
+			char url_path[128];
+			char png_path[128];
+			char current_url[768];
+			int current_len;
+			byte *file_data;
+			fs_offset_t file_len;
+
+			Q_snprintf( url_path, sizeof( url_path ), "avatars/%" PRIu64 ".url", req->steamid64 );
+			Q_snprintf( png_path, sizeof( png_path ), "avatars/%" PRIu64 ".png", req->steamid64 );
+			current_len = Q_snprintf( current_url, sizeof( current_url ),
+				"http://%s%s", req->target_host, req->target_path );
+
+			file_data = FS_LoadFile( url_path, &file_len, false );
+			if( file_data )
+			{
+				if( (int)file_len == current_len
+					&& memcmp( file_data, current_url, file_len ) == 0
+					&& FS_FileExists( png_path, false ) )
+				{
+					// Avatar unchanged - mark success without re-downloading image
+					Mem_Free( file_data );
+					Con_DPrintf( "AvatarDL: avatar unchanged for slot %d, skipping image download\n", req->slot );
+					AVD_RemoveRequest( req, true );
+					return true;
+				}
+				Mem_Free( file_data );
+				// URL changed - delete stale PNG
+				if( FS_FileExists( png_path, false ) )
+					FS_Delete( png_path );
+				Con_DPrintf( "AvatarDL: avatar URL changed for slot %d, re-downloading\n", req->slot );
+			}
+		}
+
 		// Transition to image phase
 		AVD_CloseSocket( req );
 		AVD_FreeResponse( req );
@@ -1269,8 +1434,16 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 	Q_snprintf( path, sizeof( path ), "avatars/%" PRIu64 ".png", steamid64 );
 	if( FS_FileExists( path, false ) )
 	{
-		avd_slot_state[slot] = AVD_SLOT_DONE;
-		return;
+		char url_path[128];
+		Q_snprintf( url_path, sizeof( url_path ), "avatars/%" PRIu64 ".url", steamid64 );
+		if( !FS_FileExists( url_path, false ) )
+		{
+			// Legacy cache without URL tracking - treat as done
+			avd_slot_state[slot] = AVD_SLOT_DONE;
+			return;
+		}
+		// Has .url file - proceed with XML fetch for URL comparison.
+		// AVD_OnPhaseDone will short-circuit if URL unchanged.
 	}
 
 	// Mark as queued. Frame() will promote to active when capacity is available.

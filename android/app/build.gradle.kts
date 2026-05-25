@@ -88,12 +88,16 @@ extensions.configure<ApplicationExtension> {
 		jniLibs {
 			keepDebugSymbols.add("**/*.so")
 			useLegacyPackaging = true
+			// Resolve duplicate libmenu.so: cmake --install copies to jniLibs/ and
+			// AGP also finds the same lib in the cmake obj/ build tree. Prefer jniLibs copy.
+			pickFirsts.add("**/libmenu.so")
 		}
 	}
 
 	sourceSets {
 		getByName("main") {
 			assets.directories.add("../../3rdparty/extras/xash-extras")
+			assets.directories.add("../../3rdparty/mainui/game_assets")
 			java.directories.add("../../3rdparty/SDL/android-project/app/src/main/java")
 		}
 	}

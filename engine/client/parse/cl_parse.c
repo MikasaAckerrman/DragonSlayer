@@ -16,6 +16,7 @@ GNU General Public License for more details.
 #include "common.h"
 #include "client.h"
 #include "cl_scoreboard_slayer.h"
+#include "cl_hud_slayer.h"
 #include "mod_local.h"
 #include "net_encode.h"
 #include "cl_tent.h"
@@ -37,6 +38,93 @@ Default stub for missed callbacks
 static int CL_UserMsgStub( const char *pszName, int iSize, void *pbuf )
 {
 	return 1;
+}
+
+/*
+==================
+Slayer_OnChatMessage
+
+Mirror SayText/SayText2 player chat to engine console with CS color codes
+converted to Xash ^ color escapes.
+==================
+*/
+static void Slayer_OnChatMessage( const byte *pbuf, int iSize, qboolean is_saytext2 )
+{
+	static convar_t *cv_chat = NULL;
+	char clean[512];
+	int dst = 0;
+	const byte *end;
+
+	if( !cv_chat )
+		cv_chat = Cvar_FindVar( "slayer_chat_console" );
+
+	if( cv_chat && cv_chat->value == 0.0f )
+		return;
+
+	if( iSize < 3 ) return;
+
+	end = pbuf + iSize;
+
+	// Skip client_index byte
+	pbuf++;
+
+	// SayText2 has an extra msg_dest byte
+	if( is_saytext2 )
+		pbuf++;
+
+	// Walk null-terminated strings. Skip '#'-prefixed localization templates.
+	while( pbuf < end )
+	{
+		// Skip '#'-prefixed localization templates (e.g. "#Cstrike_Chat_All")
+		if( *pbuf == '#' )
+		{
+			while( pbuf < end && *pbuf != '\0' )
+				pbuf++;
+			if( pbuf < end ) pbuf++;
+			continue;
+		}
+
+		// Copy chars, converting CS color codes to Xash ^ color escapes
+		while( pbuf < end && *pbuf != '\0' )
+		{
+			byte ch = *pbuf++;
+
+			if( ch >= 0x01 && ch <= 0x05 )
+			{
+				// Convert CS color code to Xash ^ escape
+				if( dst < (int)sizeof( clean ) - 3 )
+				{
+					clean[dst++] = '^';
+					switch( ch )
+					{
+					case 0x01: clean[dst++] = '3'; break; // yellow (default)
+					case 0x02: clean[dst++] = '2'; break; // green
+					case 0x03: clean[dst++] = '7'; break; // white (player name)
+					case 0x04: clean[dst++] = '2'; break; // green (admin)
+					case 0x05: clean[dst++] = '5'; break; // cyan
+					}
+				}
+			}
+			else if( ch >= 0x20 || ch == '\t' )
+			{
+				if( dst < (int)sizeof( clean ) - 3 )
+					clean[dst++] = (char)ch;
+			}
+		}
+		if( pbuf < end ) pbuf++;
+
+		if( !is_saytext2 )
+			break;
+	}
+
+	if( dst == 0 ) return;
+
+	// Ensure newline
+	if( clean[dst - 1] != '\n' )
+		clean[dst++] = '\n';
+	clean[dst] = '\0';
+
+	Con_Printf( "%s", clean );
 }
 
 /*
@@ -2352,6 +2440,24 @@ void CL_ParseUserMessage( sizebuf_t *msg, int svc_num, connprotocol_t proto )
 			Slayer_OnScoreAttrib( pbuf, iSize );
 		else if( !Q_strcmp( clgame.msg[i].name, "HealthInfo" ))
 			Slayer_OnHealthInfo( pbuf, iSize );
+		else if( !Q_strcmp( clgame.msg[i].name, "SayText" ))
+			Slayer_OnChatMessage( pbuf, iSize, false );
+		else if( !Q_strcmp( clgame.msg[i].name, "SayText2" ))
+			Slayer_OnChatMessage( pbuf, iSize, true );
+
+		// Damage indicator probes a list of common server-side hit-feedback
+		// message names internally; safe to call unconditionally for every
+		// usermsg, no-op when the name is not recognized.
+		Slayer_HUD_OnDamageMessage( clgame.msg[i].name, pbuf, iSize );
+
+		// Track current weapon for TE_BLOOD damage calculation.
+		if( !Q_strcmp( clgame.msg[i].name, "CurWeapon" ) && iSize >= 3 )
+			Slayer_HUD_OnCurWeapon( pbuf[1] );
+
+		// Also catch "HudText" messages that contain purely-numeric text
+		// (damage numbers from AmxModX plugins that send HudText directly).
+		if( !Q_strcmp( clgame.msg[i].name, "HudText" ) && iSize > 1 )
+			Slayer_HUD_OnHudTextDamage( (const char *)pbuf, -1.0f, -1.0f );
 	}
 
 	if( cl_trace_messages.value )
@@ -2496,8 +2602,113 @@ qboolean CL_ParseCommonHLMessage( sizebuf_t *msg, connprotocol_t proto, int svc_
 	case svc_print:
 	{
 		const char *s_print = MSG_ReadString( msg );
+
+		// Always feed to status parser (needed for avatar SteamID extraction)
 		Slayer_ParseStatusLine( s_print );
-		Con_Printf( "%s", s_print );
+
+		// Slayer3D: filter server plugin spam from console
+		{
+			static convar_t *cv_filter = NULL;
+			qboolean suppress = false;
+
+			if( !cv_filter )
+				cv_filter = Cvar_FindVar( "slayer_console_filter" );
+
+			if( cv_filter && cv_filter->value != 0.0f )
+			{
+				const char *p = s_print;
+
+				// Empty line (just newline or nothing)
+				if( p[0] == '\0' || ( p[0] == '\n' && p[1] == '\0' ) )
+					suppress = true;
+
+				// Lines starting with '[' followed by uppercase/alphanumeric and ']'
+				// e.g. [AMX], [ADMIN], [MapManager], [VIP]
+				if( !suppress && p[0] == '[' )
+				{
+					const char *c = p + 1;
+					while( *c && *c != ']' && *c != '\n' ) c++;
+					if( *c == ']' )
+						suppress = true;
+				}
+
+				// Lines starting with '*' followed by ' DEAD' or ' SPEC'
+				if( !suppress && p[0] == '*' )
+				{
+					if( !Q_strncmp( p + 1, " DEAD", 5 ) || !Q_strncmp( p + 1, " SPEC", 5 ) )
+						suppress = true;
+				}
+
+				// Lines containing 'amx_' or 'AMX'
+				if( !suppress )
+				{
+					if( Q_strstr( s_print, "amx_" ) || Q_strstr( s_print, "AMX" ) )
+						suppress = true;
+				}
+
+				// Short numeric-only lines (countdown timers: "5", "4...", "3", etc.)
+				if( !suppress )
+				{
+					const char *c = p;
+					qboolean all_digits_dots = true;
+					int char_count = 0;
+					while( *c && *c != '\n' )
+					{
+						if( ( *c >= '0' && *c <= '9' ) || *c == '.' || *c == ' ' )
+							char_count++;
+						else
+						{
+							all_digits_dots = false;
+							break;
+						}
+						c++;
+					}
+					// Suppress lines that are only digits/dots and short (< 8 chars)
+					if( all_digits_dots && char_count > 0 && char_count < 8 )
+						suppress = true;
+				}
+
+				// Lines starting with '>' (common plugin formatting prefix)
+				if( !suppress && p[0] == '>' )
+					suppress = true;
+
+				// Lines that are ONLY dashes, equals, or underscores (separator spam)
+				if( !suppress )
+				{
+					const char *c = p;
+					qboolean all_sep = true;
+					while( *c && *c != '\n' )
+					{
+						if( *c != '-' && *c != '=' && *c != '_' && *c != ' ' )
+						{
+							all_sep = false;
+							break;
+						}
+						c++;
+					}
+					if( all_sep && c != p )
+						suppress = true;
+				}
+
+				// ALWAYS let through status response lines
+				if( suppress )
+				{
+					if( p[0] == '#' )
+						suppress = false;
+					else if( Q_strstr( s_print, "hostname:" ) || Q_strstr( s_print, "version:" ) ||
+					         Q_strstr( s_print, "map:" ) || Q_strstr( s_print, "players:" ) ||
+					         Q_strstr( s_print, "tcp/ip:" ) )
+						suppress = false;
+				}
+
+				// Let through server log lines (start with 'L ')
+				if( suppress && p[0] == 'L' && p[1] == ' ' )
+					suppress = false;
+			}
+
+			if( !suppress )
+				Con_Printf( "%s", s_print );
+		}
 		break;
 	}
 	case svc_stufftext:

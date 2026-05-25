@@ -30,6 +30,14 @@ void Slayer_Scoreboard_Draw( void );
 // Called from Slayer_ResetMatchState() on map change/disconnect.
 void Slayer_Scoreboard_Reset( void );
 
+// Hook called when local client transitions to ca_active (just connected
+// to the server). Issues an early "status" command to harvest SteamIDs
+// and primes the Steam Web API batch path so avatars are ready by the
+// time the user opens the scoreboard for the first time.
+//
+// Safe to call multiple times — internally throttled and idempotent.
+void Slayer_Scoreboard_OnConnected( void );
+
 // Hook for server-sent "ScoreInfo" user message.
 //   pbuf  - raw payload bytes
 //   iSize - payload length
@@ -66,5 +74,16 @@ void Slayer_Scoreboard_PatchUsercmd( struct usercmd_s *cmd );
 // Get team_id for a player slot (0-based). Returns SLAYER_TEAM_* constant.
 // Used by killsound to detect teamkills.
 int Slayer_GetPlayerTeam( int slot );
+
+// Returns true when the Slayer3D custom scoreboard is enabled via cvar.
+qboolean Slayer_Scoreboard_IsEnabled( void );
+
+// Returns true when the Slayer scoreboard is actively rendering (enabled AND visible).
+// Used to suppress the game DLL's built-in intermission scoreboard only when ours draws.
+qboolean Slayer_Scoreboard_IsActive( void );
+
+// Programmatically activate the scoreboard overlay (e.g. on death/intermission).
+// Unlike +slayer_scoreboard, does NOT re-issue "status" or batch API calls.
+void Slayer_Scoreboard_Activate( void );
 
 #endif // CL_SCOREBOARD_SLAYER_H

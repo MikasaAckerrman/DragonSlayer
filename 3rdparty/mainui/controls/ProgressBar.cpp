@@ -1,0 +1,82 @@
+/*
+ProgressBar.cpp -- progress bar
+Copyright (C) 2017 mittorn
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+*/
+
+#include "extdll_menu.h"
+#include "BaseMenu.h"
+#include "ProgressBar.h"
+#include "WindowStyle.h"
+#include "SchemeManager.h"
+
+CMenuProgressBar::CMenuProgressBar() : BaseClass()
+{
+	m_flMin = 0.0f;
+	m_flMax = 100.0f;
+	m_flValue = 0.0f;
+	m_szCvarName = NULL;
+}
+
+void CMenuProgressBar::LinkCvar( const char *cvName, float flMin, float flMax )
+{
+	m_szCvarName = cvName;
+
+	m_flMax = flMax;
+	m_flMin = flMin;
+}
+
+void CMenuProgressBar::SetValue( float flValue )
+{
+	if( flValue > 1.0f ) flValue = 1;
+	if( flValue < 0.0f ) flValue = 0;
+	m_flValue = flValue;
+	m_szCvarName = NULL;
+}
+
+void CMenuProgressBar::Draw( void )
+{
+	float flProgress;
+
+	if( m_szCvarName )
+	{
+		flProgress = bound( m_flMin, EngFuncs::GetCvarFloat( m_szCvarName ), m_flMax );
+		flProgress = ( flProgress - m_flMin ) / ( m_flMax - m_flMin );
+	}
+	else
+	{
+		flProgress = m_flValue;
+	}
+
+	CSchemeManager *scheme = CSchemeManager::GetInstance();
+
+	// draw the background
+	unsigned int trackBg = scheme->GetColor("ProgressTrackBG");
+	if( !trackBg ) trackBg = uiInputBgColor;
+	UI_FillRect( m_scPos, m_scSize, trackBg );
+
+	// draw progress fill inside the border inset
+	CSchemeBorder *border = scheme->GetBorder("ProgressBarBorder");
+	int inset = border ? border->insetX : 2;
+
+	unsigned int fillColor = scheme->GetColor("ProgressFill");
+	if( !fillColor ) fillColor = colorBase;
+	int fillW = (int)((m_scSize.w - inset * 2) * flProgress);
+	if( fillW > 0 )
+		UI_FillRect( m_scPos.x + inset, m_scPos.y + inset, fillW, m_scSize.h - inset * 2, fillColor );
+
+	// draw the border
+	if( border )
+		border->Draw( m_scPos.x, m_scPos.y, m_scSize.w, m_scSize.h );
+	else
+		WndStyle::DrawSunkenBevel( m_scPos.x, m_scPos.y, m_scSize.w, m_scSize.h );
+}

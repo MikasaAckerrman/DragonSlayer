@@ -1,0 +1,125 @@
+/*
+Window.h -- draggable windowed dialog (CS 1.6 PC style)
+Copyright (C) 2024 DragonSlayer contributors
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+*/
+#ifndef MENUWINDOW_H
+#define MENUWINDOW_H
+
+#include "BaseWindow.h"
+
+// ============================================================
+// CMenuWindow — a draggable, closeable dialog window with
+// title bar, icon, [X] button, and CS 1.6-style chrome.
+//
+// Usage:
+//   class CMyDialog : public CMenuWindow { ... };
+//   myDialog.SetTitle( "Settings" );
+//   myDialog.SetRect( 100, 100, 500, 400 );
+//   myDialog.Show();
+// ============================================================
+
+class CMenuWindow : public CMenuBaseWindow
+{
+public:
+	typedef CMenuBaseWindow BaseClass;
+
+	CMenuWindow( const char *title = "Window", CWindowStack *pStack = &uiStatic.menu );
+
+	// --- Overrides ---
+	void Draw() override;
+	bool KeyDown( int key ) override;
+	bool KeyUp( int key ) override;
+	bool MouseMove( int x, int y ) override;
+	VGUI_DefaultCursor CursorAction() override;
+
+	bool IsRoot() const override { return false; }
+
+	// --- Configuration ---
+	void SetTitle( const char *title ) { m_szTitle = title; }
+	const char *GetTitle() const { return m_szTitle; }
+
+	void SetIcon( const char *iconPath ) { m_szIconPath = iconPath; }
+
+	// Show/hide chrome buttons (default both visible)
+	void SetShowCloseButton( bool show ) { m_bShowCloseBtn = show; }
+	void SetShowMaxButton( bool show ) { m_bShowMaxBtn = show; }
+
+	// Override to customize what happens on [X] click (default: Hide())
+	virtual void OnCloseClicked() { Hide(); }
+
+	// Content area offset (below title bar)
+	Point GetPositionOffset() const override;
+
+protected:
+	void DrawChrome();
+
+	bool IsCursorInTitleBar() const;
+	bool IsCursorOnCloseBtn() const;
+	bool IsCursorOnMaxBtn() const;
+
+	void TitleBarDragDrop( bool down );
+	void ToggleMaximize();
+
+private:
+	const char *m_szTitle;
+	const char *m_szIconPath;
+
+	bool m_bShowCloseBtn;
+	bool m_bShowMaxBtn;
+
+	bool m_bTitleDrag;
+	bool m_bDragStarted;
+	Point m_dragOffset;
+	Point m_dragStartPos;
+	bool m_bCloseHover;
+	bool m_bMaxHover;
+
+	// Maximize/restore state
+	bool m_bMaximized;
+	Point m_savedPos;  // position before maximize
+	Size  m_savedSize; // size before maximize
+
+	// Scaled metrics (recomputed each frame)
+	int m_iTitleBarH;
+	int m_iCloseBtnSize;
+	int m_iBorderW;
+
+	// Touch drag threshold (pixels² to avoid accidental drag on tap)
+	static const int DRAG_THRESHOLD_SQ = 64; // 8px movement
+
+	// --- Resize state ---
+	enum ResizeEdge
+	{
+		RESIZE_NONE        = 0,
+		RESIZE_LEFT        = 1,
+		RESIZE_RIGHT       = 2,
+		RESIZE_TOP         = 4,
+		RESIZE_BOTTOM      = 8,
+		RESIZE_TOPLEFT     = 5,   // TOP | LEFT
+		RESIZE_TOPRIGHT    = 6,   // TOP | RIGHT
+		RESIZE_BOTTOMLEFT  = 9,   // BOTTOM | LEFT
+		RESIZE_BOTTOMRIGHT = 10   // BOTTOM | RIGHT
+	};
+
+	int m_iResizeEdge;
+	bool m_bResizing;
+	Point m_resizeStartCursor;
+	Point m_resizeStartPos;
+	Size  m_resizeStartSize;
+
+	static const int RESIZE_BORDER = 16;   // virtual coord pixels for edge detection (touch-friendly)
+	static const int MIN_WINDOW_W  = 200;  // minimum window width (screen coords)
+	static const int MIN_WINDOW_H  = 150;  // minimum window height (screen coords)
+
+	int  DetectResizeEdge() const;
+	void StartResize( int edge );
+	void UpdateResize();
+	void StopResize();
+};
+
+#endif // MENUWINDOW_H

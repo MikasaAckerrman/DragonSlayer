@@ -19,6 +19,7 @@ GNU General Public License for more details.
 #include "con_nprint.h"
 #include "pm_local.h"
 #include "platform/platform.h"
+#include "cl_dmg_replay_slayer.h"
 
 // structure used for fading in and out client sound volume.
 struct
@@ -634,6 +635,15 @@ void S_StartSound( const vec3_t pos, int ent, int chan, sound_t handle, float fv
 	if( !snd.initialized ) return;
 	sfx = S_GetSfxByHandle( handle );
 	if( !sfx ) return;
+
+	// Slayer3D: peek at every newly-started sound so the damage model
+	// can detect armor / helmet / flesh impacts on chrome-like weapons
+	// without depending on any AmxModX / ReGameDLL plugin. No-op when
+	// slayer_dmg_replay is 0 or the sample name doesn't match a tracked
+	// pattern. Runs *before* the SND_STOP early-return because we don't
+	// want to react to channel-stop events.
+	if(!( flags & SND_STOP ))
+		Slayer_DmgReplay_OnSound( sfx->name, pos, ent );
 
 	vol = bound( 0, fvol * 255, 255 );
 	if( pitch <= 1 ) pitch = PITCH_NORM; // Invasion issues
