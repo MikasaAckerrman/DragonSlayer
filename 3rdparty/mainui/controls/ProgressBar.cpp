@@ -69,5 +69,9 @@ void CMenuProgressBar::Draw( void )
 	UI_FillRect( m_scPos.x, m_scPos.y, m_scSize.w * flProgress, m_scSize.h, fillColor );
 
 	// draw the rectangle
-	WndStyle::DrawSunkenBevel( m_scPos.x, m_scPos.y, m_scSize.w, m_scSize.h );
+	CSchemeBorder *border = scheme->GetBorder("ProgressBarBorder");
+	if( border )
+		border->Draw( m_scPos.x, m_scPos.y, m_scSize.w, m_scSize.h );
+	else
+		WndStyle::DrawSunkenBevel( m_scPos.x, m_scPos.y, m_scSize.w, m_scSize.h );
 }

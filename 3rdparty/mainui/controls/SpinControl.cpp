@@ -176,7 +176,11 @@ void CMenuSpinControl::Draw( void )
 		UI_FillRect( scCenterPos, scCenterBox, spinBg );
 
 		// draw the rectangle
-		WndStyle::DrawSunkenBevel( scCenterPos.x, scCenterPos.y, scCenterBox.w, scCenterBox.h );
+		CSchemeBorder *border = scheme->GetBorder("SpinControlBorder");
+		if( border )
+			border->Draw( scCenterPos.x, scCenterPos.y, scCenterBox.w, scCenterBox.h );
+		else
+			WndStyle::DrawSunkenBevel( scCenterPos.x, scCenterPos.y, scCenterBox.w, scCenterBox.h );
 	}
 
 	if( iFlags & QMF_GRAYED )

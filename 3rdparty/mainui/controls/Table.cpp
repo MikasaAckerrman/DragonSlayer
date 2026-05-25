@@ -717,6 +717,11 @@ void CMenuTable::Draw()
 	UI_FillRect( upArrow.x, upArrow.y + arrow.h,
 		arrow.w, downArrow.y - upArrow.y - arrow.h, scrollBg );
 
+	// draw scrollbar border around track
+	CSchemeBorder *sbarBorder = scheme->GetBorder("ScrollbarBorder");
+	if( sbarBorder )
+		sbarBorder->Draw( upArrow.x, upArrow.y + arrow.h, arrow.w, downArrow.y - upArrow.y - arrow.h );
+
 	// ADAMIX
 	if( iScrollBarSliding )
 	{

@@ -166,7 +166,8 @@ void CMenuCheckBox::Draw( void )
 	// Draw checkmark when checked
 	if( bChecked )
 	{
-		unsigned int checkColor = scheme->GetColor("ControlFG");
+		unsigned int checkColor = scheme->GetColor("CheckMark");
+		if( !checkColor ) checkColor = scheme->GetColor("ControlFG");
 		if( !checkColor ) checkColor = WndStyle::WidgetTextColor;
 		UI_DrawString( font, m_scPos.x, m_scPos.y, boxSize, boxSize,
 			"v", checkColor, boxSize - 4, QM_CENTER, ETF_FORCECOL );

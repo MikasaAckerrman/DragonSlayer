@@ -458,8 +458,6 @@ void CMenuField::Draw( void )
 		CSchemeManager *scheme = CSchemeManager::GetInstance();
 		unsigned int fieldBg = scheme->GetColor("InputBG");
 		if( !fieldBg ) fieldBg = WndStyle::WidgetBgColor;
-		unsigned int fieldBorder = scheme->GetColor("InputBorder");
-		if( !fieldBorder ) fieldBorder = WndStyle::WidgetBorderColor;
 
 		// draw the background
 		UI_FillRect( newPos, m_scSize, fieldBg );
@@ -506,8 +504,13 @@ void CMenuField::Draw( void )
 
 	int cursor_char_width = g_FontMgr->GetTextWideScaled( font, cursor_char, m_scChSize );
 
+	unsigned int cursorColor = CSchemeManager::GetInstance()->GetColor("FieldCursorColor");
+	if( !cursorColor ) cursorColor = colorBase;
+	unsigned int cursorColorFocus = CSchemeManager::GetInstance()->GetColor("FieldCursorColor");
+	if( !cursorColorFocus ) cursorColorFocus = colorFocus;
+
 	if(( uiStatic.realTime & 499 ) < 250 )
-		UI_DrawString( font, x + cursorOffset, y, cursor_char_width, m_scSize.h, cursor_char, colorBase, m_scChSize, QM_LEFT, textflags | ETF_FORCECOL );
+		UI_DrawString( font, x + cursorOffset, y, cursor_char_width, m_scSize.h, cursor_char, cursorColor, m_scChSize, QM_LEFT, textflags | ETF_FORCECOL );
 
 
 	switch( eFocusAnimation )
@@ -516,7 +519,7 @@ void CMenuField::Draw( void )
 		UI_DrawString( font, newPos, m_scSize, text, colorFocus, m_scChSize, eTextAlignment, textflags );
 
 		if(( uiStatic.realTime & 499 ) < 250 )
-			UI_DrawString( font, x + cursorOffset, y, cursor_char_width, m_scSize.h, cursor_char, colorFocus, m_scChSize, QM_LEFT, textflags | ETF_FORCECOL  );
+			UI_DrawString( font, x + cursorOffset, y, cursor_char_width, m_scSize.h, cursor_char, cursorColorFocus, m_scChSize, QM_LEFT, textflags | ETF_FORCECOL  );
 		break;
 	case QM_PULSEIFFOCUS:
 	{
@@ -526,7 +529,7 @@ void CMenuField::Draw( void )
 		UI_DrawString( font, newPos, m_scSize, text, color, m_scChSize, eTextAlignment, textflags );
 
 		if(( uiStatic.realTime & 499 ) < 250 )
-			UI_DrawString( font, x + cursorOffset, y, cursor_char_width, m_scSize.h, cursor_char, color, m_scChSize, QM_LEFT, textflags | ETF_FORCECOL );
+			UI_DrawString( font, x + cursorOffset, y, cursor_char_width, m_scSize.h, cursor_char, cursorColor, m_scChSize, QM_LEFT, textflags | ETF_FORCECOL );
 
 		break;
 	}

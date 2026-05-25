@@ -132,7 +132,10 @@ void CMenuScrollView::Draw()
 
 	if( bDrawStroke )
 	{
-		WndStyle::DrawSunkenBevel( m_scPos.x, m_scPos.y, m_scSize.w, m_scSize.h );
+		CSchemeManager *scheme = CSchemeManager::GetInstance();
+		unsigned int strokeColor = scheme->GetColor("InputBorder");
+		if( !strokeColor ) strokeColor = colorStroke;
+		UI_DrawRectangleExt( m_scPos, m_scSize, strokeColor, iStrokeWidth );
 	}
 
 	int drawn = 0, skipped = 0;
