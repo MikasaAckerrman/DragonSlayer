@@ -33,28 +33,32 @@ struct CSchemeBorder
 
 	void Draw( int x, int y, int w, int h )
 	{
-		// Left side: vertical 1px lines
+		// Left side: vertical 1px lines (full height)
 		for( int i = 0; i < left.numLayers; i++ )
 		{
 			UI_FillRect( x + left.layers[i].offset, y, 1, h, left.layers[i].color );
 		}
 
-		// Right side: vertical 1px lines
+		// Right side: vertical 1px lines (full height)
 		for( int i = 0; i < right.numLayers; i++ )
 		{
 			UI_FillRect( x + w - 1 - right.layers[i].offset, y, 1, h, right.layers[i].color );
 		}
 
-		// Top side: horizontal 1px lines
+		// Top side: horizontal 1px lines (between left and right border regions)
 		for( int i = 0; i < top.numLayers; i++ )
 		{
-			UI_FillRect( x, y + top.layers[i].offset, w, 1, top.layers[i].color );
+			int lw = left.numLayers;
+			int rw = right.numLayers;
+			UI_FillRect( x + lw, y + top.layers[i].offset, w - lw - rw, 1, top.layers[i].color );
 		}
 
-		// Bottom side: horizontal 1px lines
+		// Bottom side: horizontal 1px lines (between left and right border regions)
 		for( int i = 0; i < bottom.numLayers; i++ )
 		{
-			UI_FillRect( x, y + h - 1 - bottom.layers[i].offset, w, 1, bottom.layers[i].color );
+			int lw = left.numLayers;
+			int rw = right.numLayers;
+			UI_FillRect( x + lw, y + h - 1 - bottom.layers[i].offset, w - lw - rw, 1, bottom.layers[i].color );
 		}
 	}
 

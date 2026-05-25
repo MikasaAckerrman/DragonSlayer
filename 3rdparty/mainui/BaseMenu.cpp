@@ -1035,7 +1035,8 @@ int UI_VidInit( void )
 	if( !calledOnce )
 	{
 		UI_Precache();
-		CSchemeManager::GetInstance()->LoadScheme( "resource/TrackerScheme.res" );
+		if( !CSchemeManager::GetInstance()->LoadScheme( "resource/TrackerScheme.res" ) )
+			Con_Printf( "Warning: failed to load resource/TrackerScheme.res\n" );
 	}
 
 	// don't allow screenwidth is slower than 4:3 screens

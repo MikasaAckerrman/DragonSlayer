@@ -60,7 +60,8 @@ def build(bld):
 		'menus/*.cpp',
 		'menus/dynamic/*.cpp',
 		'model/*.cpp',
-		'controls/*.cpp'
+		'controls/*.cpp',
+		'schema/*.cpp'
 	])
 
 	includes = [
@@ -70,6 +71,7 @@ def build(bld):
 		'controls/',
 		'menus/',
 		'model/',
+		'schema/',
 		'sdk_includes/common',
 		'sdk_includes/engine',
 		'sdk_includes/public',
