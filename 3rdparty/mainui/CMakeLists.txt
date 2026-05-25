@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.10)
 project(mainui LANGUAGES CXX)
 
+# Declared for forward compatibility with configure-ninja.py which always passes
+# -DBUILD_AS_PART_OF_ENGINE=ON even though this standalone build does not use it.
 option(BUILD_AS_PART_OF_ENGINE "Build as part of Xash3D engine" OFF)
 
 file(GLOB MAINUI_ROOT_SOURCES "*.cpp")
