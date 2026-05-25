@@ -12,6 +12,7 @@ the Free Software Foundation, either version 3 of the License, or
 #define WINDOWSTYLE_H
 
 #include "BaseMenu.h"
+#include "SchemeManager.h"
 
 // ============================================================
 // Color palette (ARGB packed -- 0xAARRGGBB)
@@ -94,6 +95,10 @@ namespace WndStyle
 	// Draw a 2px raised 3D bevel frame (highlight on top-left, shadow on bottom-right)
 	inline void DrawRaisedBevel( int x, int y, int w, int h )
 	{
+		CSchemeManager *scheme = CSchemeManager::GetInstance();
+		CSchemeBorder *border = scheme->GetBorder( "RaisedBorder" );
+		if( border ) { border->Draw( x, y, w, h ); return; }
+
 		// Outer edges
 		UI_FillRect( x, y, w, 1, BevelHighlight );           // top outer
 		UI_FillRect( x, y, 1, h, BevelHighlight );           // left outer
@@ -109,6 +114,10 @@ namespace WndStyle
 	// Draw a 2px sunken 3D bevel frame (shadow on top-left, highlight on bottom-right)
 	inline void DrawSunkenBevel( int x, int y, int w, int h )
 	{
+		CSchemeManager *scheme = CSchemeManager::GetInstance();
+		CSchemeBorder *border = scheme->GetBorder( "SunkenBorder" );
+		if( border ) { border->Draw( x, y, w, h ); return; }
+
 		// Outer edges
 		UI_FillRect( x, y, w, 1, BevelDarkShadow );         // top outer
 		UI_FillRect( x, y, 1, h, BevelDarkShadow );         // left outer
@@ -128,19 +137,40 @@ namespace WndStyle
 	// Draw a window background with border, inner highlight bevel, and title separator
 	inline void DrawWindowChrome( int x, int y, int w, int h )
 	{
+		CSchemeManager *scheme = CSchemeManager::GetInstance();
+
 		// 3D raised bevel frame (2px)
-		DrawRaisedBevel( x, y, w, h );
+		CSchemeBorder *border = scheme->GetBorder( "RaisedBorder" );
+		if( border )
+			border->Draw( x, y, w, h );
+		else
+		{
+			// Outer edges
+			UI_FillRect( x, y, w, 1, BevelHighlight );
+			UI_FillRect( x, y, 1, h, BevelHighlight );
+			UI_FillRect( x, y + h - 1, w, 1, BevelDarkShadow );
+			UI_FillRect( x + w - 1, y, 1, h, BevelDarkShadow );
+			// Inner edges
+			UI_FillRect( x + 1, y + 1, w - 2, 1, BevelLight );
+			UI_FillRect( x + 1, y + 1, 1, h - 2, BevelLight );
+			UI_FillRect( x + 1, y + h - 2, w - 2, 1, BevelShadow );
+			UI_FillRect( x + w - 2, y + 1, 1, h - 2, BevelShadow );
+		}
 
 		// Fill background inside bevel
+		unsigned int bgColor = scheme->GetColor( "ControlBG" );
+		if( !bgColor ) bgColor = BgColor;
 		int ix = x + 2;
 		int iy = y + 2;
 		int iw = w - 4;
 		int ih = h - 4;
-		UI_FillRect( ix, iy, iw, ih, BgColor );
+		UI_FillRect( ix, iy, iw, ih, bgColor );
 
 		// Title bar separator line below title bar area
+		unsigned int sepColor = scheme->GetColor( "InputBorder" );
+		if( !sepColor ) sepColor = TitleSeparatorColor;
 		int sepY = y + 2 + TitleBarHeight;
-		UI_FillRect( ix, sepY, iw, 1, TitleSeparatorColor );
+		UI_FillRect( ix, sepY, iw, 1, sepColor );
 	}
 
 	// Draw title bar fill
@@ -152,24 +182,52 @@ namespace WndStyle
 	// Draw a single tab button (CS 1.6 style with 3D bevel)
 	inline void DrawTab( int x, int y, int w, int h, bool active, bool hover, const char *label )
 	{
-		unsigned int bgCol = active ? TabActiveColor : ( hover ? TabHoverColor : TabInactiveColor );
-		unsigned int textCol = active ? TabTextActiveCol : TabTextColor;
+		CSchemeManager *scheme = CSchemeManager::GetInstance();
+
+		unsigned int activeBg = scheme->GetColor( "TabActiveBG" );
+		if( !activeBg ) activeBg = TabActiveColor;
+		unsigned int inactiveBg = scheme->GetColor( "TabInactiveBG" );
+		if( !inactiveBg ) inactiveBg = TabInactiveColor;
+		unsigned int hoverBg = scheme->GetColor( "TabHoverBG" );
+		if( !hoverBg ) hoverBg = TabHoverColor;
+		unsigned int activeText = scheme->GetColor( "TabActiveText" );
+		if( !activeText ) activeText = TabTextActiveCol;
+		unsigned int inactiveText = scheme->GetColor( "TabInactiveText" );
+		if( !inactiveText ) inactiveText = TabTextColor;
+
+		unsigned int bgCol = active ? activeBg : ( hover ? hoverBg : inactiveBg );
+		unsigned int textCol = active ? activeText : inactiveText;
 
 		// Fill tab background
 		UI_FillRect( x, y, w, h, bgCol );
 
-		// Raised bevel edges (top + left highlight, right shadow)
-		UI_FillRect( x, y, w, 1, BevelHighlight );           // top outer
-		UI_FillRect( x, y, 1, h, BevelHighlight );           // left outer
-		UI_FillRect( x + 1, y + 1, w - 2, 1, BevelLight );  // top inner
-		UI_FillRect( x + 1, y + 1, 1, h - 2, BevelLight );  // left inner
-		UI_FillRect( x + w - 1, y, 1, h, BevelDarkShadow ); // right outer
-		UI_FillRect( x + w - 2, y + 1, 1, h - 2, BevelShadow ); // right inner
+		// Tab border via scheme
+		CSchemeBorder *border = scheme->GetBorder( "TabBorder" );
+		if( border )
+		{
+			border->Draw( x, y, w, h );
+			if( !active )
+			{
+				unsigned int darkSolid = scheme->GetColor( "Border.DarkSolid" );
+				if( !darkSolid ) darkSolid = BevelDarkShadow;
+				UI_FillRect( x, y + h - 1, w, 1, darkSolid );
+			}
+		}
+		else
+		{
+			// Raised bevel edges (top + left highlight, right shadow)
+			UI_FillRect( x, y, w, 1, BevelHighlight );           // top outer
+			UI_FillRect( x, y, 1, h, BevelHighlight );           // left outer
+			UI_FillRect( x + 1, y + 1, w - 2, 1, BevelLight );  // top inner
+			UI_FillRect( x + 1, y + 1, 1, h - 2, BevelLight );  // left inner
+			UI_FillRect( x + w - 1, y, 1, h, BevelDarkShadow ); // right outer
+			UI_FillRect( x + w - 2, y + 1, 1, h - 2, BevelShadow ); // right inner
 
-		// Active tab: no bottom border (merges with content area)
-		// Inactive tab: bottom border
-		if( !active )
-			UI_FillRect( x, y + h - 1, w, 1, BevelDarkShadow );
+			// Active tab: no bottom border (merges with content area)
+			// Inactive tab: bottom border
+			if( !active )
+				UI_FillRect( x, y + h - 1, w, 1, BevelDarkShadow );
+		}
 
 		int charH = (int)( h * 0.6f );
 		UI_DrawString( uiStatic.hDefaultFont, x + TabPadH, y, w - TabPadH * 2,
@@ -191,12 +249,24 @@ namespace WndStyle
 	// Draw a flat button with hover state (for toolbar/dialog buttons)
 	inline void DrawFlatButton( int x, int y, int w, int h, const char *label, bool hover )
 	{
-		unsigned int bg = hover ? TabHoverColor : BgColor;
+		CSchemeManager *scheme = CSchemeManager::GetInstance();
+
+		unsigned int bg = hover
+			? ( scheme->GetColor( "ButtonHoverBG" ) ? scheme->GetColor( "ButtonHoverBG" ) : TabHoverColor )
+			: ( scheme->GetColor( "ButtonBG" ) ? scheme->GetColor( "ButtonBG" ) : BgColor );
 		UI_FillRect( x + 2, y + 2, w - 4, h - 4, bg );
-		DrawRaisedBevel( x, y, w, h );
+
+		CSchemeBorder *border = scheme->GetBorder( "ButtonBorder" );
+		if( border )
+			border->Draw( x, y, w, h );
+		else
+			DrawRaisedBevel( x, y, w, h );
+
+		unsigned int textColor = scheme->GetColor( "ControlFG" );
+		if( !textColor ) textColor = WidgetTextColor;
 		int charH = (int)( h * 0.6f );
 		UI_DrawString( uiStatic.hDefaultFont, x + 2, y + 2, w - 4, h - 4,
-			label, WidgetTextColor, charH, QM_CENTER, 0 );
+			label, textColor, charH, QM_CENTER, 0 );
 	}
 }
 
