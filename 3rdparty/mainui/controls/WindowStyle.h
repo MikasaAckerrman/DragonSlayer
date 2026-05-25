@@ -14,7 +14,7 @@ the Free Software Foundation, either version 3 of the License, or
 #include "BaseMenu.h"
 
 // ============================================================
-// Color palette (ABGR packed -- engine convention)
+// Color palette (ARGB packed -- 0xAARRGGBB)
 // CS 1.6 olive/green theme
 // ============================================================
 namespace WndStyle
@@ -33,7 +33,7 @@ namespace WndStyle
 	static const int          TitleBarHeight   = 26; // virtual coords
 
 	// Close button
-	static const unsigned int CloseBtnColor    = 0xFFCC2222; // red in ABGR
+	static const unsigned int CloseBtnColor    = 0xFFCC2222; // red in ARGB
 	static const unsigned int CloseTextColor   = 0xFFCCCCCC;
 	static const int          CloseBtnSize     = 20;
 

@@ -609,7 +609,7 @@ void CMenuTable::DrawLine( Point p, int line, uint textColor, bool forceCol, uin
 void CMenuTable::Draw()
 {
 	int i, y;
-	int selColor = 0x80385838; // olive-tinted selection (ABGR with 50% alpha)
+	int selColor = 0x80385838; // olive-tinted selection (ARGB with 50% alpha)
 	int upFocus, downFocus, scrollbarFocus;
 
 	// HACKHACK: recalc iNumRows, to be not greater than iNumItems

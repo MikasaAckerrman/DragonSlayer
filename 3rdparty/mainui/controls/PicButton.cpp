@@ -361,7 +361,7 @@ void CMenuPicButton::Draw( )
 		{
 			unsigned int btnBg = (this == m_pParent->ItemAtCursor()) ? WndStyle::TabHoverColor : WndStyle::BgColor;
 			UI_FillRect( m_scPos, m_scSize, btnBg );
-			UI_DrawRectangleExt( m_scPos, m_scSize, WndStyle::BorderColor, 1 );
+			UI_DrawRectangleExt( m_scPos, m_scSize, colorStroke, iStrokeWidth );
 		}
 
 		SetBits( textflags, (iFlags & QMF_DROPSHADOW) ? ETF_SHADOW : 0 );
