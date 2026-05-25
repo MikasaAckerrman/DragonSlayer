@@ -15,6 +15,7 @@ GNU General Public License for more details.
 #include "TabView.h"
 #include "Scissor.h"
 #include "WindowStyle.h"
+#include "SchemeManager.h"
 
 CMenuTabView::CMenuTabView() : BaseClass()
 {
@@ -50,10 +51,15 @@ void CMenuTabView::DrawTab(Point pt, const char *name, bool isEnd, bool isSelect
 
 void CMenuTabView::Draw()
 {
+	CSchemeManager *scheme = CSchemeManager::GetInstance();
+
 	// Draw content area background
+	unsigned int contentBg = scheme->GetColor("ControlBG");
+	if( !contentBg ) contentBg = WndStyle::BgColor;
+
 	Point contentOffset = Point( m_scPos.x, m_scPos.y + m_scChSize * 1.5f );
 	Size contentSize = Size( m_scSize.w, m_scSize.h - m_scChSize * 1.5f );
-	UI_FillRect( contentOffset, contentSize, WndStyle::BgColor );
+	UI_FillRect( contentOffset, contentSize, contentBg );
 
 	// Sunken bevel around content area
 	WndStyle::DrawSunkenBevel( contentOffset.x, contentOffset.y, contentSize.w, contentSize.h );

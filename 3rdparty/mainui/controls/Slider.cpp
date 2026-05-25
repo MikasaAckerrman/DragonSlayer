@@ -19,6 +19,7 @@ GNU General Public License for more details.
 #include "Slider.h"
 #include "Utils.h"
 #include "WindowStyle.h"
+#include "SchemeManager.h"
 
 CMenuSlider::CMenuSlider() : BaseClass(), m_flMinValue(), m_flMaxValue(), m_flCurValue(),
 	m_flDrawStep(), m_iNumSteps(), m_flRange(), m_iKeepSlider()
@@ -190,13 +191,21 @@ void CMenuSlider::Draw( void )
 	// keep value in range
 	m_flCurValue = bound( m_flMinValue, m_flCurValue, m_flMaxValue );
 
+	CSchemeManager *scheme = CSchemeManager::GetInstance();
+
+	unsigned int trackBg = scheme->GetColor("InputBG");
+	if( !trackBg ) trackBg = WndStyle::WidgetBgColor;
+
 	// CS 1.6 style track (sunken bevel)
 	int trackH = WndStyle::SliderTrackHeight;
 	int trackY = m_scPos.y + (m_scSize.h - trackH) / 2;
 	WndStyle::DrawSunkenBevel( m_scPos.x, trackY, m_scSize.w, trackH );
-	UI_FillRect( m_scPos.x + 2, trackY + 2, m_scSize.w - 4, trackH - 4, WndStyle::WidgetBgColor );
+	UI_FillRect( m_scPos.x + 2, trackY + 2, m_scSize.w - 4, trackH - 4, trackBg );
 
 	// Flat thumb position
+	unsigned int thumbColor = scheme->GetColor("ButtonHoverBG");
+	if( !thumbColor ) thumbColor = WndStyle::TabHoverColor;
+
 	int thumbW = WndStyle::SliderThumbW;
 	int thumbH = WndStyle::SliderThumbH;
 	sliderX = m_scPos.x + (int)( ( ( m_flCurValue - m_flMinValue ) / ( m_flMaxValue - m_flMinValue ) )
@@ -204,23 +213,29 @@ void CMenuSlider::Draw( void )
 	int thumbY = m_scPos.y + (m_scSize.h - thumbH) / 2;
 
 	WndStyle::DrawRaisedBevel( sliderX, thumbY, thumbW, thumbH );
-	UI_FillRect( sliderX + 2, thumbY + 2, thumbW - 4, thumbH - 4, WndStyle::TabHoverColor );
+	UI_FillRect( sliderX + 2, thumbY + 2, thumbW - 4, thumbH - 4, thumbColor );
 
 	// Tick marks below the slider track (CS 1.6 style)
 	if( m_iNumSteps > 1 )
 	{
+		unsigned int tickColor = scheme->GetColor("InputBorder");
+		if( !tickColor ) tickColor = WndStyle::WidgetBorderColor;
+
 		int tickY = trackY + trackH + 2;
 		int tickH = 3;
 		for( int i = 0; i <= m_iNumSteps; i++ )
 		{
 			int tickX = m_scPos.x + (int)( i * m_flDrawStep ) + (WndStyle::SliderThumbW / 2);
-			UI_FillRect( tickX, tickY, 1, tickH, WndStyle::WidgetBorderColor );
+			UI_FillRect( tickX, tickY, 1, tickH, tickColor );
 		}
 	}
 
 	// Label text above the slider
+	unsigned int labelColor = scheme->GetColor("BaseText");
+	if( !labelColor ) labelColor = WndStyle::WidgetTextColor;
+
 	textHeight = m_scPos.y - (m_scChSize * 1.5f);
-	UI_DrawString( font, m_scPos.x, textHeight, m_scSize.w, m_scChSize, szName, WndStyle::WidgetTextColor, m_scChSize, eTextAlignment, textflags | ETF_FORCECOL );
+	UI_DrawString( font, m_scPos.x, textHeight, m_scSize.w, m_scChSize, szName, labelColor, m_scChSize, eTextAlignment, textflags | ETF_FORCECOL );
 }
 
 void CMenuSlider::UpdateEditable()

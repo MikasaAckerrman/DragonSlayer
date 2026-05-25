@@ -21,6 +21,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "BaseMenu.h"
 #include "DropDown.h"
 #include "WindowStyle.h"
+#include "SchemeManager.h"
 
 CMenuDropDown::CMenuDropDown() : BaseClass()
 {
@@ -158,8 +159,24 @@ void CMenuDropDown::Draw()
 	if( m_szNames.Count() == 0 )
 		return;
 
+	CSchemeManager *scheme = CSchemeManager::GetInstance();
+
+	uint borderColor = scheme->GetColor("InputBorder");
+	if( !borderColor ) borderColor = WndStyle::WidgetBorderColor;
+
+	unsigned int fieldBg = scheme->GetColor("InputBG");
+	if( !fieldBg ) fieldBg = WndStyle::WidgetBgColor;
+
+	unsigned int textColor = scheme->GetColor("ControlFG");
+	if( !textColor ) textColor = WndStyle::WidgetTextColor;
+
+	unsigned int hoverColor = scheme->GetColor("TabHoverBG");
+	if( !hoverColor ) hoverColor = WndStyle::TabHoverColor;
+
+	unsigned int selOpenText = scheme->GetColor("TitleBarText");
+	if( !selOpenText ) selOpenText = WndStyle::TitleTextColor;
+
 	uint textflags = ETF_NO_WRAP;
-	uint borderColor = WndStyle::WidgetBorderColor;
 
 	if( iFlags & QMF_DROPSHADOW )
 		textflags |= ETF_SHADOW;
@@ -172,15 +189,14 @@ void CMenuDropDown::Draw()
 			pt.y += m_scItemSize.h;
 
 		// all other items
-		UI_FillRect( pt.x, pt.y, m_scItemSize.w, m_scSize.h - m_scItemSize.h, WndStyle::WidgetBgColor );
+		UI_FillRect( pt.x, pt.y, m_scItemSize.w, m_scSize.h - m_scItemSize.h, fieldBg );
 		for( int i = 0; i < m_szNames.Count(); i++ )
 		{
-			uint textColor = WndStyle::WidgetTextColor;
 			uint tempflags = textflags;
 
 			if( UI_CursorInRect( pt, m_scItemSize ) && !(iFlags & (QMF_GRAYED|QMF_INACTIVE)))
 			{
-				UI_FillRect( pt, m_scItemSize, WndStyle::TabHoverColor );
+				UI_FillRect( pt, m_scItemSize, hoverColor );
 				tempflags |= ETF_FORCECOL;
 			}
 
@@ -193,11 +209,11 @@ void CMenuDropDown::Draw()
 
 	Point selectedPos = m_scPos;
 	Size selectedSize = Size(m_scItemSize.w - m_ArrowSize.w + uiStatic.outlineWidth, m_scItemSize.h);
-	uint selectedTextColor = WndStyle::WidgetTextColor;
-	uint selectedBgColor = WndStyle::WidgetBgColor;
+	uint selectedTextColor = textColor;
+	uint selectedBgColor = fieldBg;
 	if( m_isOpen )
 	{
-		selectedTextColor = WndStyle::TitleTextColor;
+		selectedTextColor = selOpenText;
 		selectedBgColor = borderColor;
 	}
 	if( bDropUp )
@@ -213,7 +229,7 @@ void CMenuDropDown::Draw()
 	// arrow button (raised bevel)
 	uint arrowX = selectedPos.x + selectedSize.w;
 	WndStyle::DrawRaisedBevel( arrowX, selectedPos.y, m_ArrowSize.w, selectedSize.h );
-	UI_FillRect( arrowX + 2, selectedPos.y + 2, m_ArrowSize.w - 4, selectedSize.h - 4, WndStyle::TabHoverColor );
+	UI_FillRect( arrowX + 2, selectedPos.y + 2, m_ArrowSize.w - 4, selectedSize.h - 4, hoverColor );
 	// arrow
 	CImage &arrow = m_isOpen ? m_ArrowOpened : m_ArrowClosed;
 	Point arrowPoint( arrowX, selectedPos.y + (selectedSize.h - m_ArrowSize.h)/2 );

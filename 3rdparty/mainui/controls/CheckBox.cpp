@@ -19,6 +19,7 @@ GNU General Public License for more details.
 #include "CheckBox.h"
 #include "Utils.h"
 #include "WindowStyle.h"
+#include "SchemeManager.h"
 
 CMenuCheckBox::CMenuCheckBox() : BaseClass()
 {
@@ -134,19 +135,25 @@ void CMenuCheckBox::Draw( void )
 	}
 
 	// Flat CS 1.6 style rendering
+	CSchemeManager *scheme = CSchemeManager::GetInstance();
 	int boxSize = m_scSize.h; // use widget height as box size
+
+	unsigned int inputBg = scheme->GetColor("InputBG");
+	if( !inputBg ) inputBg = WndStyle::WidgetBgColor;
 
 	if( iFlags & QMF_GRAYED )
 	{
 		WndStyle::DrawSunkenBevel( m_scPos.x, m_scPos.y, boxSize, boxSize );
-		UI_FillRect( m_scPos.x + 2, m_scPos.y + 2, boxSize - 4, boxSize - 4, WndStyle::WidgetBgColor );
+		UI_FillRect( m_scPos.x + 2, m_scPos.y + 2, boxSize - 4, boxSize - 4, inputBg );
 		return;
 	}
 
 	// Darken fill when pressed for tactile feedback
-	unsigned int fillCol = WndStyle::WidgetBgColor;
+	unsigned int pressedBg = scheme->GetColor("TitleBarBG");
+	if( !pressedBg ) pressedBg = WndStyle::TitleBarColor;
+	unsigned int fillCol = inputBg;
 	if( m_bPressed )
-		fillCol = WndStyle::TitleBarColor;
+		fillCol = pressedBg;
 
 	// Draw box background and border (sunken bevel)
 	WndStyle::DrawSunkenBevel( m_scPos.x, m_scPos.y, boxSize, boxSize );
@@ -159,8 +166,10 @@ void CMenuCheckBox::Draw( void )
 	// Draw checkmark when checked
 	if( bChecked )
 	{
+		unsigned int checkColor = scheme->GetColor("ControlFG");
+		if( !checkColor ) checkColor = WndStyle::WidgetTextColor;
 		UI_DrawString( font, m_scPos.x, m_scPos.y, boxSize, boxSize,
-			"v", WndStyle::WidgetTextColor, boxSize - 4, QM_CENTER, ETF_FORCECOL );
+			"v", checkColor, boxSize - 4, QM_CENTER, ETF_FORCECOL );
 	}
 }
 

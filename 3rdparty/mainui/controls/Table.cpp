@@ -20,6 +20,7 @@ GNU General Public License for more details.
 #include "Utils.h"
 #include "Scissor.h"
 #include "WindowStyle.h"
+#include "SchemeManager.h"
 
 #define HEADER_HEIGHT_FRAC 1.75f
 
@@ -609,7 +610,9 @@ void CMenuTable::DrawLine( Point p, int line, uint textColor, bool forceCol, uin
 void CMenuTable::Draw()
 {
 	int i, y;
-	int selColor = 0x80385838; // olive-tinted selection (ARGB with 50% alpha)
+	CSchemeManager *scheme = CSchemeManager::GetInstance();
+	unsigned int selColor = scheme->GetColor("SelectionBG");
+	if( !selColor ) selColor = 0x80385838;
 	int upFocus, downFocus, scrollbarFocus;
 
 	// HACKHACK: recalc iNumRows, to be not greater than iNumItems
@@ -654,7 +657,9 @@ void CMenuTable::Draw()
 	int columns = Q_min( m_pModel->GetColumns(), MAX_TABLE_COLUMNS );
 
 	// Olive header background (CS 1.6 style)
-	UI_FillRect( m_scPos.x, m_scPos.y, headerSize.w, headerSize.h, WndStyle::TitleBarColor );
+	unsigned int headerBg = scheme->GetColor("TitleBarBG");
+	if( !headerBg ) headerBg = WndStyle::TitleBarColor;
+	UI_FillRect( m_scPos.x, m_scPos.y, headerSize.w, headerSize.h, headerBg );
 
 	DrawLine( m_scPos, szHeaderTexts, columns, iHeaderColor, true );
 

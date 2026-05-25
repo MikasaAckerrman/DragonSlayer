@@ -12,6 +12,7 @@ the Free Software Foundation, either version 3 of the License, or
 #include "Utils.h"
 #include "Window.h"
 #include "WindowStyle.h"
+#include "SchemeManager.h"
 
 CMenuWindow::CMenuWindow( const char *title, CWindowStack *pStack )
 	: BaseClass( title, pStack )
@@ -127,6 +128,8 @@ void CMenuWindow::Draw()
 // ---------------------------------------------------------------
 void CMenuWindow::DrawChrome()
 {
+	CSchemeManager *scheme = CSchemeManager::GetInstance();
+
 	// Background + border
 	WndStyle::DrawWindowChrome( m_scPos.x, m_scPos.y, m_scSize.w, m_scSize.h );
 
@@ -134,7 +137,9 @@ void CMenuWindow::DrawChrome()
 	int tbX = m_scPos.x + m_iBorderW;
 	int tbY = m_scPos.y + m_iBorderW;
 	int tbW = m_scSize.w - m_iBorderW * 2;
-	WndStyle::DrawTitleBar( tbX, tbY, tbW, m_iTitleBarH );
+	unsigned int titleBarBg = scheme->GetColor("TitleBarBG");
+	if( !titleBarBg ) titleBarBg = WndStyle::TitleBarColor;
+	UI_FillRect( tbX, tbY, tbW, m_iTitleBarH, titleBarBg );
 
 	// Icon + title text
 	int textX = tbX + WndStyle::TitlePadLeft;
@@ -149,8 +154,10 @@ void CMenuWindow::DrawChrome()
 	int textW = tbW - ( textX - tbX ) - m_iCloseBtnSize - WndStyle::IconPad;
 	if( textW < 16 ) textW = 16;
 	int charH = (int)( m_iTitleBarH * 0.7f );
+	unsigned int titleTextCol = scheme->GetColor("TitleBarText");
+	if( !titleTextCol ) titleTextCol = WndStyle::TitleTextColor;
 	UI_DrawString( uiStatic.hDefaultFont, textX, tbY, textW, m_iTitleBarH,
-		m_szTitle, WndStyle::TitleTextColor, charH, QM_LEFT, ETF_SHADOW );
+		m_szTitle, titleTextCol, charH, QM_LEFT, ETF_SHADOW );
 
 	// Close button
 	int cbX = m_scPos.x + m_scSize.w - m_iBorderW - m_iCloseBtnSize - 2;
@@ -163,7 +170,7 @@ void CMenuWindow::DrawChrome()
 	{
 		int mbX = cbX - ( m_bShowCloseBtn ? m_iCloseBtnSize + 2 : 0 );
 		int mbY = cbY;
-		unsigned int mbBg = m_bMaxHover ? WndStyle::TabHoverColor : WndStyle::TitleBarColor;
+		unsigned int mbBg = m_bMaxHover ? (scheme->GetColor("TabHoverBG") ? scheme->GetColor("TabHoverBG") : WndStyle::TabHoverColor) : titleBarBg;
 		UI_FillRect( mbX, mbY, m_iCloseBtnSize, m_iCloseBtnSize, mbBg );
 		const char *mbLabel = m_bMaximized ? "-" : "+";
 		int mbCharH = (int)( m_iCloseBtnSize * 0.7f );

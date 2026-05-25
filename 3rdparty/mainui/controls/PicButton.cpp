@@ -24,6 +24,7 @@ GNU General Public License for more details.
 #include <stdlib.h>
 #include "Framework.h"
 #include "WindowStyle.h"
+#include "SchemeManager.h"
 
 static int g_hotkeys[PC_BUTTONCOUNT] =
 {
@@ -359,7 +360,12 @@ void CMenuPicButton::Draw( )
 		// Flat bordered button background (CS 1.6 style) when bDrawStroke is set
 		if( bDrawStroke )
 		{
-			unsigned int btnBg = (this == m_pParent->ItemAtCursor()) ? WndStyle::TabHoverColor : WndStyle::BgColor;
+			CSchemeManager *scheme = CSchemeManager::GetInstance();
+			unsigned int btnNormal = scheme->GetColor("ButtonBG");
+			if( !btnNormal ) btnNormal = WndStyle::BgColor;
+			unsigned int btnHover = scheme->GetColor("ButtonHoverBG");
+			if( !btnHover ) btnHover = WndStyle::TabHoverColor;
+			unsigned int btnBg = (this == m_pParent->ItemAtCursor()) ? btnHover : btnNormal;
 			WndStyle::DrawRaisedBevel( m_scPos.x, m_scPos.y, m_scSize.w, m_scSize.h );
 			UI_FillRect( m_scPos.x + 2, m_scPos.y + 2, m_scSize.w - 4, m_scSize.h - 4, btnBg );
 		}
