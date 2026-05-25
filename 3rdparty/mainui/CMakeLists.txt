@@ -12,6 +12,7 @@ file(GLOB MAINUI_MENUS_SOURCES "menus/*.cpp")
 file(GLOB MAINUI_MENUS_DYNAMIC_SOURCES "menus/dynamic/*.cpp")
 file(GLOB MAINUI_MODEL_SOURCES "model/*.cpp")
 file(GLOB MAINUI_CONTROLS_SOURCES "controls/*.cpp")
+file(GLOB MAINUI_SCHEMA_SOURCES "schema/*.cpp")
 
 set(MAINUI_SOURCES
 	${MAINUI_ROOT_SOURCES}
@@ -21,6 +22,7 @@ set(MAINUI_SOURCES
 	${MAINUI_MENUS_DYNAMIC_SOURCES}
 	${MAINUI_MODEL_SOURCES}
 	${MAINUI_CONTROLS_SOURCES}
+	${MAINUI_SCHEMA_SOURCES}
 )
 
 add_library(menu SHARED ${MAINUI_SOURCES})
@@ -32,6 +34,7 @@ target_include_directories(menu PRIVATE
 	${CMAKE_CURRENT_SOURCE_DIR}/controls
 	${CMAKE_CURRENT_SOURCE_DIR}/menus
 	${CMAKE_CURRENT_SOURCE_DIR}/model
+	${CMAKE_CURRENT_SOURCE_DIR}/schema
 	${CMAKE_CURRENT_SOURCE_DIR}/sdk_includes/common
 	${CMAKE_CURRENT_SOURCE_DIR}/sdk_includes/engine
 	${CMAKE_CURRENT_SOURCE_DIR}/sdk_includes/public
