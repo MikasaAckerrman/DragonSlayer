@@ -1,5 +1,6 @@
 /*
 WindowStyle.h -- shared visual style constants and helpers for windowed UI
+CS 1.6 olive/green theme palette
 Copyright (C) 2024 DragonSlayer contributors
 
 This program is free software: you can redistribute it and/or modify
@@ -13,35 +14,36 @@ the Free Software Foundation, either version 3 of the License, or
 #include "BaseMenu.h"
 
 // ============================================================
-// Color palette (ABGR packed — engine convention)
+// Color palette (ABGR packed -- engine convention)
+// CS 1.6 olive/green theme
 // ============================================================
 namespace WndStyle
 {
-	// Background
-	static const unsigned int BgColor          = 0xFF3C3C3C; // medium-dark gray (#3C3C3C)
-	static const unsigned int BgColorSolid     = 0xFF3C3C3C; // same as BgColor
+	// Background (dark olive)
+	static const unsigned int BgColor          = 0xFF3C4B4B;
+	static const unsigned int BgColorSolid     = 0xFF3C4B4B;
 
-	// Border
-	static const unsigned int BorderColor      = 0xFF3C4E4E; // olive (#4E4E3C in ABGR)
-	static const int          BorderWidth      = 1;
+	// Border (olive green)
+	static const unsigned int BorderColor      = 0xFF5E8E6B;
+	static const int          BorderWidth      = 2;
 
-	// Title bar
-	static const unsigned int TitleBarColor    = 0xFF2A2A2A; // very dark gray
-	static const unsigned int TitleTextColor   = 0xFFC8C8C8;
-	static const int          TitleBarHeight   = 24; // virtual coords
+	// Title bar (darker olive)
+	static const unsigned int TitleBarColor    = 0xFF2E3D3D;
+	static const unsigned int TitleTextColor   = 0xFFC8D0C8; // light greenish white
+	static const int          TitleBarHeight   = 26; // virtual coords
 
 	// Close button
-	static const unsigned int CloseBtnColor    = 0xFF2222CC; // red hover (ABGR)
+	static const unsigned int CloseBtnColor    = 0xFFCC2222; // red in ABGR
 	static const unsigned int CloseTextColor   = 0xFFCCCCCC;
 	static const int          CloseBtnSize     = 20;
 
-	// Tabs
-	static const unsigned int TabActiveColor   = 0xFF3C3C3C; // same as BgColor - merges with content
-	static const unsigned int TabInactiveColor = 0xFF2E2E2E; // darker
-	static const unsigned int TabHoverColor    = 0xFF484848; // slightly lighter hover
+	// Tabs (olive variants)
+	static const unsigned int TabActiveColor   = 0xFF3C4B4B; // same as BgColor
+	static const unsigned int TabInactiveColor = 0xFF2E3838; // darker olive
+	static const unsigned int TabHoverColor    = 0xFF485858; // lighter olive
 	static const unsigned int TabTextColor     = 0xFFA0A0A0; // gray text for inactive
 	static const unsigned int TabTextActiveCol = 0xFFFFFFFF; // white for active
-	static const unsigned int TabBorderColor   = 0xFF3C4E4E; // olive border
+	static const unsigned int TabBorderColor   = 0xFF5E8E6B; // olive green border
 	static const int          TabHeight        = 22;
 	static const int          TabMinWidth      = 64;
 	static const int          TabPadH          = 10;
@@ -52,21 +54,25 @@ namespace WndStyle
 	static const int          IconPad          = 4;
 	static const int          TitlePadLeft     = 6;
 
-	// Widget style (CS 1.6 flat look)
-	static const unsigned int WidgetBgColor          = 0xFF1E1E1E; // darker fill for inputs/checkboxes
-	static const unsigned int WidgetBorderColor      = 0xFF3C4E4E; // olive border for widgets
-	static const unsigned int WidgetTextColor        = 0xFFD0D0D0; // light gray text
-	static const unsigned int WidgetFocusBorderColor = 0xFF6A8E74; // brighter olive for focus
+	// Widget style (CS 1.6 flat olive look)
+	static const unsigned int WidgetBgColor          = 0xFF1E2828; // dark olive fill
+	static const unsigned int WidgetBorderColor      = 0xFF5E8E6B; // olive green border
+	static const unsigned int WidgetTextColor        = 0xFFC8D0C8; // light greenish text
+	static const unsigned int WidgetFocusBorderColor = 0xFF7EAE8B; // brighter olive-green focus
 	static const int          SliderTrackHeight      = 6;
 	static const int          SliderThumbW           = 12;
 	static const int          SliderThumbH           = 16;
 
-	// Touch metrics (minimum tap target in virtual coords ≈ 44dp)
-	static const int          TouchMinTarget   = 28; // ≈44dp at 480dpi mapped to 768 tall
+	// Touch metrics (minimum tap target in virtual coords)
+	static const int          TouchMinTarget   = 28;
+
+	// Bevel and separator colors
+	static const unsigned int InnerHighlightColor  = 0xFF6EA87B; // 1px lighter bevel inside window
+	static const unsigned int TitleSeparatorColor  = 0xFF5E8E6B; // line below title bar
 
 	// ============================================================
 	// Helper: scale a virtual-coord value to current screen
-	// Enforces minimum touch target size (≥44dp ≈ 28 virtual px)
+	// Enforces minimum touch target size
 	// ============================================================
 	inline int ScaleY( int v ) { return (int)( v * uiStatic.scaleY ); }
 	inline int ScaleX( int v ) { return (int)( v * uiStatic.scaleX ); }
@@ -83,14 +89,27 @@ namespace WndStyle
 	// Drawing helpers (inline, zero overhead)
 	// ============================================================
 
-	// Draw a window background with border
+	// Draw a window background with border, inner highlight bevel, and title separator
 	inline void DrawWindowChrome( int x, int y, int w, int h )
 	{
-		// Border
+		// Border (2px olive green)
 		UI_DrawRectangleExt( x, y, w, h, BorderColor, BorderWidth );
-		// Fill
-		UI_FillRect( x + BorderWidth, y + BorderWidth,
-			w - BorderWidth * 2, h - BorderWidth * 2, BgColor );
+
+		// Fill background
+		int ix = x + BorderWidth;
+		int iy = y + BorderWidth;
+		int iw = w - BorderWidth * 2;
+		int ih = h - BorderWidth * 2;
+		UI_FillRect( ix, iy, iw, ih, BgColor );
+
+		// Inner highlight bevel: 1px horizontal line at top-inside
+		UI_FillRect( ix, iy, iw, 1, InnerHighlightColor );
+		// Inner highlight bevel: 1px vertical line at left-inside
+		UI_FillRect( ix, iy, 1, ih, InnerHighlightColor );
+
+		// Title bar separator: 1px line below title bar area
+		int sepY = y + BorderWidth + TitleBarHeight;
+		UI_FillRect( ix, sepY, iw, 1, TitleSeparatorColor );
 	}
 
 	// Draw title bar fill
@@ -118,7 +137,7 @@ namespace WndStyle
 			h, label, textCol, charH, QM_LEFT, 0 );
 	}
 
-	// Draw close button
+	// Draw close button with olive border
 	inline void DrawCloseBtn( int x, int y, int size, bool hover )
 	{
 		unsigned int bgCol = hover ? CloseBtnColor : TitleBarColor;
@@ -126,6 +145,19 @@ namespace WndStyle
 		int charH = (int)( size * 0.7f );
 		UI_DrawString( uiStatic.hDefaultFont, x, y, size, size,
 			"X", CloseTextColor, charH, QM_CENTER, ETF_SHADOW );
+		// 1px olive border around the close button
+		UI_DrawRectangleExt( x, y, size, size, BorderColor, 1 );
+	}
+
+	// Draw a flat button with hover state (for toolbar/dialog buttons)
+	inline void DrawFlatButton( int x, int y, int w, int h, const char *label, bool hover )
+	{
+		unsigned int bg = hover ? TabHoverColor : BgColor;
+		UI_FillRect( x, y, w, h, bg );
+		UI_DrawRectangleExt( x, y, w, h, BorderColor, 1 );
+		int charH = (int)( h * 0.6f );
+		UI_DrawString( uiStatic.hDefaultFont, x, y, w, h,
+			label, WidgetTextColor, charH, QM_CENTER, 0 );
 	}
 }
 
