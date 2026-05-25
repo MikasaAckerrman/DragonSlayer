@@ -27,12 +27,21 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "MenuStrings.h"
 #include "gameinfo.h"
 
+// Helper: apply the standard olive-stroke style to a menu button
+static void ApplyMenuButtonStyle( CMenuPicButton &btn )
+{
+	btn.bDrawStroke = true;
+	btn.colorStroke = WndStyle::BorderColor;
+	btn.iStrokeWidth = 1;
+}
+
 class CMenuMainWindow : public CMenuWindow
 {
 public:
 	CMenuMainWindow() : CMenuWindow( "Counter-Strike 1.6" ) { }
 
 	bool IsRoot() const override { return true; }
+	void Draw() override;
 	bool KeyDown( int key ) override;
 
 private:
@@ -103,6 +112,19 @@ void CMenuMainWindow::HazardCourseDialogCb()
 
 /*
 =================
+CMenuMainWindow::Draw
+Skip chrome (title bar, border, drag/resize) for the root window.
+The root fills the entire screen -- chrome is invisible and would
+only waste draw calls and allow accidental drag/resize.
+=================
+*/
+void CMenuMainWindow::Draw()
+{
+	CMenuItemsHolder::Draw();
+}
+
+/*
+=================
 CMenuMainWindow::KeyDown
 =================
 */
@@ -121,7 +143,7 @@ bool CMenuMainWindow::KeyDown( int key )
 		}
 		return true;
 	}
-	return CMenuWindow::KeyDown( key );
+	return CMenuBaseWindow::KeyDown( key );
 }
 
 /*
@@ -172,9 +194,7 @@ void CMenuMainWindow::_Init( void )
 	console.iFlags |= QMF_NOTIFY;
 	console.SetPicture( PC_CONSOLE );
 	console.SetVisibility( gpGlobals->developer );
-	console.bDrawStroke = true;
-	console.colorStroke = WndStyle::BorderColor;
-	console.iStrokeWidth = 1;
+	ApplyMenuButtonStyle( console );
 	SET_EVENT_MULTI( console.onReleased,
 	{
 		UI_SetActiveMenu( false );
@@ -184,79 +204,59 @@ void CMenuMainWindow::_Init( void )
 	resumeGame.SetNameAndStatus( L( "GameUI_GameMenu_ResumeGame" ), L( "StringsList_188" ) );
 	resumeGame.SetPicture( PC_RESUME_GAME );
 	resumeGame.iFlags |= QMF_NOTIFY;
-	resumeGame.bDrawStroke = true;
-	resumeGame.colorStroke = WndStyle::BorderColor;
-	resumeGame.iStrokeWidth = 1;
+	ApplyMenuButtonStyle( resumeGame );
 	resumeGame.onReleased = UI_CloseMenu;
 
 	disconnect.SetNameAndStatus( L( "GameUI_GameMenu_Disconnect" ), L( "Disconnect from server" ) );
 	disconnect.SetPicture( PC_DISCONNECT );
 	disconnect.iFlags |= QMF_NOTIFY;
-	disconnect.bDrawStroke = true;
-	disconnect.colorStroke = WndStyle::BorderColor;
-	disconnect.iStrokeWidth = 1;
+	ApplyMenuButtonStyle( disconnect );
 	disconnect.onReleased = VoidCb( &CMenuMainWindow::DisconnectDialogCb );
 
 	newGame.SetNameAndStatus( L( "GameUI_NewGame" ), L( "StringsList_189" ) );
 	newGame.SetPicture( PC_NEW_GAME );
 	newGame.iFlags |= QMF_NOTIFY;
-	newGame.bDrawStroke = true;
-	newGame.colorStroke = WndStyle::BorderColor;
-	newGame.iStrokeWidth = 1;
+	ApplyMenuButtonStyle( newGame );
 	newGame.onReleased = UI_NewGame_Menu;
 
 	hazardCourse.SetNameAndStatus( L( "GameUI_TrainingRoom" ), L( "StringsList_190" ) );
 	hazardCourse.SetPicture( PC_HAZARD_COURSE );
 	hazardCourse.iFlags |= QMF_NOTIFY;
-	hazardCourse.bDrawStroke = true;
-	hazardCourse.colorStroke = WndStyle::BorderColor;
-	hazardCourse.iStrokeWidth = 1;
+	ApplyMenuButtonStyle( hazardCourse );
 	hazardCourse.onReleasedClActive = VoidCb( &CMenuMainWindow::HazardCourseDialogCb );
 	hazardCourse.onReleased = VoidCb( &CMenuMainWindow::HazardCourseCb );
 
 	multiPlayer.SetNameAndStatus( L( "GameUI_Multiplayer" ), L( "StringsList_198" ) );
 	multiPlayer.SetPicture( PC_MULTIPLAYER );
 	multiPlayer.iFlags |= QMF_NOTIFY;
-	multiPlayer.bDrawStroke = true;
-	multiPlayer.colorStroke = WndStyle::BorderColor;
-	multiPlayer.iStrokeWidth = 1;
+	ApplyMenuButtonStyle( multiPlayer );
 	multiPlayer.onReleased = UI_MultiPlayer_Menu;
 
 	configuration.SetNameAndStatus( L( "GameUI_Options" ), L( "StringsList_193" ) );
 	configuration.SetPicture( PC_CONFIG );
 	configuration.iFlags |= QMF_NOTIFY;
-	configuration.bDrawStroke = true;
-	configuration.colorStroke = WndStyle::BorderColor;
-	configuration.iStrokeWidth = 1;
+	ApplyMenuButtonStyle( configuration );
 	configuration.onReleased = UI_Settings_Menu;
 
 	saveRestore.iFlags |= QMF_NOTIFY;
-	saveRestore.bDrawStroke = true;
-	saveRestore.colorStroke = WndStyle::BorderColor;
-	saveRestore.iStrokeWidth = 1;
+	ApplyMenuButtonStyle( saveRestore );
 
 	customGame.SetNameAndStatus( L( "GameUI_ChangeGame" ), L( "StringsList_530" ) );
 	customGame.SetPicture( PC_CUSTOM_GAME );
 	customGame.iFlags |= QMF_NOTIFY;
-	customGame.bDrawStroke = true;
-	customGame.colorStroke = WndStyle::BorderColor;
-	customGame.iStrokeWidth = 1;
+	ApplyMenuButtonStyle( customGame );
 	customGame.onReleased = UI_CustomGame_Menu;
 
 	previews.SetNameAndStatus( L( "Previews" ), L( "StringsList_400" ) );
 	previews.SetPicture( PC_PREVIEWS );
 	previews.iFlags |= QMF_NOTIFY;
-	previews.bDrawStroke = true;
-	previews.colorStroke = WndStyle::BorderColor;
-	previews.iStrokeWidth = 1;
+	ApplyMenuButtonStyle( previews );
 	SET_EVENT( previews.onReleased, EngFuncs::ShellExecute( MenuStrings[IDS_MEDIA_PREVIEWURL], NULL, false ) );
 
 	quit.SetNameAndStatus( L( "GameUI_GameMenu_Quit" ), L( "GameUI_QuitConfirmationText" ) );
 	quit.SetPicture( PC_QUIT );
 	quit.iFlags |= QMF_NOTIFY;
-	quit.bDrawStroke = true;
-	quit.colorStroke = WndStyle::BorderColor;
-	quit.iStrokeWidth = 1;
+	ApplyMenuButtonStyle( quit );
 	quit.onReleased = VoidCb( &CMenuMainWindow::QuitDialogCb );
 
 	if( gMenu.m_gameinfo.gamemode == GAME_MULTIPLAYER_ONLY || gMenu.m_gameinfo.startmap[0] == 0 )
@@ -319,16 +319,34 @@ void CMenuMainWindow::VidInit( bool connected )
 	int ygap = 42;
 	int ypos = ystart;
 
-	console.SetCoord( xoffset, ypos );
-	ypos += ygap;
+	// Determine visibility first
+	bool single = gpGlobals->maxClients < 2;
+	bool showConsole = gpGlobals->developer != 0;
+	bool showResume = connected;
+	bool showDisconnect = connected && !single;
 
-	disconnect.SetCoord( xoffset, ypos );
-	if( connected )
-		ypos += ygap;
+	console.SetVisibility( showConsole );
+	resumeGame.SetVisibility( showResume );
+	disconnect.SetVisibility( showDisconnect );
 
-	resumeGame.SetCoord( xoffset, ypos );
-	if( connected )
+	// Assign positions only to visible buttons (no gaps)
+	if( showConsole )
+	{
+		console.SetCoord( xoffset, ypos );
 		ypos += ygap;
+	}
+
+	if( showDisconnect )
+	{
+		disconnect.SetCoord( xoffset, ypos );
+		ypos += ygap;
+	}
+
+	if( showResume )
+	{
+		resumeGame.SetCoord( xoffset, ypos );
+		ypos += ygap;
+	}
 
 	newGame.SetCoord( xoffset, ypos );
 	ypos += ygap;
@@ -359,11 +377,7 @@ void CMenuMainWindow::VidInit( bool connected )
 
 	quit.SetCoord( xoffset, ypos );
 
-	// Visibility based on connection state
-	bool single = gpGlobals->maxClients < 2;
-	resumeGame.SetVisibility( connected );
-	disconnect.SetVisibility( connected && !single );
-
+	// Save/Load context
 	if( connected && single )
 	{
 		saveRestore.SetNameAndStatus( L( "Save\\Load Game" ), L( "StringsList_192" ) );
