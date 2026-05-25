@@ -64,12 +64,17 @@ void CMenuProgressBar::Draw( void )
 	if( !trackBg ) trackBg = uiInputBgColor;
 	UI_FillRect( m_scPos, m_scSize, trackBg );
 
+	// draw progress fill inside the border inset
+	CSchemeBorder *border = scheme->GetBorder("ProgressBarBorder");
+	int inset = border ? border->insetX : 2;
+
 	unsigned int fillColor = scheme->GetColor("ProgressFill");
 	if( !fillColor ) fillColor = colorBase;
-	UI_FillRect( m_scPos.x, m_scPos.y, m_scSize.w * flProgress, m_scSize.h, fillColor );
+	int fillW = (int)((m_scSize.w - inset * 2) * flProgress);
+	if( fillW > 0 )
+		UI_FillRect( m_scPos.x + inset, m_scPos.y + inset, fillW, m_scSize.h - inset * 2, fillColor );
 
-	// draw the rectangle
-	CSchemeBorder *border = scheme->GetBorder("ProgressBarBorder");
+	// draw the border
 	if( border )
 		border->Draw( m_scPos.x, m_scPos.y, m_scSize.w, m_scSize.h );
 	else

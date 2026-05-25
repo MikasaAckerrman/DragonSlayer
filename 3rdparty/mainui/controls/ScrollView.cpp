@@ -10,7 +10,9 @@ CMenuScrollView::CMenuScrollView() : CMenuItemsHolder (),
 
 void CMenuScrollView::VidInit()
 {
-	colorStroke.SetDefault( uiInputFgColor );
+	CSchemeManager *scheme = CSchemeManager::GetInstance();
+	unsigned int schemeBorder = scheme->GetColor("InputBorder");
+	colorStroke.SetDefault( schemeBorder ? schemeBorder : uiInputFgColor );
 
 	BaseClass::VidInit();
 
@@ -132,28 +134,21 @@ void CMenuScrollView::Draw()
 
 	if( bDrawStroke )
 	{
-		CSchemeManager *scheme = CSchemeManager::GetInstance();
-		unsigned int strokeColor = scheme->GetColor("InputBorder");
-		if( !strokeColor ) strokeColor = colorStroke;
+		unsigned int strokeColor = colorStroke;
 		UI_DrawRectangleExt( m_scPos, m_scSize, strokeColor, iStrokeWidth );
 	}
 
-	int drawn = 0, skipped = 0;
 	FOR_EACH_VEC( m_pItems, i )
 	{
 		if( !IsRectVisible( m_pItems[i]->GetRenderPosition(), m_pItems[i]->GetRenderSize() ) )
 		{
 			m_pItems[i]->iFlags |= QMF_HIDDENBYPARENT;
-			skipped++;
 		}
 		else
 		{
 			m_pItems[i]->iFlags &= ~QMF_HIDDENBYPARENT;
-			drawn++;
 		}
 	}
-
-	Con_NPrintf( 0, "Drawn: %i Skipped: %i", drawn, skipped );
 
 	UI::Scissor::PushScissor( m_scPos, m_scSize );
 		CMenuItemsHolder::Draw();
