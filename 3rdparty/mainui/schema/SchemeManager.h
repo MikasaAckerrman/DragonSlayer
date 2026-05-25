@@ -38,6 +38,17 @@ private:
 	void ParseFonts( CKeyValues *section );
 	CSchemeBorder *ParseSingleBorder( CKeyValues *borderKey );
 
+	// Fast lookup hash tables
+	static unsigned int HashName( const char *name );
+
+	// Color hash table (open addressing, size must be power of 2)
+	enum { COLOR_HASH_SIZE = 256 }; // 2x max colors for low collision
+	int m_colorHash[COLOR_HASH_SIZE]; // index into m_colors[], -1 = empty
+
+	// Border hash table
+	enum { BORDER_HASH_SIZE = 64 }; // 2x max borders
+	int m_borderHash[BORDER_HASH_SIZE]; // index into m_borders[], -1 = empty
+
 	struct ColorEntry { char name[64]; unsigned int color; };
 	struct FontEntry { char alias[64]; char name[64]; int tall; int weight; HFont handle; };
 

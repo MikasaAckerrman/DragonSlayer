@@ -22,11 +22,28 @@ CSchemeManager *CSchemeManager::GetInstance()
 	return &s_instance;
 }
 
+unsigned int CSchemeManager::HashName( const char *name )
+{
+	// FNV-1a hash, case-insensitive
+	unsigned int hash = 2166136261u;
+	while( *name )
+	{
+		char c = *name++;
+		if( c >= 'A' && c <= 'Z' ) c += 32; // tolower
+		hash ^= (unsigned int)c;
+		hash *= 16777619u;
+	}
+	return hash;
+}
+
 bool CSchemeManager::LoadScheme( const char *filename )
 {
 	m_numColors = 0;
 	m_numBorders = 0;
 	m_numFonts = 0;
+
+	memset( m_colorHash, -1, sizeof(m_colorHash) );
+	memset( m_borderHash, -1, sizeof(m_borderHash) );
 
 	if( !m_keyValues.LoadFromFile( filename ) )
 		return false;
@@ -68,6 +85,13 @@ void CSchemeManager::ParseColors( CKeyValues *section )
 			sscanf( val, "%d %d %d %d", &r, &g, &b, &a );
 
 		m_colors[m_numColors].color = PackRGBA( r, g, b, a );
+
+		// Insert into hash table
+		unsigned int h = HashName( m_colors[m_numColors].name ) & (COLOR_HASH_SIZE - 1);
+		while( m_colorHash[h] != -1 )
+			h = (h + 1) & (COLOR_HASH_SIZE - 1);
+		m_colorHash[h] = m_numColors;
+
 		m_numColors++;
 
 		child = child->GetNextKey();
@@ -86,6 +110,13 @@ void CSchemeManager::ParseBorders( CKeyValues *section )
 		m_borderNames[m_numBorders][63] = '\0';
 
 		ParseSingleBorder( child );
+
+		// Insert into hash table
+		unsigned int h = HashName( m_borderNames[m_numBorders] ) & (BORDER_HASH_SIZE - 1);
+		while( m_borderHash[h] != -1 )
+			h = (h + 1) & (BORDER_HASH_SIZE - 1);
+		m_borderHash[h] = m_numBorders;
+
 		m_numBorders++;
 
 		child = child->GetNextKey();
@@ -186,10 +217,13 @@ unsigned int CSchemeManager::GetColor( const char *colorName )
 	if( !colorName || !colorName[0] )
 		return 0;
 
-	for( int i = 0; i < m_numColors; i++ )
+	unsigned int h = HashName( colorName ) & (COLOR_HASH_SIZE - 1);
+	int idx;
+	while( (idx = m_colorHash[h]) != -1 )
 	{
-		if( stricmp( m_colors[i].name, colorName ) == 0 )
-			return m_colors[i].color;
+		if( stricmp( m_colors[idx].name, colorName ) == 0 )
+			return m_colors[idx].color;
+		h = (h + 1) & (COLOR_HASH_SIZE - 1);
 	}
 
 	return 0;
@@ -200,10 +234,13 @@ CSchemeBorder *CSchemeManager::GetBorder( const char *borderName )
 	if( !borderName || !borderName[0] )
 		return nullptr;
 
-	for( int i = 0; i < m_numBorders; i++ )
+	unsigned int h = HashName( borderName ) & (BORDER_HASH_SIZE - 1);
+	int idx;
+	while( (idx = m_borderHash[h]) != -1 )
 	{
-		if( stricmp( m_borderNames[i], borderName ) == 0 )
-			return &m_borders[i];
+		if( stricmp( m_borderNames[idx], borderName ) == 0 )
+			return &m_borders[idx];
+		h = (h + 1) & (BORDER_HASH_SIZE - 1);
 	}
 
 	return nullptr;

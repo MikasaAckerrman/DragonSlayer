@@ -341,7 +341,8 @@ int CMenuWindow::DetectResizeEdge() const
 {
 	if( m_bMaximized ) return RESIZE_NONE;
 
-	int border = WndStyle::ScaleX( RESIZE_BORDER );
+	// Use touch-friendly border (larger than PC)
+	int border = WndStyle::ScaleYTouch( RESIZE_BORDER );
 	int cx = uiStatic.cursorX;
 	int cy = uiStatic.cursorY;
 

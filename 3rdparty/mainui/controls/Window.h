@@ -112,7 +112,7 @@ private:
 	Point m_resizeStartPos;
 	Size  m_resizeStartSize;
 
-	static const int RESIZE_BORDER = 8;    // virtual coord pixels for edge detection
+	static const int RESIZE_BORDER = 16;   // virtual coord pixels for edge detection (touch-friendly)
 	static const int MIN_WINDOW_W  = 200;  // minimum window width (screen coords)
 	static const int MIN_WINDOW_H  = 150;  // minimum window height (screen coords)
 
