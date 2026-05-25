@@ -210,6 +210,18 @@ void CMenuSlider::Draw( void )
 	UI_FillRect( sliderX, thumbY, thumbW, thumbH, WndStyle::TabHoverColor );
 	UI_DrawRectangleExt( sliderX, thumbY, thumbW, thumbH, thumbBorder, 1 );
 
+	// Tick marks below the slider track (CS 1.6 style)
+	if( m_iNumSteps > 1 )
+	{
+		int tickY = trackY + trackH + 2;
+		int tickH = 3;
+		for( int i = 0; i <= m_iNumSteps; i++ )
+		{
+			int tickX = m_scPos.x + (int)( i * m_flDrawStep ) + (WndStyle::SliderThumbW / 2);
+			UI_FillRect( tickX, tickY, 1, tickH, WndStyle::WidgetBorderColor );
+		}
+	}
+
 	// Label text above the slider
 	textHeight = m_scPos.y - (m_scChSize * 1.5f);
 	UI_DrawString( font, m_scPos.x, textHeight, m_scSize.w, m_scChSize, szName, WndStyle::WidgetTextColor, m_scChSize, eTextAlignment, textflags | ETF_FORCECOL );

@@ -161,7 +161,7 @@ void CMenuCheckBox::Draw( void )
 	if( bChecked )
 	{
 		UI_DrawString( font, m_scPos.x, m_scPos.y, boxSize, boxSize,
-			"x", WndStyle::WidgetTextColor, boxSize - 4, QM_CENTER, ETF_FORCECOL );
+			"v", WndStyle::WidgetTextColor, boxSize - 4, QM_CENTER, ETF_FORCECOL );
 	}
 }
 

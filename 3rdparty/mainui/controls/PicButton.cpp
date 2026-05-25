@@ -23,6 +23,7 @@ GNU General Public License for more details.
 #include "Btns.h"
 #include <stdlib.h>
 #include "Framework.h"
+#include "WindowStyle.h"
 
 static int g_hotkeys[PC_BUTTONCOUNT] =
 {
@@ -354,6 +355,14 @@ void CMenuPicButton::Draw( )
 	else
 	{
 		uint textflags = ETF_NOSIZELIMIT | ETF_FORCECOL;
+
+		// Flat bordered button background (CS 1.6 style) when bDrawStroke is set
+		if( bDrawStroke )
+		{
+			unsigned int btnBg = (this == m_pParent->ItemAtCursor()) ? WndStyle::TabHoverColor : WndStyle::BgColor;
+			UI_FillRect( m_scPos, m_scSize, btnBg );
+			UI_DrawRectangleExt( m_scPos, m_scSize, WndStyle::BorderColor, 1 );
+		}
 
 		SetBits( textflags, (iFlags & QMF_DROPSHADOW) ? ETF_SHADOW : 0 );
 

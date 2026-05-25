@@ -41,10 +41,10 @@ public:
 static void ApplyFlatStyle( CMenuPicButton &btn )
 {
 	btn.bDrawStroke = true;
-	btn.colorStroke = 0xFF3C4E4E;
+	btn.colorStroke = WndStyle::BorderColor;
 	btn.iStrokeWidth = 1;
-	btn.colorBase = 0xFF3C3C3C;
-	btn.colorFocus = 0xFF484848;
+	btn.colorBase = WndStyle::BgColor;
+	btn.colorFocus = WndStyle::TabHoverColor;
 	btn.eFocusAnimation = QM_HIGHLIGHTIFFOCUS;
 	btn.eTextAlignment = QM_CENTER;
 	btn.bEnableTransitions = false;

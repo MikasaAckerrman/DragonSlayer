@@ -19,6 +19,7 @@ GNU General Public License for more details.
 #include "Table.h"
 #include "Utils.h"
 #include "Scissor.h"
+#include "WindowStyle.h"
 
 #define HEADER_HEIGHT_FRAC 1.75f
 
@@ -608,7 +609,7 @@ void CMenuTable::DrawLine( Point p, int line, uint textColor, bool forceCol, uin
 void CMenuTable::Draw()
 {
 	int i, y;
-	int selColor = PackRGB( 80, 56, 24 );
+	int selColor = 0x80385838; // olive-tinted selection (ABGR with 50% alpha)
 	int upFocus, downFocus, scrollbarFocus;
 
 	// HACKHACK: recalc iNumRows, to be not greater than iNumItems
@@ -648,6 +649,9 @@ void CMenuTable::Draw()
 	}
 
 	int columns = Q_min( m_pModel->GetColumns(), MAX_TABLE_COLUMNS );
+
+	// Olive header background (CS 1.6 style)
+	UI_FillRect( m_scPos.x, m_scPos.y, headerSize.w, headerSize.h, WndStyle::TitleBarColor );
 
 	DrawLine( m_scPos, szHeaderTexts, columns, iHeaderColor, true );
 
