@@ -88,6 +88,9 @@ extensions.configure<ApplicationExtension> {
 		jniLibs {
 			keepDebugSymbols.add("**/*.so")
 			useLegacyPackaging = true
+			// Resolve duplicate libmenu.so: cmake --install copies to jniLibs/ and
+			// AGP also finds the same lib in the cmake obj/ build tree. Prefer jniLibs copy.
+			pickFirsts.add("**/libmenu.so")
 		}
 	}
 
