@@ -648,6 +648,9 @@ void CMenuTable::Draw()
 		}
 	}
 
+	// CS 1.6 sunken bevel around list area
+	WndStyle::DrawSunkenBevel( boxPos.x, boxPos.y, boxSize.w, boxSize.h );
+
 	int columns = Q_min( m_pModel->GetColumns(), MAX_TABLE_COLUMNS );
 
 	// Olive header background (CS 1.6 style)

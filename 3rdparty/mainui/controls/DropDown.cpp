@@ -207,12 +207,13 @@ void CMenuDropDown::Draw()
 	UI_FillRect( selectedPos, selectedSize, selectedBgColor );
 	UI_DrawString( font, selectedPos, selectedSize, m_szNames[m_iState], selectedTextColor, m_scChSize, eTextAlignment, textflags );
 
-	// border
-	UI_DrawRectangleExt( m_scPos, m_scSize, borderColor, 1 );
+	// Sunken bevel around the entire dropdown
+	WndStyle::DrawSunkenBevel( m_scPos.x, m_scPos.y, m_scSize.w, m_scSize.h );
 
-	// arrow background
+	// arrow button (raised bevel)
 	uint arrowX = selectedPos.x + selectedSize.w;
-	UI_FillRect( arrowX, selectedPos.y, m_ArrowSize.w, selectedSize.h, WndStyle::WidgetBorderColor );
+	WndStyle::DrawRaisedBevel( arrowX, selectedPos.y, m_ArrowSize.w, selectedSize.h );
+	UI_FillRect( arrowX + 2, selectedPos.y + 2, m_ArrowSize.w - 4, selectedSize.h - 4, WndStyle::TabHoverColor );
 	// arrow
 	CImage &arrow = m_isOpen ? m_ArrowOpened : m_ArrowClosed;
 	Point arrowPoint( arrowX, selectedPos.y + (selectedSize.h - m_ArrowSize.h)/2 );

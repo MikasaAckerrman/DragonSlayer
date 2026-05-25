@@ -14,6 +14,7 @@ GNU General Public License for more details.
 */
 #include "TabView.h"
 #include "Scissor.h"
+#include "WindowStyle.h"
 
 CMenuTabView::CMenuTabView() : BaseClass()
 {
@@ -44,41 +45,46 @@ void CMenuTabView::VidInit()
 
 void CMenuTabView::DrawTab(Point pt, const char *name, bool isEnd, bool isSelected, bool isHighlighted)
 {
-	uint textColor = uiInputTextColor;
-	uint fillColor = uiColorBlack;
-	uint textflags = ( iFlags & QMF_DROPSHADOW ) ? ETF_SHADOW : 0;
+	unsigned int bgCol = isSelected ? WndStyle::TabActiveColor : ( isHighlighted ? WndStyle::TabHoverColor : WndStyle::TabInactiveColor );
+	unsigned int textCol = isSelected ? WndStyle::TabTextActiveCol : WndStyle::TabTextColor;
+	unsigned int textflags = ( iFlags & QMF_DROPSHADOW ) ? ETF_SHADOW : 0;
 
-	if( isSelected && !isHighlighted )
+	// Fill tab background
+	UI_FillRect( pt, m_szTab, bgCol );
+
+	// 3D bevel on tabs (raised look)
+	// Outer highlight top + left
+	UI_FillRect( pt.x, pt.y, m_szTab.w, 1, WndStyle::BevelHighlight );
+	UI_FillRect( pt.x, pt.y, 1, m_szTab.h, WndStyle::BevelHighlight );
+	// Inner highlight
+	UI_FillRect( pt.x + 1, pt.y + 1, m_szTab.w - 2, 1, WndStyle::BevelLight );
+	UI_FillRect( pt.x + 1, pt.y + 1, 1, m_szTab.h - 2, WndStyle::BevelLight );
+	// Outer shadow right
+	UI_FillRect( pt.x + m_szTab.w - 1, pt.y, 1, m_szTab.h, WndStyle::BevelDarkShadow );
+	// Inner shadow right
+	UI_FillRect( pt.x + m_szTab.w - 2, pt.y + 1, 1, m_szTab.h - 2, WndStyle::BevelShadow );
+
+	// Active tab: NO bottom border (merges with content)
+	// Inactive tab: draw bottom border
+	if( !isSelected )
 	{
-		fillColor = uiInputBgColor;
-		textColor = uiInputFgColor;
-	}
-	else if( isHighlighted )
-	{
-		textColor = uiPromptFocusColor;
+		UI_FillRect( pt.x, pt.y + m_szTab.h - 1, m_szTab.w, 1, WndStyle::BevelDarkShadow );
 	}
 
-	UI_FillRect( pt, m_szTab, fillColor );
-	UI_DrawString( font, pt, m_szTab, name, textColor, m_scChSize, eTextAlignment, textflags );
-
-	if( !isEnd )
-	{
-		int x = pt.x + m_szTab.w;
-		int y = pt.y - UI_OUTLINE_WIDTH;
-		int w = UI_OUTLINE_WIDTH;
-		int h = m_szTab.h + UI_OUTLINE_WIDTH + UI_OUTLINE_WIDTH;
-
-		// draw right
-		UI_FillRect( x, y, w, h, uiColorHelp );
-	}
+	UI_DrawString( font, pt, m_szTab, name, textCol, m_scChSize, eTextAlignment, textflags );
 }
 
 void CMenuTabView::Draw()
 {
-	// draw frame first
-	UI_DrawRectangle( m_scPos, m_scSize, uiColorHelp );
+	// Draw content area background
+	Point contentOffset = Point( m_scPos.x, m_scPos.y + m_scChSize * 1.5f );
+	Size contentSize = Size( m_scSize.w, m_scSize.h - m_scChSize * 1.5f );
+	UI_FillRect( contentOffset, contentSize, WndStyle::BgColor );
 
-	// draw tabs
+	// Sunken bevel around content area
+	WndStyle::DrawSunkenBevel( contentOffset.x, contentOffset.y, contentSize.w, contentSize.h );
+
+	// Draw tabs
 	Point tabOffset = m_scPos;
 	FOR_EACH_VEC( m_pItems, i )
 	{
@@ -90,20 +96,12 @@ void CMenuTabView::Draw()
 		tabOffset.x += m_szTab.w;
 	}
 
-	Point contentOffset = Point( m_scPos.x, m_scPos.y + m_scChSize * 1.5f );
-	Size contentSize = Size( m_scSize.w, m_scSize.h - m_scChSize * 1.5f );
-
-	// draw line after tab
-	UI_FillRect( contentOffset.x, contentOffset.y,
-		m_scSize.w, UI_OUTLINE_WIDTH, uiColorHelp );
-
-	// fill background
-	UI_FillRect( contentOffset, contentSize, uiColorBlack );
-
-	// draw contents
+	// Draw contents
 	if( m_iCursor >= 0 && m_iCursor < m_pItems.Count() )
 	{
-		UI::Scissor::PushScissor( contentOffset, contentSize );
+		Point innerOffset = Point( contentOffset.x + 2, contentOffset.y + 2 );
+		Size innerSize = Size( contentSize.w - 4, contentSize.h - 4 );
+		UI::Scissor::PushScissor( innerOffset, innerSize );
 			m_pItems[m_iCursor]->Draw();
 		UI::Scissor::PopScissor();
 	}

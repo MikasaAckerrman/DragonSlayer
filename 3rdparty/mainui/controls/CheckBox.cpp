@@ -138,8 +138,8 @@ void CMenuCheckBox::Draw( void )
 
 	if( iFlags & QMF_GRAYED )
 	{
-		UI_FillRect( m_scPos.x, m_scPos.y, boxSize, boxSize, WndStyle::WidgetBgColor );
-		UI_DrawRectangleExt( m_scPos.x, m_scPos.y, boxSize, boxSize, WndStyle::WidgetBorderColor, 1 );
+		WndStyle::DrawSunkenBevel( m_scPos.x, m_scPos.y, boxSize, boxSize );
+		UI_FillRect( m_scPos.x + 2, m_scPos.y + 2, boxSize - 4, boxSize - 4, WndStyle::WidgetBgColor );
 		return;
 	}
 
@@ -153,9 +153,9 @@ void CMenuCheckBox::Draw( void )
 	if( m_bPressed )
 		fillCol = WndStyle::TitleBarColor;
 
-	// Draw box background and border
-	UI_FillRect( m_scPos.x, m_scPos.y, boxSize, boxSize, fillCol );
-	UI_DrawRectangleExt( m_scPos.x, m_scPos.y, boxSize, boxSize, borderCol, 1 );
+	// Draw box background and border (sunken bevel)
+	WndStyle::DrawSunkenBevel( m_scPos.x, m_scPos.y, boxSize, boxSize );
+	UI_FillRect( m_scPos.x + 2, m_scPos.y + 2, boxSize - 4, boxSize - 4, fillCol );
 
 	// Draw checkmark when checked
 	if( bChecked )

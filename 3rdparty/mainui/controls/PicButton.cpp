@@ -360,8 +360,8 @@ void CMenuPicButton::Draw( )
 		if( bDrawStroke )
 		{
 			unsigned int btnBg = (this == m_pParent->ItemAtCursor()) ? WndStyle::TabHoverColor : WndStyle::BgColor;
-			UI_FillRect( m_scPos, m_scSize, btnBg );
-			UI_DrawRectangleExt( m_scPos, m_scSize, colorStroke, iStrokeWidth );
+			WndStyle::DrawRaisedBevel( m_scPos.x, m_scPos.y, m_scSize.w, m_scSize.h );
+			UI_FillRect( m_scPos.x + 2, m_scPos.y + 2, m_scSize.w - 4, m_scSize.h - 4, btnBg );
 		}
 
 		SetBits( textflags, (iFlags & QMF_DROPSHADOW) ? ETF_SHADOW : 0 );

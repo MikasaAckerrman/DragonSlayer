@@ -190,11 +190,11 @@ void CMenuSlider::Draw( void )
 	// keep value in range
 	m_flCurValue = bound( m_flMinValue, m_flCurValue, m_flMaxValue );
 
-	// Flat CS 1.6 style track
+	// CS 1.6 style track (sunken bevel)
 	int trackH = WndStyle::SliderTrackHeight;
 	int trackY = m_scPos.y + (m_scSize.h - trackH) / 2;
-	UI_FillRect( m_scPos.x, trackY, m_scSize.w, trackH, WndStyle::WidgetBgColor );
-	UI_DrawRectangleExt( m_scPos.x, trackY, m_scSize.w, trackH, WndStyle::WidgetBorderColor, 1 );
+	WndStyle::DrawSunkenBevel( m_scPos.x, trackY, m_scSize.w, trackH );
+	UI_FillRect( m_scPos.x + 2, trackY + 2, m_scSize.w - 4, trackH - 4, WndStyle::WidgetBgColor );
 
 	// Flat thumb position
 	int thumbW = WndStyle::SliderThumbW;
@@ -203,12 +203,8 @@ void CMenuSlider::Draw( void )
 		* ( m_scSize.w - thumbW ) );
 	int thumbY = m_scPos.y + (m_scSize.h - thumbH) / 2;
 
-	unsigned int thumbBorder = WndStyle::WidgetBorderColor;
-	if( this == m_pParent->ItemAtCursor() )
-		thumbBorder = WndStyle::WidgetFocusBorderColor;
-
-	UI_FillRect( sliderX, thumbY, thumbW, thumbH, WndStyle::TabHoverColor );
-	UI_DrawRectangleExt( sliderX, thumbY, thumbW, thumbH, thumbBorder, 1 );
+	WndStyle::DrawRaisedBevel( sliderX, thumbY, thumbW, thumbH );
+	UI_FillRect( sliderX + 2, thumbY + 2, thumbW - 4, thumbH - 4, WndStyle::TabHoverColor );
 
 	// Tick marks below the slider track (CS 1.6 style)
 	if( m_iNumSteps > 1 )
