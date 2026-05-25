@@ -140,22 +140,7 @@ namespace WndStyle
 		CSchemeManager *scheme = CSchemeManager::GetInstance();
 
 		// 3D raised bevel frame (2px)
-		CSchemeBorder *border = scheme->GetBorder( "RaisedBorder" );
-		if( border )
-			border->Draw( x, y, w, h );
-		else
-		{
-			// Outer edges
-			UI_FillRect( x, y, w, 1, BevelHighlight );
-			UI_FillRect( x, y, 1, h, BevelHighlight );
-			UI_FillRect( x, y + h - 1, w, 1, BevelDarkShadow );
-			UI_FillRect( x + w - 1, y, 1, h, BevelDarkShadow );
-			// Inner edges
-			UI_FillRect( x + 1, y + 1, w - 2, 1, BevelLight );
-			UI_FillRect( x + 1, y + 1, 1, h - 2, BevelLight );
-			UI_FillRect( x + 1, y + h - 2, w - 2, 1, BevelShadow );
-			UI_FillRect( x + w - 2, y + 1, 1, h - 2, BevelShadow );
-		}
+		DrawRaisedBevel( x, y, w, h );
 
 		// Fill background inside bevel
 		unsigned int bgColor = scheme->GetColor( "ControlBG" );
@@ -171,12 +156,6 @@ namespace WndStyle
 		if( !sepColor ) sepColor = TitleSeparatorColor;
 		int sepY = y + 2 + TitleBarHeight;
 		UI_FillRect( ix, sepY, iw, 1, sepColor );
-	}
-
-	// Draw title bar fill
-	inline void DrawTitleBar( int x, int y, int w, int h )
-	{
-		UI_FillRect( x, y, w, h, TitleBarColor );
 	}
 
 	// Draw a single tab button (CS 1.6 style with 3D bevel)
@@ -251,9 +230,11 @@ namespace WndStyle
 	{
 		CSchemeManager *scheme = CSchemeManager::GetInstance();
 
-		unsigned int bg = hover
-			? ( scheme->GetColor( "ButtonHoverBG" ) ? scheme->GetColor( "ButtonHoverBG" ) : TabHoverColor )
-			: ( scheme->GetColor( "ButtonBG" ) ? scheme->GetColor( "ButtonBG" ) : BgColor );
+		unsigned int hoverBg = scheme->GetColor( "ButtonHoverBG" );
+		if( !hoverBg ) hoverBg = TabHoverColor;
+		unsigned int normalBg = scheme->GetColor( "ButtonBG" );
+		if( !normalBg ) normalBg = BgColor;
+		unsigned int bg = hover ? hoverBg : normalBg;
 		UI_FillRect( x + 2, y + 2, w - 4, h - 4, bg );
 
 		CSchemeBorder *border = scheme->GetBorder( "ButtonBorder" );

@@ -170,7 +170,9 @@ void CMenuWindow::DrawChrome()
 	{
 		int mbX = cbX - ( m_bShowCloseBtn ? m_iCloseBtnSize + 2 : 0 );
 		int mbY = cbY;
-		unsigned int mbBg = m_bMaxHover ? (scheme->GetColor("TabHoverBG") ? scheme->GetColor("TabHoverBG") : WndStyle::TabHoverColor) : titleBarBg;
+		unsigned int maxHoverBg = scheme->GetColor("TabHoverBG");
+		if( !maxHoverBg ) maxHoverBg = WndStyle::TabHoverColor;
+		unsigned int mbBg = m_bMaxHover ? maxHoverBg : titleBarBg;
 		UI_FillRect( mbX, mbY, m_iCloseBtnSize, m_iCloseBtnSize, mbBg );
 		const char *mbLabel = m_bMaximized ? "-" : "+";
 		int mbCharH = (int)( m_iCloseBtnSize * 0.7f );
