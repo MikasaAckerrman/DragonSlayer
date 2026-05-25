@@ -128,6 +128,14 @@ void CMenuMainWindow::Draw()
 	UI_FillRect( m_scPos.x, m_scPos.y, m_scSize.w, m_scSize.h, bgColor );
 
 	CMenuItemsHolder::Draw();
+
+	// Build indicator - helps user confirm VGUI2 menu is active
+	int labelH = 12;
+	int labelW = 100;
+	int labelX = m_scPos.x + m_scSize.w - labelW - 4;
+	int labelY = m_scPos.y + m_scSize.h - labelH - 4;
+	UI_DrawString( uiStatic.hDefaultFont, labelX, labelY, labelW, labelH,
+		"VGUI2 v1", 0x80FFFFFF, labelH, QM_RIGHT, ETF_SHADOW );
 }
 
 /*
@@ -181,8 +189,11 @@ void CMenuMainWindow::_Init( void )
 	if( gMenu.m_gameinfo.title[0] )
 		SetTitle( gMenu.m_gameinfo.title );
 
-	// Root window fills the entire virtual coordinate space
-	SetRect( 0, 0, 1024, 768 );
+	// Root window fills the entire virtual coordinate space (widescreen-aware)
+	pos.x = uiStatic.xOffset;
+	pos.y = uiStatic.yOffset;
+	size.w = uiStatic.width;
+	size.h = 768;
 
 	// No close or maximize buttons for root menu
 	SetShowCloseButton( false );
@@ -401,6 +412,12 @@ void CMenuMainWindow::VidInit( bool connected )
 
 void CMenuMainWindow::_VidInit()
 {
+	// Recalculate position/size on screen rotation (Android)
+	pos.x = uiStatic.xOffset;
+	pos.y = uiStatic.yOffset;
+	size.w = uiStatic.width;
+	size.h = 768;
+
 	VidInit( CL_IsActive() );
 }
 
