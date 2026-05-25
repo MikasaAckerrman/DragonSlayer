@@ -143,11 +143,6 @@ void CMenuCheckBox::Draw( void )
 		return;
 	}
 
-	// Determine border color based on focus
-	unsigned int borderCol = WndStyle::WidgetBorderColor;
-	if( this == m_pParent->ItemAtCursor() )
-		borderCol = WndStyle::WidgetFocusBorderColor;
-
 	// Darken fill when pressed for tactile feedback
 	unsigned int fillCol = WndStyle::WidgetBgColor;
 	if( m_bPressed )
@@ -156,6 +151,10 @@ void CMenuCheckBox::Draw( void )
 	// Draw box background and border (sunken bevel)
 	WndStyle::DrawSunkenBevel( m_scPos.x, m_scPos.y, boxSize, boxSize );
 	UI_FillRect( m_scPos.x + 2, m_scPos.y + 2, boxSize - 4, boxSize - 4, fillCol );
+
+	// Focus indicator: 1px bright border outside the bevel
+	if( this == m_pParent->ItemAtCursor() )
+		UI_DrawRectangleExt( m_scPos.x - 1, m_scPos.y - 1, boxSize + 2, boxSize + 2, WndStyle::WidgetFocusBorderColor, 1 );
 
 	// Draw checkmark when checked
 	if( bChecked )

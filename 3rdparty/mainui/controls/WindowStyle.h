@@ -59,7 +59,7 @@ namespace WndStyle
 	static const unsigned int WidgetBorderColor      = 0xFF5E8E6B; // olive green border
 	static const unsigned int WidgetTextColor        = 0xFFC8D0C8; // light greenish text
 	static const unsigned int WidgetFocusBorderColor = 0xFF7EAE8B; // brighter olive-green focus
-	static const int          SliderTrackHeight      = 6;
+	static const int          SliderTrackHeight      = 10;
 	static const int          SliderThumbW           = 12;
 	static const int          SliderThumbH           = 16;
 
@@ -149,19 +149,27 @@ namespace WndStyle
 		UI_FillRect( x, y, w, h, TitleBarColor );
 	}
 
-	// Draw a single tab button
+	// Draw a single tab button (CS 1.6 style with 3D bevel)
 	inline void DrawTab( int x, int y, int w, int h, bool active, bool hover, const char *label )
 	{
 		unsigned int bgCol = active ? TabActiveColor : ( hover ? TabHoverColor : TabInactiveColor );
 		unsigned int textCol = active ? TabTextActiveCol : TabTextColor;
 
+		// Fill tab background
 		UI_FillRect( x, y, w, h, bgCol );
 
-		int sides = QM_TOP | QM_LEFT | QM_RIGHT;
-		if( !active )
-			sides |= QM_BOTTOM;
+		// Raised bevel edges (top + left highlight, right shadow)
+		UI_FillRect( x, y, w, 1, BevelHighlight );           // top outer
+		UI_FillRect( x, y, 1, h, BevelHighlight );           // left outer
+		UI_FillRect( x + 1, y + 1, w - 2, 1, BevelLight );  // top inner
+		UI_FillRect( x + 1, y + 1, 1, h - 2, BevelLight );  // left inner
+		UI_FillRect( x + w - 1, y, 1, h, BevelDarkShadow ); // right outer
+		UI_FillRect( x + w - 2, y + 1, 1, h - 2, BevelShadow ); // right inner
 
-		UI_DrawRectangleExt( x, y, w, h, TabBorderColor, 1, sides );
+		// Active tab: no bottom border (merges with content area)
+		// Inactive tab: bottom border
+		if( !active )
+			UI_FillRect( x, y + h - 1, w, 1, BevelDarkShadow );
 
 		int charH = (int)( h * 0.6f );
 		UI_DrawString( uiStatic.hDefaultFont, x + TabPadH, y, w - TabPadH * 2,

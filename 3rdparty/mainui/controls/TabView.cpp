@@ -45,33 +45,7 @@ void CMenuTabView::VidInit()
 
 void CMenuTabView::DrawTab(Point pt, const char *name, bool isEnd, bool isSelected, bool isHighlighted)
 {
-	unsigned int bgCol = isSelected ? WndStyle::TabActiveColor : ( isHighlighted ? WndStyle::TabHoverColor : WndStyle::TabInactiveColor );
-	unsigned int textCol = isSelected ? WndStyle::TabTextActiveCol : WndStyle::TabTextColor;
-	unsigned int textflags = ( iFlags & QMF_DROPSHADOW ) ? ETF_SHADOW : 0;
-
-	// Fill tab background
-	UI_FillRect( pt, m_szTab, bgCol );
-
-	// 3D bevel on tabs (raised look)
-	// Outer highlight top + left
-	UI_FillRect( pt.x, pt.y, m_szTab.w, 1, WndStyle::BevelHighlight );
-	UI_FillRect( pt.x, pt.y, 1, m_szTab.h, WndStyle::BevelHighlight );
-	// Inner highlight
-	UI_FillRect( pt.x + 1, pt.y + 1, m_szTab.w - 2, 1, WndStyle::BevelLight );
-	UI_FillRect( pt.x + 1, pt.y + 1, 1, m_szTab.h - 2, WndStyle::BevelLight );
-	// Outer shadow right
-	UI_FillRect( pt.x + m_szTab.w - 1, pt.y, 1, m_szTab.h, WndStyle::BevelDarkShadow );
-	// Inner shadow right
-	UI_FillRect( pt.x + m_szTab.w - 2, pt.y + 1, 1, m_szTab.h - 2, WndStyle::BevelShadow );
-
-	// Active tab: NO bottom border (merges with content)
-	// Inactive tab: draw bottom border
-	if( !isSelected )
-	{
-		UI_FillRect( pt.x, pt.y + m_szTab.h - 1, m_szTab.w, 1, WndStyle::BevelDarkShadow );
-	}
-
-	UI_DrawString( font, pt, m_szTab, name, textCol, m_scChSize, eTextAlignment, textflags );
+	WndStyle::DrawTab( pt.x, pt.y, m_szTab.w, m_szTab.h, isSelected, isHighlighted, name );
 }
 
 void CMenuTabView::Draw()
