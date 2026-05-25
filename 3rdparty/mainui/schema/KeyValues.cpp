@@ -47,7 +47,10 @@ bool CKeyValues::LoadFromFile( const char *filename )
 	byte *buffer = EngFuncs::COM_LoadFile( filename, &length );
 
 	if( !buffer )
+	{
+		Con_Printf( "KeyValues::LoadFromFile: could not open '%s' (searched game paths)\n", filename );
 		return false;
+	}
 
 	bool result = ParseBuffer( (const char *)buffer, length );
 

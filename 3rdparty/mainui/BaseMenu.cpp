@@ -1036,7 +1036,8 @@ int UI_VidInit( void )
 	{
 		UI_Precache();
 		if( !CSchemeManager::GetInstance()->LoadScheme( "resource/TrackerScheme.res" ) )
-			Con_Printf( "Warning: failed to load resource/TrackerScheme.res\n" );
+			Con_Printf( "Warning: failed to load resource/TrackerScheme.res, falling back to hardcoded defaults.\n"
+			            "  Place TrackerScheme.res in <gamedir>/resource/ to customize.\n" );
 	}
 
 	// don't allow screenwidth is slower than 4:3 screens
