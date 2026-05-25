@@ -28,6 +28,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "YesNoMessageBox.h"
 #include "BackgroundBitmap.h"
 #include "FontManager.h"
+#include "SchemeManager.h"
 #include "cursor_type.h"
 #include "utflib.h"
 
@@ -1034,6 +1035,7 @@ int UI_VidInit( void )
 	if( !calledOnce )
 	{
 		UI_Precache();
+		CSchemeManager::GetInstance()->LoadScheme( "resource/TrackerScheme.res" );
 	}
 
 	// don't allow screenwidth is slower than 4:3 screens
