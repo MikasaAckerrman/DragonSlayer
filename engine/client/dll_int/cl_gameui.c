@@ -1360,9 +1360,13 @@ qboolean UI_LoadProgs( void )
 
 	COM_GetCommonLibraryPath( LIBRARY_GAMEUI, dllpath, sizeof( dllpath ));
 
+	Con_Printf( "Slayer: loading menu library \"%s\"\n", dllpath );
+
 	if(!( gameui.hInstance = COM_LoadLibrary( dllpath, false, false )))
 	{
 		string path = OS_LIB_PREFIX "menu." OS_LIB_EXT;
+
+		Con_Printf( "Slayer: primary path failed, trying fallback \"%s\"\n", path );
 
 		FS_AllowDirectPaths( true );
 
@@ -1372,9 +1376,16 @@ qboolean UI_LoadProgs( void )
 		if(!( gameui.hInstance = COM_LoadLibrary( path, false, true )))
 #endif
 		{
+			Con_Printf( "Slayer: menu library load FAILED completely\n" );
 			FS_AllowDirectPaths( false );
 			return false;
 		}
+
+		Con_Printf( "Slayer: menu loaded via fallback OK\n" );
+	}
+	else
+	{
+		Con_Printf( "Slayer: menu loaded via primary path OK\n" );
 	}
 
 	FS_AllowDirectPaths( false );
@@ -1449,6 +1460,8 @@ qboolean UI_LoadProgs( void )
 
 	// initialize game
 	gameui.dllFuncs.pfnInit();
+
+	Con_Printf( "Slayer: menu API initialized, commands registered\n" );
 
 	return true;
 }
