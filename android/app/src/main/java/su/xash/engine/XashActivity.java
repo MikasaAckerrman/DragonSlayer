@@ -183,8 +183,10 @@ public class XashActivity extends SDLActivity {
 		if (gamedir == null) gamedir = "valve";
 		nativeSetenv("XASH3D_GAME", gamedir);
 
-		String gamelibdir = getIntent().getStringExtra("gamelibdir");
-		if (gamelibdir != null) nativeSetenv("XASH3D_GAMELIBDIR", gamelibdir);
+		// Always use our own native library directory.
+		// Do NOT trust gamelibdir from intent — it may point to another app's libs.
+		String ownLibDir = getApplicationInfo().nativeLibraryDir;
+		nativeSetenv("XASH3D_GAMELIBDIR", ownLibDir);
 
 		String rodir = System.getenv("XASH3D_RODIR");
 		if (rodir == null) {
