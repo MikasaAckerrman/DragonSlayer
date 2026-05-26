@@ -43,6 +43,8 @@ def run_cmake(root, out, toolchain, abi, build_type, ndk_root, min_sdk, *args):
 	cmake_exec.extend(args)
 	cmake_process = subprocess.Popen(cmake_exec)
 	cmake_process.communicate()
+	if cmake_process.returncode != 0:
+		sys.exit("CMake configure failed for: {}".format(root))
 
 
 def main():
