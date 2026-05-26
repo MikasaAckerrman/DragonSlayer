@@ -93,6 +93,15 @@ void Sys_InitLog( void )
 		s_ld.log_active = true;
 	}
 
+#if XASH_ANDROID
+	// Always enable file logging on Android for easier debugging
+	if( !s_ld.log_active )
+	{
+		Q_strncpy( s_ld.log_path, "engine.log", sizeof( s_ld.log_path ));
+		s_ld.log_active = true;
+	}
+#endif
+
 	s_ld.log_time = Sys_CheckParm( "-logtime" );
 
 	if( host.change_game && host.type != HOST_DEDICATED )
