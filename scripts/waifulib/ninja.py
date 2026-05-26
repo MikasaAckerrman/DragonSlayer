@@ -332,7 +332,7 @@ class NinjaContext(Build.BuildContext):
 		writer.build(outputs="clean", rule="waf_clean")
 		writer.newline()
 
-		writer.default("all")
+		writer.default("all.passthrough")
 
 		file_content = string_buffer.getvalue()
 
