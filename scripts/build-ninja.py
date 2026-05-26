@@ -22,6 +22,8 @@ def run_cmake(bin_path, libs, inst_path):
 	cmake_exec = ["cmake", "--build", bin_path]
 	cmake_process = subprocess.Popen(cmake_exec)
 	cmake_process.communicate()
+	if cmake_process.returncode != 0:
+		sys.exit("CMake build failed for: {}".format(bin_path))
 
 	if libs:
 		for lib in libs:
@@ -38,6 +40,8 @@ def run_cmake(bin_path, libs, inst_path):
 		cmake_exec = ["cmake", "--install", bin_path, "--prefix", inst_path]
 		cmake_process = subprocess.Popen(cmake_exec)
 		cmake_process.communicate()
+		if cmake_process.returncode != 0:
+			sys.exit("CMake install failed for: {}".format(bin_path))
 
 def main():
 	parser = argparse.ArgumentParser()
