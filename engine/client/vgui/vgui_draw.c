@@ -289,9 +289,20 @@ qboolean VGui_IsActive( void )
 	return vgui.initialized;
 }
 
+static void VGui_ShowOptions_f( void )
+{
+	void (*ShowOptions)( void );
+	if( !vgui.hInstance )
+		return;
+	ShowOptions = COM_GetProcAddress( vgui.hInstance, "VGUI_ShowOptions" );
+	if( ShowOptions )
+		ShowOptions();
+}
+
 void VGui_RegisterCvars( void )
 {
 	Cvar_RegisterVariable( &vgui_utf8 );
+	Cmd_AddCommand( "vgui_options", VGui_ShowOptions_f, "show VGUI1 options dialog" );
 }
 
 static const vguiapi_t gEngfuncs =
@@ -361,6 +372,23 @@ qboolean VGui_LoadProgs( HINSTANCE hInstance )
 	if( F )
 	{
 		F( &vgui.dllFuncs );
+
+		// Set up cvar bridge for VGUI1 Options dialog
+		{
+			void (*SetCvarFuncs)( float(*)(const char*), void(*)(const char*,float),
+				const char*(*)(const char*), void(*)(const char*,const char*), void(*)(const char*) );
+			SetCvarFuncs = COM_GetProcAddress( hInstance, "VGUI_SetCvarFuncs" );
+			if( SetCvarFuncs )
+			{
+				SetCvarFuncs(
+					Cvar_VariableValue,
+					Cvar_SetValue,
+					Cvar_VariableString,
+					Cvar_Set,
+					Cbuf_AddText
+				);
+			}
+		}
 
 		vgui.initialized = vgui.dllFuncs.initialized = true;
 		Con_Reportf( "%s: initialized legacy API in %s module\n", __func__, client ? "client" : "support" );
