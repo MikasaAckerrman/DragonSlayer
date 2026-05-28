@@ -293,10 +293,18 @@ static void VGui_ShowOptions_f( void )
 {
 	void (*ShowOptions)( void );
 	if( !vgui.hInstance )
+	{
+		Con_Printf( "vgui_options: vgui_support not loaded\n" );
 		return;
+	}
 	ShowOptions = COM_GetProcAddress( vgui.hInstance, "VGUI_ShowOptions" );
-	if( ShowOptions )
-		ShowOptions();
+	if( !ShowOptions )
+	{
+		Con_Printf( "vgui_options: VGUI_ShowOptions not found in library\n" );
+		return;
+	}
+	Con_Printf( "vgui_options: opening VGUI1 Options dialog\n" );
+	ShowOptions();
 }
 
 void VGui_RegisterCvars( void )
