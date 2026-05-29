@@ -1,7 +1,6 @@
 name: Build & Deploy Android APK
 on:
   push:
-  pull_request:
   workflow_dispatch:
     inputs:
       build_mode:
@@ -12,6 +11,14 @@ on:
         options:
           - full
           - quick
+
+# Single build per ref. Without this, an open PR caused EVERY push to
+# trigger two runs (push event + pull_request synchronize) = two APKs and
+# doubled CI minutes. pull_request trigger removed (push already builds
+# same-repo branches); concurrency cancels superseded runs on rapid pushes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 # Slayer3D: only Android APK is built and released. All desktop, console
 # and Flatpak targets are intentionally disabled - they're not needed for
