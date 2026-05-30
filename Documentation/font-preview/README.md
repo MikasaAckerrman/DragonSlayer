@@ -1,49 +1,64 @@
-# Font preview - bundled Noto Sans Regular
+# Font preview - what gets rendered with the embedded font
 
-These three PNGs show **exactly** how the menu will look on device with
-the font we ship in the APK (`3rdparty/dragon-fonts/gfx/fonts/tahoma.ttf`,
-which is **Noto Sans Regular** under that file name for compatibility with
-`FontManager::FindFontDataFile("Tahoma")`).
+These three PNGs show **exactly** how the menu looks with the font now
+compiled into `libmenu.so`. The colours, bevels, tab merge, button
+corners and grain are produced by the same code the engine actually
+runs (`mainui_cpp/vgui1/src/Frame.cpp`, `TabPanel.cpp`, `Button.cpp`,
+`TrackerScheme.cpp`); only the typeface is the input.
 
-The colours, bevels, tab merge, button corners and grain are the same code
-the engine actually runs (`mainui_cpp/vgui1/src/Frame.cpp`,
-`TabPanel.cpp`, `Button.cpp`, `TrackerScheme.cpp`). Only the typeface is
-the variable - so what you see here is what you get on device, modulo
-FreeType vs PIL micro-differences in glyph rasterisation.
+## What font is inside
+
+`mainui_cpp/font/embedded_source/source.ttf` -> compiled into
+`libmenu.so` via `font/embedded_font_data.cpp`. Currently:
+
+| Property | Value |
+|----------|-------|
+| Logical slot in TrackerScheme.res | `Tahoma` (canon CS 1.6 PC name) |
+| Actual glyphs | DejaVu Sans Condensed (Book) v2.37 |
+| Family lineage | Bitstream Vera (Carter, the same designer as Tahoma) |
+| Coverage | Latin 95/95, Cyrillic 255/255, Greek |
+| Size in .so | ~680 KB |
+| Licence | Bitstream Vera + DejaVu (free to redistribute) |
+
+The slot name is `Tahoma` so `TrackerScheme.res` references the canon
+PC font name and no override is needed; the actual rendered glyphs come
+from whatever TTF was last passed to `gen_embedded.py`.
 
 ## Files
 
 | File | Size | What it shows |
 |------|------|---------------|
-| `01_full_dialog_noto.png` | 800x600 | The full Options dialog: title bar, tab strip with the new content-area bevel, Multiplayer page (avatar + logo with corner-flush buttons, name + password fields, a checkbox), and the OK/Cancel/Apply row with disabled-Apply rendered without a darker fill. |
-| `02_text_samples_noto.png` | 1000x720 | Cyrillic and Latin glyph samples at 11/12/14/36 pt. Use this to see whether Noto's stroke weight and letter shapes are close enough to your reference. |
-| `03_glyph_diff_noto.png` | 900x360 | The 8 individual glyphs that differ MOST from Tahoma (`д ж ы я R Q g a`) at 96 pt + per-letter notes. Look here if you want to know exactly which characters will give away that this is not Tahoma. |
+| `01_full_dialog.png` | 800x600 | Full Options dialog: title bar, tab strip with the canon content-area bevel, Multiplayer page (avatar + logo with corner-flush buttons, name + password fields, gold checkmark), and the OK/Cancel/disabled-Apply row. |
+| `02_text_samples.png` | 1000x720 | Cyrillic and Latin samples at the four engine sizes (11/12/14/36 pt) for tab labels, hint text, titlebar. |
+| `03_glyph_diff.png` | 900x360 | 96 pt close-up of the 8 letters (`д ж ы я R Q g a`) where free-font substitutes diverge most from real Tahoma, with per-letter notes. |
 
-## What about real Tahoma?
+## How close to PC Tahoma is this?
 
-If after looking at these previews you decide Noto is not close enough to
-canon, you can override our shipped font on the device:
+Honestly: **close in spirit, not identical**. DejaVu Sans Condensed
+shares Tahoma's Carter lineage and the same "low-res UI sans-serif"
+goal, and condensed proportions mean letter widths are similar. Glyph
+shapes in Cyrillic (`д`, `ж`, `ы`) still differ visibly side-by-side
+with the original. ~90 % match for casual viewing, ~70 % for pixel-
+perfect.
 
-1. Copy `tahoma.ttf` from any Windows machine
+## Getting 100 % real Tahoma
+
+The engine still respects external overrides:
+
+1. Obtain `tahoma.ttf` from any Microsoft Windows install you own
    (`C:\Windows\Fonts\tahoma.ttf`).
-2. Place at `<gamedir>/gfx/fonts/tahoma.ttf` on the Android device.
-3. Restart the engine. The external file overrides our APK-bundled Noto -
-   no rebuild needed.
+2. Place at `<gamedir>/gfx/fonts/tahoma.ttf` on the device.
+3. Restart. The engine's filesystem prefers external files, so your
+   real Tahoma overrides the embedded DejaVu.
 
-This is legally fine if you own the Windows licence the font came with.
-We don't bundle Tahoma in the public APK because Microsoft owns it.
-
-## Why Noto Sans?
-
-- OFL 1.1 - free to redistribute in our APK.
-- Full Latin (95/95 ASCII) + full Cyrillic (255/255) + Greek + Vietnamese.
-- Modern hinting that holds up on Android's variable DPI.
-- ~825 KB for one weight - acceptable for a UI font in a 50 MB+ APK.
+This is permitted by the Microsoft EULA on a Windows-licensed device.
+We do not ship Tahoma in the binary because Microsoft does not licence
+it for redistribution.
 
 ## Verifying the rendering matches the engine
 
-The script that rendered these (`.audit/render_preview.py`) uses the same
-RGB tuples as `TrackerScheme.cpp` and the same bevel order as
-`Frame::paintBackground`. If you spot a discrepancy between a preview here
-and the actual on-device build, the bug is in the preview script - not
-the engine - and we should fix the script first.
+`.audit/render_preview.py` uses the same RGB tuples as
+`TrackerScheme.cpp` and the same bevel order as `Frame::paintBackground`.
+If you spot a discrepancy between a preview here and the actual
+on-device build, the bug is in the preview script - not the engine -
+and the script should be fixed first.
