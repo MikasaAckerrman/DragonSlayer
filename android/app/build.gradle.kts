@@ -84,16 +84,6 @@ extensions.configure<ApplicationExtension> {
 	}
 */
 
-	// Keep TTF assets uncompressed so the engine VFS can fast-path them via
-	// AAsset_openFileDescriptor (filesystem/android.c). With default APK
-	// compression the descriptor path fails for .ttf and the engine falls
-	// back to AAsset_read - works, but reads the whole font into RAM
-	// instead of mmaping. Bigger reason: keeps our shipped tahoma.ttf at
-	// the same on-disk layout as a user-dropped one in the gamedir.
-	androidResources {
-		noCompress += "ttf"
-	}
-
 	packaging {
 		jniLibs {
 			keepDebugSymbols.add("**/*.so")
@@ -104,13 +94,6 @@ extensions.configure<ApplicationExtension> {
 	sourceSets {
 		getByName("main") {
 			assets.directories.add("../../3rdparty/extras/xash-extras")
-			// Bundled UI font (Noto Sans Regular under the file name
-			// gfx/fonts/tahoma.ttf so mainui_cpp's existing
-			// FindFontDataFile("Tahoma") resolves to it without any
-			// resource override). The engine VFS mounts the APK's assets
-			// via AAssetManager (filesystem/android.c) so anything we
-			// drop here is visible in-game without an unpack step.
-			assets.directories.add("../../3rdparty/dragon-fonts")
 			java.directories.add("../../3rdparty/SDL/android-project/app/src/main/java")
 		}
 	}
