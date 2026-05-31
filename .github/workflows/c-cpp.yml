@@ -55,6 +55,12 @@ jobs:
       with:
         name: artifact-android-multiarch
         path: artifacts/*
+        # Keep APK artifacts only briefly so they don't pile up and hit the
+        # account-wide Actions storage quota (default retention is 90 days).
+        # The release job re-publishes master builds to the 'continuous'
+        # release anyway, so long artifact retention is unnecessary.
+        retention-days: 3
+        overwrite: true
 
   release:
     name: "Publish APK to Releases"
