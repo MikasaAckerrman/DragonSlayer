@@ -50,43 +50,29 @@ jobs:
         FWGS_PFX_PASSWORD: ${{ secrets.FWGS_PFX_PASSWORD }}
         SLAYER_BUILD_MODE: ${{ github.event.inputs.build_mode || 'full' }}
       run: bash scripts/gha/build_android.sh
-    - name: Upload APK (artifact)
-      uses: actions/upload-artifact@v7
-      with:
-        name: artifact-android-multiarch
-        path: artifacts/*
-        # Keep APK artifacts only briefly so they don't pile up and hit the
-        # account-wide Actions storage quota (default retention is 90 days).
-        # The release job re-publishes master builds to the 'continuous'
-        # release anyway, so long artifact retention is unnecessary.
-        retention-days: 3
-        overwrite: true
-
-  release:
-    name: "Publish APK to Releases"
-    runs-on: ubuntu-latest
-    needs: [build]
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v6
-    - name: Download APK artifact
-      uses: actions/download-artifact@v6
-      with:
-        name: artifact-android-multiarch
-        path: ./apk
-    - name: Replace 'continuous' release with new APK
+    # Publish the APK as a GitHub *Release asset* rather than an Actions
+    # artifact. Release assets do NOT count against the 0.5 GB Actions
+    # storage quota (only upload-artifact does), so this delivery path is
+    # immune to the quota that was blocking every build. It also works on
+    # any branch and yields a stable download URL for the APK.
+    - name: Publish APK to Release
+      if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         set -eux
-        TAG="continuous"
-        TITLE="Slayer3D continuous build"
-        # GitHub auto-attaches "Source code (zip)" and "Source code (tar.gz)"
-        # to every release based on the tag, so we don't need to upload them.
+        REF_NAME="${GITHUB_REF_NAME:-${GITHUB_REF##*/}}"
+        SAFE="${REF_NAME//\//-}"
+        if [ "$REF_NAME" = "master" ]; then
+          TAG="continuous"; TITLE="Slayer3D continuous build"
+        else
+          TAG="ci-$SAFE"; TITLE="Slayer3D CI build ($REF_NAME)"
+        fi
+        # Replace any previous release on this tag so the asset list stays
+        # clean and the download URL is predictable.
         gh release delete "$TAG" --cleanup-tag --yes || true
         gh release create "$TAG" \
           --title "$TITLE" \
-          --notes "Latest Android build from master. Source code archives are attached automatically by GitHub." \
+          --notes "Automated Android build from \`$REF_NAME\` ($GITHUB_SHA)." \
           --target "$GITHUB_SHA" \
-          ./apk/*
+          artifacts/*
