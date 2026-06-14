@@ -43,6 +43,9 @@ def run_cmake(root, out, toolchain, abi, build_type, ndk_root, min_sdk, *args):
 	cmake_exec.extend(args)
 	cmake_process = subprocess.Popen(cmake_exec)
 	cmake_process.communicate()
+	if cmake_process.returncode != 0:
+		print("ERROR: cmake configure failed for {} (exit {})".format(root, cmake_process.returncode))
+		sys.exit(1)
 
 
 def main():
@@ -90,9 +93,10 @@ def main():
 		args.min_sdk_version, "-DBUILD_AS_PART_OF_ENGINE=ON",
 		"-DMAINUI_USE_STB=ON")
 
-	# verify mainui cmake succeeded
+	# verify mainui cmake succeeded (run_cmake already exits on failure, this is a double-check)
 	if not os.path.exists(os.path.join(mainui_out_path, "build.ninja")):
-		print("ERROR: mainui CMake configure FAILED - libmenu.so will be missing from APK!")
+		print("FATAL: mainui cmake configure produced no build.ninja — libmenu_android_*.so will be absent!")
+		sys.exit(1)
 
 	# waf configure
 	waf_path = os.path.join(args.wscript_path, "waf")
