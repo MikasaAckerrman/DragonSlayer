@@ -27,6 +27,21 @@ void *ANDROID_LoadLibrary( const char *path )
 
 	Con_Reportf( "%s: loading \"%s\" (name: \"%s\")\n", __func__, path, name );
 
+	// For our own menu library, always prefer Slayer3D's APK (LD_LIBRARY_PATH)
+	// over gamelibdir (which may point to an external game like CS16Client).
+	// Both console and main menu come from our vgui1 libmenu_android_*.so.
+	if( !Q_strncmp( name, "libmenu_android_", 16 ))
+	{
+		Con_Reportf( "%s: menu lib detected - trying own APK first\n", __func__ );
+		handle = dlopen( name, RTLD_NOW );
+		if( handle )
+		{
+			Con_Reportf( "%s: loaded menu from own APK\n", __func__ );
+			return handle;
+		}
+		Con_Reportf( "%s: own APK miss for menu: %s\n", __func__, dlerror() );
+	}
+
 	// TODO: remove this once distributing games from APKs will be deprecated
 	const char *gamelibdir = getenv( "XASH3D_GAMELIBDIR" );
 	if( !COM_StringEmptyOrNULL( gamelibdir ))
