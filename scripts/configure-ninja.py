@@ -87,7 +87,12 @@ def main():
 	mainui_out_path = os.path.join(args.configuration_dir, "mainui")
 
 	run_cmake(mainui_path, mainui_out_path, cmake_toolchain_path, abi, cmake_build_type, args.ndk_root,
-		args.min_sdk_version, "-DBUILD_AS_PART_OF_ENGINE=ON")
+		args.min_sdk_version, "-DBUILD_AS_PART_OF_ENGINE=ON",
+		"-DMAINUI_USE_STB=ON")
+
+	# verify mainui cmake succeeded
+	if not os.path.exists(os.path.join(mainui_out_path, "build.ninja")):
+		print("ERROR: mainui CMake configure FAILED - libmenu.so will be missing from APK!")
 
 	# waf configure
 	waf_path = os.path.join(args.wscript_path, "waf")
