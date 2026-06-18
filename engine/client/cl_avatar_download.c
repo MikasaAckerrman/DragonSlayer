@@ -787,6 +787,36 @@ static qboolean AVD_ParseXMLForAvatar( avd_request_t *req )
 	url = tag_start;
 	url_len = (int)( tag_end - tag_start );
 
+	// Slayer3D: skip the stock Steam "no avatar" silhouette. Its asset is
+	// the same SHA1 hash across all default variants, so any URL that
+	// references it is a tell-tale that the player has no actual Steam
+	// avatar (or arrived through a non-Steam pirate path that the Web API
+	// reports under the same default). Caching the silhouette would visually
+	// conflate paid-Steam users without a profile pic and pirate users.
+	{
+		const char *p, *p_end;
+		const char *needle = "fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb";
+		const int   nlen   = 40;
+		qboolean    is_default = false;
+
+		p_end = url + ( url_len - nlen );
+		for( p = url; p <= p_end; p++ )
+		{
+			if( Q_strncmp( p, needle, nlen ) == 0 )
+			{
+				is_default = true;
+				break;
+			}
+		}
+
+		if( is_default )
+		{
+			Con_DPrintf( "AvatarDL: skipping default Steam silhouette for %" PRIu64 "\n",
+				req->steamid64 );
+			return false;
+		}
+	}
+
 	if( !AVD_ParseURL( req, url, url_len ) )
 		return false;
 
