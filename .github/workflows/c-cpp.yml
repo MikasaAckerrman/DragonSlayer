@@ -43,6 +43,13 @@ jobs:
       uses: actions/checkout@v6
       with:
         submodules: recursive
+        # 3rdparty/mainui (MikasaAckerrman/mainui_cpp) is a PRIVATE repo, so
+        # the default GITHUB_TOKEN cannot clone it (builds started failing
+        # with "repository not found" once mainui_cpp went private).
+        # SUBMODULE_TOKEN must be a PAT with read access to mainui_cpp,
+        # added in Settings -> Secrets and variables -> Actions.
+        # Falls back to the default token if the secret is not set.
+        token: ${{ secrets.SUBMODULE_TOKEN || github.token }}
     - name: Install dependencies
       run: bash scripts/gha/deps_android.sh
     - name: Build engine
