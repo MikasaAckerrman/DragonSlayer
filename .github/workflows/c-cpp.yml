@@ -1,6 +1,14 @@
 name: Build & Deploy Android APK
+# Trigger rules guarantee exactly ONE build per event:
+# - push: master only (submodule bumps / direct pushes to the release line);
+# - pull_request: feature branches get built once via their PR, without a
+#   second run from the branch push (that was the old double-build problem:
+#   unfiltered `push:` + `pull_request:` fired two identical builds for
+#   every push to a branch with an open PR).
 on:
   push:
+    branches:
+      - master
   pull_request:
   workflow_dispatch:
     inputs:
