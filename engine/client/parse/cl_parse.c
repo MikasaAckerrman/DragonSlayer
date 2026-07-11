@@ -23,6 +23,7 @@ GNU General Public License for more details.
 #include "input.h"
 #include "eiface.h"
 #include "cl_view_slayer.h"
+#include "cl_hud_slayer.h"
 
 #if XASH_LOW_MEMORY != 2
 int CL_UPDATE_BACKUP = SINGLEPLAYER_BACKUP;
@@ -2352,6 +2353,13 @@ void CL_ParseUserMessage( sizebuf_t *msg, int svc_num, connprotocol_t proto )
 			Slayer_OnScoreAttrib( pbuf, iSize );
 		else if( !Q_strcmp( clgame.msg[i].name, "HealthInfo" ))
 			Slayer_OnHealthInfo( pbuf, iSize );
+		else if( !Q_strcmp( clgame.msg[i].name, "Damage" ))
+			Slayer_HUD_OnDamageMsg( pbuf, iSize );
+		else if( !Q_strcmp( clgame.msg[i].name, "DamageReport" )
+		      || !Q_strcmp( clgame.msg[i].name, "DmgInd" )
+		      || !Q_strcmp( clgame.msg[i].name, "DmgDealt" )
+		      || !Q_strcmp( clgame.msg[i].name, "DmgInfo" ))
+			Slayer_HUD_OnDamageDealtMsg( pbuf, iSize );
 	}
 
 	if( cl_trace_messages.value )
