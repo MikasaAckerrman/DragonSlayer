@@ -681,6 +681,7 @@ void Slayer_Scoreboard_Draw( void )
 	int          board_x, board_y, board_w, board_h;
 	int          row_h, col_name_x, col_frags_x, col_deaths_x, col_ping_x, col_health_x;
 	int          col_name_text_x;   // fixed name-column origin (after the reserved avatar gutter)
+	int          text_dy;           // vertical centering offset for row text (replaces hardcoded +2)
 	int          cur_y;
 	int          ct_player_count = 0, t_player_count = 0, spec_player_count = 0;
 	int          drawn_ct_header = 0, drawn_t_header = 0, drawn_spec_header = 0;
@@ -890,10 +891,12 @@ void Slayer_Scoreboard_Draw( void )
 		// content rows = players + team headers + title row + column-header row
 		int content_rows = num_players + team_headers + 2;
 
-		// Fixed non-row chrome: title/header paddings + separators + per-team
-		// spacing + bottom margin. Kept slightly generous so the last row never
-		// touches the border.
-		int chrome_h = 34 + team_headers * 7;
+		// Fixed non-row chrome, matched to the ACTUAL per-frame advances so
+		// board_h and the row loop agree (an over-estimate here steals space
+		// from the rows and makes the tail clip on short screens):
+		//   +4 pre-title, +2 title extra, +4 sep, +4 sep, +4 bottom margin = 18,
+		//   plus per rendered team section (+3 separator, +4 inter-section gap).
+		int chrome_h = 18 + team_headers * 7;
 		int avail_h  = (int)( screen_h * 0.94f );   // vertical budget (a touch > PC ~0.90)
 
 		int   fidx, row_pad, row_h_full, natural_h;
@@ -922,8 +925,10 @@ void Slayer_Scoreboard_Draw( void )
 		if( comp > 1.0f ) comp = 1.0f;
 
 		row_h = (int)( row_h_full * comp + 0.5f );
-		if( row_h < font->charHeight + 1 )
-			row_h = font->charHeight + 1;   // a glyph must still fit inside its row
+		if( row_h < font->charHeight )
+			row_h = font->charHeight;   // absolute floor: glyph exactly fills the row
+		                                // (text is vertically centered via text_dy below,
+		                                // so it never spills past a floored row)
 
 		// Board height from the row height ACTUALLY used, so it stays exactly
 		// consistent with the row loop's advances.
@@ -979,6 +984,13 @@ void Slayer_Scoreboard_Draw( void )
 	// the name never jumps when a Steam avatar finishes downloading (or is
 	// absent). The gutter tracks row_h but only changes when the roster does.
 	col_name_text_x = col_name_x + row_h + 4;
+
+	// Vertical centering of per-row text inside row_h: 0 when the row is floored
+	// to exactly charHeight, ~row_pad/2 at normal sizes. Replaces the old fixed
+	// "+2" so text stays centered at every compression level and never spills
+	// past a tightly-floored row.
+	text_dy = ( row_h - font->charHeight ) / 2;
+	if( text_dy < 0 ) text_dy = 0;
 
 	// Draw server name (left-aligned)
 	hostname = Info_ValueForKey( cl.serverinfo, "hostname" );
@@ -1146,7 +1158,7 @@ void Slayer_Scoreboard_Draw( void )
 				ref.dllFuncs.Color4ub( 255, 255, 255, 255 ); // restore, don't rely on the next drawer
 			}
 
-			CL_DrawString( col_name_text_x, cur_y + 2, name, name_color, font, FONT_DRAW_UTF8 );
+			CL_DrawString( col_name_text_x, cur_y + text_dy, name, name_color, font, FONT_DRAW_UTF8 );
 		}
 
 		// Score / Deaths / Latency (right-aligned to their column edges)
@@ -1163,11 +1175,11 @@ void Slayer_Scoreboard_Draw( void )
 
 			// Score (frags)
 			Q_snprintf( buf, sizeof( buf ), "%d", slayer_scores[pidx].frags );
-			Slayer_DrawStringRight( font, col_frags_x, cur_y + 2, buf, stat_color );
+			Slayer_DrawStringRight( font, col_frags_x, cur_y + text_dy, buf, stat_color );
 
 			// Deaths
 			Q_snprintf( buf, sizeof( buf ), "%d", slayer_scores[pidx].deaths );
-			Slayer_DrawStringRight( font, col_deaths_x, cur_y + 2, buf, stat_color );
+			Slayer_DrawStringRight( font, col_deaths_x, cur_y + text_dy, buf, stat_color );
 
 			// Latency (hold-last-good): cl.players[].ping drops to 0 on transient
 			// snapshots and on a cold board-open; keep the last non-zero value for
@@ -1188,7 +1200,7 @@ void Slayer_Scoreboard_Draw( void )
 				Q_snprintf( buf, sizeof( buf ), "-" );
 			else
 				Q_snprintf( buf, sizeof( buf ), "%d", ping_show );
-			Slayer_DrawStringRight( font, col_ping_x, cur_y + 2, buf, stat_color );
+			Slayer_DrawStringRight( font, col_ping_x, cur_y + text_dy, buf, stat_color );
 
 			// Health column - only meaningful for CT/T (active round players).
 			// Spectators / unassigned: draw nothing (avoids leaking stale HP from
@@ -1203,7 +1215,7 @@ void Slayer_Scoreboard_Draw( void )
 						MakeRGBA( dead_color, color_ct[0], color_ct[1], color_ct[2], 200 );
 					else
 						MakeRGBA( dead_color, color_t[0], color_t[1], color_t[2], 200 );
-					Slayer_DrawStringRight( font, col_health_x, cur_y + 2, "DEAD", dead_color );
+					Slayer_DrawStringRight( font, col_health_x, cur_y + text_dy, "DEAD", dead_color );
 				}
 				else
 				{
@@ -1222,7 +1234,7 @@ void Slayer_Scoreboard_Draw( void )
 					if( hp > 0 )
 					{
 						Q_snprintf( buf, sizeof( buf ), "%d", hp );
-						Slayer_DrawStringRight( font, col_health_x, cur_y + 2, buf, stat_color );
+						Slayer_DrawStringRight( font, col_health_x, cur_y + text_dy, buf, stat_color );
 					}
 				}
 			}
