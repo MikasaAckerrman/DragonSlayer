@@ -22,6 +22,7 @@ Non-Android: HTTP socket state machine (same pattern as cl_avatar_download.c).
 #include "client.h"
 #include "cl_steam_api.h"
 #include "cl_avatar_download.h"
+#include "cl_slayer_log.h"
 
 #define SAPI_MAX_PLAYERS      32
 #define SAPI_RESPONSE_MAX     65536
@@ -235,10 +236,16 @@ void Slayer_SteamAPI_RequestBatch( const uint64_t *steamids, int count )
 		return;
 
 	if( slayer_steam_apikey.string[0] == '\0' )
+	{
+		Slayer_Log_Printf( "SteamAPI batch: %d ID(s) pending but slayer_steam_apikey is EMPTY "
+			"-> Web API avatar load skipped (set a key, or rely on the XML fallback)", count );
 		return;
+	}
 
 	if( !steamids || count <= 0 )
 		return;
+
+	Slayer_Log_Printf( "SteamAPI batch: requesting %d avatar(s) via Web API", count );
 
 	work = (sapi_work_t *)malloc( sizeof( sapi_work_t ) );
 	if( !work )
@@ -946,10 +953,16 @@ void Slayer_SteamAPI_RequestBatch( const uint64_t *steamids, int count )
 		return;
 
 	if( slayer_steam_apikey.string[0] == '\0' )
+	{
+		Slayer_Log_Printf( "SteamAPI batch: %d ID(s) pending but slayer_steam_apikey is EMPTY "
+			"-> Web API avatar load skipped (set a key, or rely on the XML fallback)", count );
 		return;
+	}
 
 	if( !steamids || count <= 0 )
 		return;
+
+	Slayer_Log_Printf( "SteamAPI batch: requesting %d avatar(s) via Web API", count );
 
 	// Build comma-separated SteamID list
 	p = ids_buf;

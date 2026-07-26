@@ -23,6 +23,7 @@ GNU General Public License for more details.
 #include "cl_avatar_download.h"
 #include "cl_steam_api.h"
 #include "cl_steam_login.h"
+#include "cl_slayer_log.h"
 
 #if XASH_ANDROID
 #include <android/log.h>
@@ -316,6 +317,8 @@ void Slayer_ParseStatusLine( const char *line )
 	slayer_steamid64[i] = steamid64;
 	slayer_avatar_tex[i] = 0; // reset so texture will be reloaded
 
+	Slayer_Log_Printf( "status: slot %d -> SteamID %" PRIu64 " (name '%s')",
+		slot, steamid64, ( i < MAX_CLIENTS ) ? cl.players[i].name : "?" );
 	Con_Printf( "Slayer: parsed steamid %"PRIu64" for slot %d\n", steamid64, slot );
 #if XASH_ANDROID
 	__android_log_print( ANDROID_LOG_INFO, "Xash",
@@ -345,12 +348,16 @@ static void Slayer_LoadAvatarTexture( int slot )
 	if( !FS_FileExists( path, false ) )
 	{
 		// Request automatic download
+		Slayer_Log_Printf( "avatar slot %d SteamID %" PRIu64 ": not cached -> request download",
+			slot, slayer_steamid64[slot] );
 		Slayer_AvatarDownload_Request( slayer_steamid64[slot], slot );
 		slayer_avatar_tex[slot] = -1;
 		return;
 	}
 
 	texid = ref.dllFuncs.GL_LoadTexture( path, NULL, 0, TF_IMAGE );
+	Slayer_Log_Printf( "avatar slot %d SteamID %" PRIu64 ": cached file '%s' -> texid %d",
+		slot, slayer_steamid64[slot], path, texid );
 
 	if( texid == 0 )
 	{
@@ -481,10 +488,13 @@ void Slayer_Scoreboard_Init( void )
 	Cmd_AddCommand( "slayer_avatar_urls", Cmd_AvatarUrls_f,
 		"print Steam avatar download URLs for all players" );
 
+	Slayer_Log_Init();
 	Slayer_AvatarDownload_Init();
 	Slayer_SteamAPI_Init();
 	Slayer_SteamLogin_Init();
 
+	Slayer_Log_Printf( "=== scoreboard init; local SteamID=%" PRIu64 " ===",
+		Slayer_SteamLogin_GetLocalID() );
 	Con_Printf( "Slayer3D: scoreboard initialized\n" );
 }
 
