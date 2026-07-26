@@ -114,3 +114,26 @@
 -dontwarn javax.annotation.processing.Processor
 -dontwarn javax.annotation.processing.AbstractProcessor
 -dontwarn javax.annotation.processing.SupportedOptions
+
+# ---------------------------------------------------------------------------
+# Slayer3D JNI bridge — Steam avatars + OpenID login.
+#
+# These Java methods are invoked ONLY from native C via reflection
+# (GetStaticMethodID / CallStaticXxxMethod) or are native callbacks bound by
+# name. R8 sees no Java-side callers, so without these rules it strips or
+# renames them and the release build (isMinifyEnabled=true) silently loses
+# avatar loading and Steam login. Debug builds work only because minify is off.
+# Keep the exact names + descriptors the C side looks up.
+# ---------------------------------------------------------------------------
+-keep class su.xash.engine.XashActivity {
+    public static int downloadAvatar(java.lang.String, java.lang.String);   # cl_avatar_download.c
+    public static void startSteamLogin(java.lang.String, java.lang.String); # cl_steam_login.c
+    public static native void nativeSteamLoginResult(long);                 # native callback
+}
+
+-keep class su.xash.engine.SteamAPIHelper {
+    public static int fetchBatchAvatars(java.lang.String, java.lang.String, java.lang.String); # cl_steam_api.c
+}
+
+# SteamLoginActivity is launched via Intent and calls XashActivity.nativeSteamLoginResult().
+-keep class su.xash.engine.SteamLoginActivity { *; }
