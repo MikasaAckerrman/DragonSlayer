@@ -22,6 +22,8 @@ GNU General Public License for more details.
 #include "library.h"
 #include "cl_view_slayer.h"
 #include "cl_scoreboard_slayer.h"
+#include "cl_hud_slayer.h"
+#include "cl_sgs_slayer.h"
 #include "vid_common.h"
 #include "pm_local.h"
 #include "multi_emulator.h"
@@ -702,11 +704,20 @@ static void CL_CreateCmd( void )
 	clgame.dllFuncs.CL_CreateMove( host.frametime, cmd, active );
 	IN_EngineAppendMove( host.frametime, cmd, active );
 
+	// Slayer3D: capture user yaw AFTER all input (mouse / touch / pfnLookEvent)
+	// has been applied to cmd, BEFORE we add any synthetic SGS oscillation.
+	// Drives SGS swipe detection.
+	Slayer_SGS_Capture( cmd );
+
 	// Slayer3D: check RMB snap after all input is processed
 	V_SlayerCamSnapCheck( cmd );
 
 	// Slayer3D: apply movement tweaks (ducktap, autostrafe, autojump)
 	V_SlayerMovementTweaks( cmd );
+
+	// Slayer3D: inject SGS yaw oscillation + synced sidemove. Runs LAST
+	// so it overrides autostrafe's sidemove when SGS is engaged.
+	Slayer_SGS_Apply( cmd, host.frametime );
 
 	// Slayer3D: while +slayer_scoreboard is held, OR IN_SCORE so the
 	// server emits svc_pings every snapshot (drives per-player ping column).
