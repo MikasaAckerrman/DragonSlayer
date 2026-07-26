@@ -215,6 +215,46 @@ void Slayer_SteamLogin_Init( void )
 		return;
 	}
 
+	// Reconcile our saved copy against the launcher, which owns the account.
+	// Signing out in the launcher's Settings only removes its SharedPreferences
+	// key; it cannot reach our config file. Without this the engine kept the
+	// stale SteamID and went on showing the sign-in banner and the avatar after
+	// the user had signed out.
+	{
+		jmethodID get_id = (*env)->GetStaticMethodID( env, slogin_activity_class,
+			"getSteamId", "()J" );
+
+		if( get_id )
+		{
+			jlong launcher_id = (*env)->CallStaticLongMethod( env, slogin_activity_class, get_id );
+
+			if( (*env)->ExceptionCheck( env ))
+			{
+				(*env)->ExceptionDescribe( env );
+				(*env)->ExceptionClear( env );
+			}
+			else if( launcher_id <= 0 )
+			{
+				if( slogin_local_steamid64 != 0 )
+				{
+					Con_Printf( "Slayer3D: launcher is signed out — clearing saved Steam login\n" );
+					slogin_local_steamid64 = 0;
+					FS_Delete( SLOGIN_CFG_FILE );
+				}
+			}
+			else if( (uint64_t)launcher_id != slogin_local_steamid64 )
+			{
+				Con_Printf( "Slayer3D: adopting SteamID from launcher\n" );
+				slogin_local_steamid64 = (uint64_t)launcher_id;
+				SLogin_SaveID( slogin_local_steamid64 );
+			}
+		}
+		else if( (*env)->ExceptionCheck( env ))
+		{
+			(*env)->ExceptionClear( env );   // old APK without getSteamId
+		}
+	}
+
 	Con_Printf( "Slayer3D: Steam login init OK (Android/WebView)\n" );
 }
 

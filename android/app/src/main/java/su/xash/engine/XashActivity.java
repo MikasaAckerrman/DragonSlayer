@@ -455,6 +455,39 @@ public class XashActivity extends SDLActivity {
 	}
 
 	/**
+	 * Current SteamID64 held by the launcher, or 0 when signed out.
+	 * Called from native C via JNI.
+	 *
+	 * The launcher's Settings screen is the single source of truth for the
+	 * account: signing out there removes this key. The engine keeps its own
+	 * saved copy for offline start-up, and reconciles it against this on init —
+	 * otherwise signing out in the launcher left the engine still believing it
+	 * was signed in, so the banner and the avatar kept showing.
+	 */
+	public static long getSteamId()
+	{
+		android.content.Context ctx = SDLActivity.getContext();
+		if( ctx == null )
+			return 0;
+
+		try
+		{
+			String id = ctx.getSharedPreferences( "app_preferences", MODE_PRIVATE )
+				.getString( "steam_id", null );
+
+			if( id == null || id.isEmpty() )
+				return 0;
+
+			return Long.parseLong( id );
+		}
+		catch( Exception e )
+		{
+			Log.e( TAG, "getSteamId: " + e.getMessage() );
+			return 0;
+		}
+	}
+
+	/**
 	 * Native callback for Steam login result.
 	 * Called by SteamLoginActivity when login completes or fails.
 	 *

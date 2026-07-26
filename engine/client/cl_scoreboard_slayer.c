@@ -17,6 +17,7 @@ GNU General Public License for more details.
 // (e.g. ReGameDLL plugin) before per-player avatars can be displayed.
 
 #include <inttypes.h>
+#include <time.h>
 #include "common.h"
 #include "client.h"
 #include "cl_scoreboard_slayer.h"
@@ -46,6 +47,7 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_opacity, "220", FCVAR_ARCHIVE, "Slaye
 static CVAR_DEFINE_AUTO( slayer_scoreboard_width, "0.84", FCVAR_ARCHIVE, "Slayer3D: scoreboard width as a fraction of screen width (0.50-0.99; PC reference is 0.843)" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_avatar, "3.0", FCVAR_ARCHIVE, "Slayer3D: avatar icon size as a multiple of the font glyph height" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_rowscale, "1.15", FCVAR_ARCHIVE, "Slayer3D: scoreboard cell height multiplier (1.0-2.0; PC reference works out to ~1.3)" );
+static CVAR_DEFINE_AUTO( slayer_avatar_maxage, "24", FCVAR_ARCHIVE, "Slayer3D: hours before a cached Steam avatar is re-downloaded (0 = never expire)" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_ondeath, "1", FCVAR_ARCHIVE, "Slayer3D: show the scoreboard automatically while dead (0 = only when held)" );
 
 // ===========================================================================
@@ -361,6 +363,25 @@ static void Slayer_LoadAvatarTexture( int slot )
 		return;
 	}
 
+	// Expire stale cache entries. Without this a player who changes their Steam
+	// picture keeps showing the old one forever, because the PNG is only ever
+	// fetched when it is missing. slayer_avatar_maxage is in hours; 0 disables.
+	if( slayer_avatar_maxage.value > 0.0f )
+	{
+		int    ftime = FS_FileTime( path, false );
+		double age_h = ( ftime > 0 ) ? ( time( NULL ) - (time_t)ftime ) / 3600.0 : 0.0;
+
+		if( ftime > 0 && age_h > slayer_avatar_maxage.value )
+		{
+			Slayer_Log_Printf( "avatar slot %d SteamID %" PRIu64 ": cache %.1fh old -> refresh",
+				slot, slayer_steamid64[slot], age_h );
+			FS_Delete( path );
+			Slayer_AvatarDownload_Request( slayer_steamid64[slot], slot );
+			slayer_avatar_tex[slot] = -1;
+			return;
+		}
+	}
+
 	texid = ref.dllFuncs.GL_LoadTexture( path, NULL, 0, TF_IMAGE );
 	Slayer_Log_Printf( "avatar slot %d SteamID %" PRIu64 ": cached file '%s' -> texid %d",
 		slot, slayer_steamid64[slot], path, texid );
@@ -396,6 +417,43 @@ static void Slayer_LoadAvatarTexture( int slot )
 // ===========================================================================
 // Console commands
 // ===========================================================================
+
+// Drop every cached avatar PNG we know a SteamID for and re-request it. Use
+// this after changing your Steam picture instead of waiting out
+// slayer_avatar_maxage, or clearing app data.
+static void Cmd_AvatarRefresh_f( void )
+{
+	uint64_t myid = Slayer_SteamLogin_GetLocalID();
+	int      i, count = 0;
+
+	for( i = 0; i < MAX_CLIENTS; i++ )
+	{
+		char path[128];
+
+		if( slayer_steamid64[i] == 0 )
+			continue;
+
+		Q_snprintf( path, sizeof( path ), "avatars/%"PRIu64".png", slayer_steamid64[i] );
+		FS_Delete( path );
+		slayer_avatar_tex[i] = 0;   // 0 = untried, so the next draw re-requests
+		count++;
+	}
+
+	// Our own picture may not be in a player slot yet (e.g. sitting in the menu).
+	if( myid != 0 )
+	{
+		char path[128];
+
+		Q_snprintf( path, sizeof( path ), "avatars/%"PRIu64".png", myid );
+		if( FS_FileExists( path, false ))
+		{
+			FS_Delete( path );
+			count++;
+		}
+	}
+
+	Con_Printf( "Slayer3D: dropped %d cached avatar(s); they will re-download.\n", count );
+}
 
 static void Cmd_AvatarUrls_f( void )
 {
@@ -496,6 +554,7 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_scoreboard_width );
 	Cvar_RegisterVariable( &slayer_scoreboard_avatar );
 	Cvar_RegisterVariable( &slayer_scoreboard_rowscale );
+	Cvar_RegisterVariable( &slayer_avatar_maxage );
 
 	Cmd_AddCommand( "+slayer_scoreboard", Cmd_ScoreboardDown_f,
 		"show Slayer3D custom scoreboard" );
@@ -503,6 +562,8 @@ void Slayer_Scoreboard_Init( void )
 		"hide Slayer3D custom scoreboard" );
 	Cmd_AddCommand( "slayer_avatar_urls", Cmd_AvatarUrls_f,
 		"print Steam avatar download URLs for all players" );
+	Cmd_AddCommand( "slayer_avatar_refresh", Cmd_AvatarRefresh_f,
+		"drop cached Steam avatars and fetch them again" );
 
 	Slayer_Log_Init();
 	Slayer_Toast_Init();

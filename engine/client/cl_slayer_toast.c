@@ -59,10 +59,23 @@ void Slayer_Toast_Show( const char *header, const char *text )
 // will be present on the next launch). Returns 0 when there is nothing to draw.
 static int Slayer_Toast_LocalAvatar( uint64_t id )
 {
+	static uint64_t loaded_for_id = 0;
 	char path[128];
 
 	if( id == 0 )
+	{
+		// Signed out: forget the icon so a later sign-in loads the new one.
+		toast_avatar_tex = 0;
+		loaded_for_id = 0;
 		return 0;
+	}
+
+	if( id != loaded_for_id )
+	{
+		toast_avatar_tex = 0;      // different account -> reload
+		loaded_for_id = id;
+	}
+
 	if( toast_avatar_tex != 0 )
 		return ( toast_avatar_tex > 0 ) ? toast_avatar_tex : 0;
 
@@ -157,12 +170,12 @@ void Slayer_Toast_Draw( void )
 	text_x = ch + ( icon ? icon + ch / 2 : 0 );
 
 	pw = maxw + ch * 3 + ( icon ? icon + ch / 2 : 0 );
-	px = (int)( sw * 0.018f );
+	px = sw - pw - (int)( sw * 0.018f );   // bottom-RIGHT corner
 	py = sh - ph - (int)( sh * 0.035f );
 
-	// slide in from the left edge during the fade-in
+	// slide in from the right edge during the fade-in
 	if( age < TOAST_FADE_IN )
-		px -= (int)( (float)( pw + px + 4 ) * ( 1.0f - age / TOAST_FADE_IN ));
+		px += (int)( (float)( sw - px + 4 ) * ( 1.0f - age / TOAST_FADE_IN ));
 
 	// panel + Steam-blue accent bar
 	a8 = (byte)( 235.0f * alpha );
