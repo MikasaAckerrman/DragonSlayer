@@ -43,6 +43,8 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_t_color, "255 63 63", FCVAR_ARCHIVE, 
 // Border alpha lowered from 200 -> 150 (lighter visual weight, less stair-stepping)
 static CVAR_DEFINE_AUTO( slayer_scoreboard_border_color, "235 231 197 95", FCVAR_ARCHIVE, "Slayer3D: scoreboard border RGBA (BaseText, low alpha)" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_opacity, "220", FCVAR_ARCHIVE, "Slayer3D: overall scoreboard opacity (0-255)" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_width, "0.92", FCVAR_ARCHIVE, "Slayer3D: scoreboard width as a fraction of screen width (0.50-0.99; PC reference is 0.843)" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_avatar, "3.0", FCVAR_ARCHIVE, "Slayer3D: avatar icon size as a multiple of the font glyph height" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_ondeath, "1", FCVAR_ARCHIVE, "Slayer3D: show the scoreboard automatically while dead (0 = only when held)" );
 
 // ===========================================================================
@@ -490,6 +492,8 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_scoreboard_border_color );
 	Cvar_RegisterVariable( &slayer_scoreboard_opacity );
 	Cvar_RegisterVariable( &slayer_scoreboard_ondeath );
+	Cvar_RegisterVariable( &slayer_scoreboard_width );
+	Cvar_RegisterVariable( &slayer_scoreboard_avatar );
 
 	Cmd_AddCommand( "+slayer_scoreboard", Cmd_ScoreboardDown_f,
 		"show Slayer3D custom scoreboard" );
@@ -817,6 +821,7 @@ void Slayer_Scoreboard_Draw( void )
 	int          col_name_text_x;   // fixed name-column origin (after the reserved avatar gutter)
 	int          text_dy;           // vertical centering offset for row text (replaces hardcoded +2)
 	int          rule_h;            // team/section underline thickness (measured off the PC reference)
+	int          avatar_px;         // avatar icon edge, in px — one source of truth for gutter + draw
 	int          cur_y;
 	int          ct_player_count = 0, t_player_count = 0, spec_player_count = 0;
 	int          drawn_ct_header = 0, drawn_t_header = 0, drawn_spec_header = 0;
@@ -1038,15 +1043,24 @@ void Slayer_Scoreboard_Draw( void )
 			spec_player_count++;
 	}
 
-	// Screen-relative width. Measured ~80-86% on the PC references; clamp to a
-	// sane band so it stays card-like on narrow and ultrawide phone panels.
-	board_w = (int)( screen_w * 0.86f );
+	// Screen-relative width, driven by a cvar so it can be tuned live instead of
+	// rebuilding. The measured PC reference is 84.3% of screen width (see
+	// Documentation/slayer3d/scoreboard-pc-reference.md); the default here is a
+	// little wider because the phone board carries an extra avatar gutter.
 	{
-		int min_w = (int)( screen_w * 0.66f );
-		int max_w = (int)( screen_w * 0.90f );
+		float wfrac = slayer_scoreboard_width.value;
+		int   min_w, max_w;
+
+		if( wfrac < 0.50f ) wfrac = 0.50f;
+		if( wfrac > 0.99f ) wfrac = 0.99f;
+
+		board_w = (int)( screen_w * wfrac );
+
+		min_w = (int)( screen_w * 0.50f );
+		max_w = (int)( screen_w * 0.99f );
 		if( board_w < min_w ) board_w = min_w;
 		if( board_w > max_w ) board_w = max_w;
-		if( board_w > (int)( screen_h * 1.9f ) ) board_w = (int)( screen_h * 1.9f ); // ultrawide guard
+		if( board_w > (int)( screen_h * 2.1f ) ) board_w = (int)( screen_h * 2.1f ); // ultrawide guard
 	}
 
 	// === DIAG: build summary (visible to user via adb logcat -s Xash; Con_DPrintf
@@ -1171,10 +1185,26 @@ void Slayer_Scoreboard_Draw( void )
 
 		col_name_x = board_x + (int)( board_w * 0.012f );
 
-		// Avatar gutter, capped so a tall-row sparse board doesn't reserve a
-		// huge slot next to small text -> fixed name-text origin.
-		av = row_h - 2;
-		if( av > font->charHeight * 2 ) av = font->charHeight * 2;
+		// Avatar gutter. The icon fills the row, capped at a multiple of the glyph
+		// height so a tall-row sparse board doesn't reserve an absurd slot next to
+		// small text. The cap is a cvar because the bitmap font has only three
+		// discrete sizes: when the board grows, glyphs cannot follow, and a cap
+		// tied to charHeight was making the icons look ever smaller relative to
+		// the board. Computed once here and reused at draw time so the gutter and
+		// the icon can never disagree.
+		{
+			float amul = slayer_scoreboard_avatar.value;
+			int   cap;
+
+			if( amul < 1.0f ) amul = 1.0f;
+			if( amul > 6.0f ) amul = 6.0f;
+
+			cap = (int)( font->charHeight * amul );
+			avatar_px = row_h - 2;
+			if( avatar_px > cap ) avatar_px = cap;
+			if( avatar_px < 8 ) avatar_px = 8;
+		}
+		av = avatar_px;
 		col_name_text_x = col_name_x + av + 4;
 
 		col_ping_x = board_x + (int)( board_w * 0.978f );   // rightmost = Задержка
@@ -1386,10 +1416,8 @@ void Slayer_Scoreboard_Draw( void )
 		// ALWAYS starts at col_name_text_x whether or not an avatar exists, so
 		// it never jumps when a Steam avatar finishes downloading (Requirement 2).
 		{
-			int avatar_size = row_h - 2;
-			int avatar_y;
-			if( avatar_size > font->charHeight * 2 ) avatar_size = font->charHeight * 2;
-			avatar_y = cur_y + ( row_h - avatar_size ) / 2; // vertically centered
+			int avatar_size = avatar_px;   // sized once during column layout
+			int avatar_y = cur_y + ( row_h - avatar_size ) / 2; // vertically centered
 
 			if( slayer_avatar_tex[pidx] > 0 && avatar_size > 0 )
 			{
@@ -1425,13 +1453,18 @@ void Slayer_Scoreboard_Draw( void )
 			else
 				MakeRGBA( stat_color, color_text[0], color_text[1], color_text[2], row_alpha );
 
-			// Score (frags)
-			Q_snprintf( buf, sizeof( buf ), "%d", slayer_scores[pidx].frags );
-			Slayer_DrawStringRight( font, col_frags_x, cur_y + text_dy, buf, stat_color );
+			// Score / Deaths — round stats, so only for CT/T. Spectators showed a
+			// meaningless "0 0"; the PC board leaves the spectator rows blank.
+			if( team == SLAYER_TEAM_CT || team == SLAYER_TEAM_T )
+			{
+				// Score (frags)
+				Q_snprintf( buf, sizeof( buf ), "%d", slayer_scores[pidx].frags );
+				Slayer_DrawStringRight( font, col_frags_x, cur_y + text_dy, buf, stat_color );
 
-			// Deaths
-			Q_snprintf( buf, sizeof( buf ), "%d", slayer_scores[pidx].deaths );
-			Slayer_DrawStringRight( font, col_deaths_x, cur_y + text_dy, buf, stat_color );
+				// Deaths
+				Q_snprintf( buf, sizeof( buf ), "%d", slayer_scores[pidx].deaths );
+				Slayer_DrawStringRight( font, col_deaths_x, cur_y + text_dy, buf, stat_color );
+			}
 
 			// Latency (hold-last-good): cl.players[].ping drops to 0 on transient
 			// snapshots and on a cold board-open; keep the last non-zero value for
