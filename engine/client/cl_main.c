@@ -24,6 +24,7 @@ GNU General Public License for more details.
 #include "cl_scoreboard_slayer.h"
 #include "cl_hud_slayer.h"
 #include "cl_sgs_slayer.h"
+#include "cl_steam_login.h"
 #include "vid_common.h"
 #include "pm_local.h"
 #include "multi_emulator.h"
@@ -99,6 +100,7 @@ static CVAR_DEFINE_AUTO( bottomcolor, "0", FCVAR_USERINFO|FCVAR_ARCHIVE|FCVAR_FI
 CVAR_DEFINE_AUTO( rate, "25000", FCVAR_USERINFO|FCVAR_ARCHIVE|FCVAR_FILTERABLE, "player network rate" );
 
 CVAR_DEFINE_AUTO( cl_ticket_generator, "revemu2013", FCVAR_ARCHIVE, "you wouldn't steal a car" );
+CVAR_DEFINE_AUTO( slayer_steam_advertise_id, "0", FCVAR_ARCHIVE, "Slayer3D: advertise your logged-in real SteamID to servers so other clients show your Steam avatar (0=off; disable if a server rejects the connection)" );
 static CVAR_DEFINE_AUTO( cl_advertise_engine_in_name, "1", FCVAR_ARCHIVE|FCVAR_PRIVILEGED, "add [Slayer3D] to the nickname when connecting to GoldSrc servers" );
 static CVAR_DEFINE_AUTO( cl_log_outofband, "0", FCVAR_ARCHIVE, "log out of band messages, can be useful for server admins and for engine debugging" );
 static CVAR_DEFINE_AUTO( cl_autorecord, "0", 0, "automatically start recording a demo after joining the server" );
@@ -1093,6 +1095,25 @@ static void CL_WriteSteamTicket( sizebuf_t *send )
 	CRC32_ProcessBuffer( &crc, key, Q_strlen( key ));
 	crc = CRC32_Final( crc );
 	i = GenerateRevEmu2013( buf, key, crc );
+
+	// Slayer3D: advertise the real logged-in SteamID so other players' clients
+	// (GoldClient / GSClient / Steam CS1.6) fetch and show YOUR real avatar
+	// instead of the fake RevEmu-generated ID. The SteamID lives in the ticket
+	// as two little-endian dwords: [1] = account id (low), [5] = 0x01100001 (high).
+	// Gated behind a cvar (default off) because a server that validates the
+	// ticket signature against its embedded SteamID would reject the altered
+	// ticket — set slayer_steam_advertise_id 0 to fall back to the stock ticket.
+	if( slayer_steam_advertise_id.value != 0.0f )
+	{
+		uint64_t myid = Slayer_SteamLogin_GetLocalID();
+
+		if( myid != 0 )
+		{
+			((uint32_t*)buf)[1] = LittleLong( (uint32_t)( myid & 0xFFFFFFFFu ));
+			((uint32_t*)buf)[5] = LittleLong( (uint32_t)( myid >> 32 ));
+		}
+	}
+
 	MSG_WriteBytes( send, buf, i );
 
 	// RevEmu2013: pTicket[1] = revHash (low), pTicket[5] = 0x01100001 (high)
@@ -3438,6 +3459,7 @@ static void CL_InitLocal( void )
 	cl.resourcesonhand.pNext = cl.resourcesonhand.pPrev = &cl.resourcesonhand;
 
 	Cvar_RegisterVariable( &cl_ticket_generator );
+	Cvar_RegisterVariable( &slayer_steam_advertise_id );
 	Cvar_RegisterVariable( &cl_advertise_engine_in_name );
 	Cvar_RegisterVariable( &cl_log_outofband );
 	Cvar_RegisterVariable( &cl_autorecord );
