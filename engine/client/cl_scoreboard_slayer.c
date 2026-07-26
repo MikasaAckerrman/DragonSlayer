@@ -826,6 +826,23 @@ void Slayer_Scoreboard_Draw( void )
 	int          global_opacity;
 	cl_font_t   *font;
 
+	// Always request the LOCAL player's own avatar by the REAL logged-in
+	// SteamID (independent of the possibly-fake id we advertise to the server).
+	// This makes your own icon show, and — crucially — exercises the whole
+	// download path even solo (no other players needed to reproduce/diagnose).
+	if( cls.state == ca_active && cl.playernum >= 0 && cl.playernum < MAX_CLIENTS )
+	{
+		uint64_t myid = Slayer_SteamLogin_GetLocalID();
+		if( myid != 0 && slayer_steamid64[cl.playernum] != myid )
+		{
+			slayer_steamid64[cl.playernum] = myid;
+			slayer_avatar_tex[cl.playernum] = 0;   // force (re)load
+			Slayer_Log_Printf( "avatar LOCAL: requesting own avatar, SteamID %" PRIu64 " (slot %d)",
+				myid, cl.playernum );
+			Slayer_LoadAvatarTexture( cl.playernum );
+		}
+	}
+
 	// Pump Steam Web API batch requests
 	Slayer_SteamAPI_Frame();
 
