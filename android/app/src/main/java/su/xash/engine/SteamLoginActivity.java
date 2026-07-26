@@ -31,9 +31,12 @@ public class SteamLoginActivity extends Activity
 	private static final String STEAM_OPENID_URL =
 		"https://steamcommunity.com/openid/login";
 
-	// Custom scheme we intercept as the "return_to" callback
-	private static final String CALLBACK_SCHEME = "slayer3d";
-	private static final String CALLBACK_HOST = "steam-login";
+	// Steam OpenID 2.0 requires http(s) realm/return_to — a custom scheme is
+	// rejected and yields a blank page. We use a real-looking https URL that is
+	// never actually fetched: the WebView intercepts the redirect to this host
+	// (shouldOverrideUrlLoading) before it hits the network.
+	private static final String CALLBACK_SCHEME = "https";
+	private static final String CALLBACK_HOST = "login.slayer3d.dev";
 
 	// OpenID claimed_id prefix that contains SteamID64
 	private static final String CLAIMED_ID_PREFIX =
@@ -67,8 +70,13 @@ public class SteamLoginActivity extends Activity
 		mWebView.getSettings().setJavaScriptEnabled( true );
 		mWebView.getSettings().setDomStorageEnabled( true );
 
+		mWebView.getSettings().setUseWideViewPort( true );
+		mWebView.getSettings().setLoadWithOverviewMode( true );
+		mWebView.setBackgroundColor( 0xFF1B2838 );   // Steam dark blue, not pure black
+
 		LinearLayout layout = new LinearLayout( this );
 		layout.setOrientation( LinearLayout.VERTICAL );
+		layout.setBackgroundColor( 0xFF1B2838 );
 		layout.addView( mWebView, new LinearLayout.LayoutParams(
 			LinearLayout.LayoutParams.MATCH_PARENT,
 			LinearLayout.LayoutParams.MATCH_PARENT ) );
@@ -88,6 +96,14 @@ public class SteamLoginActivity extends Activity
 			{
 				Uri uri = Uri.parse( url );
 				return handleUrl( uri );
+			}
+
+			@Override
+			public void onReceivedError( WebView view, WebResourceRequest req,
+				android.webkit.WebResourceError err )
+			{
+				Log.e( TAG, "WebView error: " + err.getErrorCode()
+					+ " " + err.getDescription() + " url=" + req.getUrl() );
 			}
 		} );
 

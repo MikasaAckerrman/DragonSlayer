@@ -20,6 +20,7 @@ Other platforms: Uses non-blocking HTTP sockets (port 80, no TLS).
 #include "common.h"
 #include "client.h"
 #include "cl_avatar_download.h"
+#include "cl_slayer_log.h"
 
 #if XASH_ANDROID
 // ===========================================================================
@@ -35,7 +36,7 @@ Other platforms: Uses non-blocking HTTP sockets (port 80, no TLS).
 // Configuration
 // ---------------------------------------------------------------------------
 
-#define AVD_MAX_CONCURRENT  2
+#define AVD_MAX_CONCURRENT  6      // parallel avatar downloads (was 2 — too slow)
 #define AVD_RETRY_DELAY     60.0
 
 // Slot result values (written by worker thread, read by Frame)
@@ -291,12 +292,15 @@ void Slayer_AvatarDownload_Init( void )
 			(*env)->ExceptionDescribe( env );
 			(*env)->ExceptionClear( env );
 		}
+		Slayer_Log_Printf( "avatar JNI: downloadAvatar() NOT FOUND — R8 stripped it? "
+			"No avatars can download until the keep-rule covers it." );
 		Con_Printf( S_WARN "AvatarDL: failed to find downloadAvatar method\n" );
 		(*env)->DeleteGlobalRef( env, avd_activity_class );
 		avd_activity_class = NULL;
 		return;
 	}
 
+	Slayer_Log_Printf( "avatar JNI: downloadAvatar() found, downloader ready" );
 	Con_Printf( "Slayer3D: avatar JNI init OK (slot count %d)\n", MAX_CLIENTS );
 }
 
@@ -427,6 +431,7 @@ qboolean Slayer_AvatarDownload_Frame( void )
 			if( avd_active_count > 0 )
 				avd_active_count--;
 			any_completed = true;
+			Slayer_Log_Printf( "avatar worker: slot %d download SUCCESS (Java saved the PNG)", i );
 			__android_log_print( ANDROID_LOG_INFO, "Xash",
 				"AvatarDL: download complete for slot %d", i );
 			Con_DPrintf( "AvatarDL: download complete for slot %d\n", i );
@@ -437,6 +442,8 @@ qboolean Slayer_AvatarDownload_Frame( void )
 			avd_slot_fail_time[i] = host.realtime;
 			if( avd_active_count > 0 )
 				avd_active_count--;
+			Slayer_Log_Printf( "avatar worker: slot %d download FAILED "
+				"(downloadAvatar returned error — private profile / network / JNI)", i );
 			__android_log_print( ANDROID_LOG_ERROR, "Xash",
 				"AvatarDL: download failed for slot %d", i );
 			Con_DPrintf( "AvatarDL: download failed for slot %d\n", i );

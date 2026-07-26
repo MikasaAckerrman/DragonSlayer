@@ -853,6 +853,8 @@ void Slayer_Scoreboard_Draw( void )
 					// sticking on -1.
 					FS_Delete( avpath );
 					slayer_avatar_tex[i] = 0;
+					Slayer_Log_Printf( "avatar slot %d SteamID %" PRIu64 ": downloaded file is not a valid image -> deleted",
+						i, slayer_steamid64[i] );
 					Con_Printf( S_WARN "Slayer: post-download avatar load failed for steamid=%" PRIu64 " path=%s, cache invalidated\n",
 						slayer_steamid64[i], avpath );
 #if XASH_ANDROID
@@ -864,6 +866,8 @@ void Slayer_Scoreboard_Draw( void )
 				else
 				{
 					slayer_avatar_tex[i] = texid;
+					Slayer_Log_Printf( "avatar slot %d SteamID %" PRIu64 ": DOWNLOADED + loaded, texid %d",
+						i, slayer_steamid64[i], texid );
 					Con_Printf( "Slayer: post-download avatar loaded for steamid=%" PRIu64 " texid=%d path=%s\n",
 						slayer_steamid64[i], texid, avpath );
 #if XASH_ANDROID
