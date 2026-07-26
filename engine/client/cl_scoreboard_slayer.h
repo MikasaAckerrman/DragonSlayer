@@ -26,6 +26,16 @@ void Slayer_Scoreboard_Init( void );
 // No-op when scoreboard is not active.
 void Slayer_Scoreboard_Draw( void );
 
+// Whether our scoreboard is on screen right now (held, intermission, or the
+// auto-show while dead). Side-effect free, so it can be asked at any point in
+// the frame.
+qboolean Slayer_Scoreboard_IsVisible( void );
+
+// How hard to suppress the game's own scoreboard this frame:
+// 0 = not at all, 1 = skip VGui_Paint, 2 = also skip the client HUD redraw.
+// Driven by slayer_scoreboard_block_stock and only non-zero while ours is up.
+int Slayer_Scoreboard_StockBlockLevel( void );
+
 // Reset all score data (frags, deaths, flags).
 // Called from Slayer_ResetMatchState() on map change/disconnect.
 void Slayer_Scoreboard_Reset( void );

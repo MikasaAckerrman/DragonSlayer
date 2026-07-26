@@ -554,7 +554,11 @@ void V_PostRender( void )
 	{
 		SCR_TileClear();
 		CL_DrawHUD( CL_ACTIVE );
-		VGui_Paint();
+		// Skip VGUI while our scoreboard is up: VGUI batches its primitives and
+		// flushes them after our draw, so the game's own board landed on top of
+		// ours no matter how late we drew. See Slayer_Scoreboard_StockBlockLevel.
+		if( Slayer_Scoreboard_StockBlockLevel() < 1 )
+			VGui_Paint();
 	}
 
 	switch( cls.scrshot_action )

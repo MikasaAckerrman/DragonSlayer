@@ -48,6 +48,7 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_width, "0.84", FCVAR_ARCHIVE, "Slayer
 static CVAR_DEFINE_AUTO( slayer_scoreboard_avatar, "3.0", FCVAR_ARCHIVE, "Slayer3D: avatar icon size as a multiple of the font glyph height" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_rowscale, "1.15", FCVAR_ARCHIVE, "Slayer3D: scoreboard cell height multiplier (1.0-2.0; PC reference works out to ~1.3)" );
 static CVAR_DEFINE_AUTO( slayer_avatar_maxage, "24", FCVAR_ARCHIVE, "Slayer3D: hours before a cached Steam avatar is re-downloaded (0 = never expire)" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_block_stock, "1", FCVAR_ARCHIVE, "Slayer3D: hide the game's own scoreboard while ours is up (0 = off, 1 = block VGUI, 2 = also block the client HUD redraw)" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_ondeath, "1", FCVAR_ARCHIVE, "Slayer3D: show the scoreboard automatically while dead (0 = only when held)" );
 
 // ===========================================================================
@@ -555,6 +556,7 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_scoreboard_avatar );
 	Cvar_RegisterVariable( &slayer_scoreboard_rowscale );
 	Cvar_RegisterVariable( &slayer_avatar_maxage );
+	Cvar_RegisterVariable( &slayer_scoreboard_block_stock );
 
 	Cmd_AddCommand( "+slayer_scoreboard", Cmd_ScoreboardDown_f,
 		"show Slayer3D custom scoreboard" );
@@ -870,6 +872,65 @@ static int Slayer_SortCompare( const void *a, const void *b )
 // ===========================================================================
 // Main draw function
 // ===========================================================================
+
+/*
+====================
+Slayer_Scoreboard_IsVisible
+
+Whether our board is on screen right now — held open, at intermission, or
+auto-shown while dead. Mirrors the checks at the top of Draw(), but without
+side effects, so callers earlier in the frame (the VGUI and client-HUD gates in
+V_PostRender / CL_DrawHUD) can ask before we have drawn anything.
+====================
+*/
+qboolean Slayer_Scoreboard_IsVisible( void )
+{
+	if( slayer_scoreboard.value == 0.0f || cls.state != ca_active )
+		return false;
+
+	if( slayer_scoreboard_active || cl.intermission != 0 )
+		return true;
+
+	if( slayer_scoreboard_ondeath.value != 0.0f && !slayer_death_dismissed
+	 && cl.playernum >= 0 && cl.playernum < MAX_CLIENTS )
+	{
+		int myteam = slayer_scores[cl.playernum].team_id;
+
+		if(( myteam == SLAYER_TEAM_CT || myteam == SLAYER_TEAM_T )
+		 && ( slayer_scores[cl.playernum].flags & 1 ))
+			return true;   // dead: CS shows its board here, and so do we
+	}
+
+	return false;
+}
+
+/*
+====================
+Slayer_Scoreboard_StockBlockLevel
+
+How hard to suppress the game's own scoreboard while ours is up.
+
+Ours is already drawn last in V_PostRender, yet the stock board still landed on
+top — VGUI batches its primitives and flushes them after our draw, so draw
+order alone cannot win. Level 1 skips VGui_Paint while our board is visible,
+which removes it if the stock board is a VGUI panel. Level 2 additionally skips
+the client DLL's HUD redraw, which removes it however it is drawn, at the cost
+of hiding the rest of the game HUD for those frames.
+
+Returns 0 when nothing should be suppressed.
+====================
+*/
+int Slayer_Scoreboard_StockBlockLevel( void )
+{
+	int level = (int)slayer_scoreboard_block_stock.value;
+
+	if( level <= 0 )
+		return 0;
+	if( !Slayer_Scoreboard_IsVisible( ))
+		return 0;
+
+	return ( level > 2 ) ? 2 : level;
+}
 
 void Slayer_Scoreboard_Draw( void )
 {

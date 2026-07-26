@@ -28,6 +28,7 @@ GNU General Public License for more details.
 #include "r_efx.h"
 #include "demo_api.h"
 #include "ivoicetweak.h"
+#include "cl_scoreboard_slayer.h" // Slayer3D: suppress the game's own scoreboard
 #include "pm_local.h"
 #include "cl_tent.h"
 #include "input.h"
@@ -917,7 +918,12 @@ void CL_DrawHUD( int state )
 			CL_DrawScreenFade ();
 		CL_DrawCrosshair ();
 		CL_DrawCenterPrint ();
-		clgame.dllFuncs.pfnRedraw( cl.time, cl.intermission );
+		// slayer_scoreboard_block_stock 2: the game's own scoreboard is drawn
+		// from here, so the only way to be rid of it is to skip the client's
+		// redraw entirely while ours is up. Costs the rest of the HUD for those
+		// frames, which is why it is opt-in rather than the default.
+		if( Slayer_Scoreboard_StockBlockLevel() < 2 )
+			clgame.dllFuncs.pfnRedraw( cl.time, cl.intermission );
 		if( cl.intermission ) CL_DrawScreenFade ();
 		break;
 	case CL_PAUSED:

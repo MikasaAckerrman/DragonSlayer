@@ -125,10 +125,26 @@
 # avatar loading and Steam login. Debug builds work only because minify is off.
 # Keep the exact names + descriptors the C side looks up.
 # ---------------------------------------------------------------------------
+# Keep EVERY public static member of XashActivity, not an explicit list.
+#
+# The list form has now failed twice: a method reachable only from C is added,
+# nobody remembers to add it here, R8 strips it, and the release build silently
+# loses the feature with no error anywhere -- most recently getSteamId(), which
+# made signing out of Steam do nothing at all because the engine could never ask
+# the launcher for the current account. The debug build hides this, since
+# minification is off there.
+#
+# This class is a JNI bridge: its public static surface exists *for* the native
+# side. Keeping all of it costs a handful of methods and removes the whole
+# failure mode. Individual methods are listed below only as documentation of
+# who calls what.
+#
+#   downloadAvatar  -> cl_avatar_download.c
+#   startSteamLogin -> cl_steam_login.c
+#   getSteamId      -> cl_steam_login.c (launcher owns the account)
+#   nativeSteamLoginResult -> native callback, bound by name
 -keep class su.xash.engine.XashActivity {
-    public static int downloadAvatar(java.lang.String, java.lang.String);   # cl_avatar_download.c
-    public static void startSteamLogin(java.lang.String, java.lang.String); # cl_steam_login.c
-    public static native void nativeSteamLoginResult(long);                 # native callback
+    public static *;
 }
 
 -keep class su.xash.engine.SteamAPIHelper {

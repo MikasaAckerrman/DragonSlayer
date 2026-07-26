@@ -27,6 +27,7 @@ Non-Android: prints console message (not yet implemented).
 #include "common.h"
 #include "client.h"
 #include "cl_steam_login.h"
+#include "cl_slayer_log.h"
 
 // Persistent local SteamID64 (0 = not logged in)
 static uint64_t slogin_local_steamid64 = 0;
@@ -232,26 +233,54 @@ void Slayer_SteamLogin_Init( void )
 			{
 				(*env)->ExceptionDescribe( env );
 				(*env)->ExceptionClear( env );
+				Slayer_Log_Printf( "steam: getSteamId() threw — keeping saved id %" PRIu64,
+					slogin_local_steamid64 );
 			}
 			else if( launcher_id <= 0 )
 			{
+				Slayer_Log_Printf( "steam: launcher signed out (saved id was %" PRIu64 ")",
+					slogin_local_steamid64 );
+
 				if( slogin_local_steamid64 != 0 )
 				{
+					char avatar_path[128];
+
 					Con_Printf( "Slayer3D: launcher is signed out — clearing saved Steam login\n" );
+
+					// Drop the cached picture too, otherwise the previous
+					// account's avatar keeps rendering after sign-out.
+					Q_snprintf( avatar_path, sizeof( avatar_path ), "avatars/%"PRIu64".png",
+						slogin_local_steamid64 );
+					FS_Delete( avatar_path );
+
 					slogin_local_steamid64 = 0;
 					FS_Delete( SLOGIN_CFG_FILE );
 				}
 			}
 			else if( (uint64_t)launcher_id != slogin_local_steamid64 )
 			{
+				Slayer_Log_Printf( "steam: adopting launcher id %" PRIu64 " (was %" PRIu64 ")",
+					(uint64_t)launcher_id, slogin_local_steamid64 );
 				Con_Printf( "Slayer3D: adopting SteamID from launcher\n" );
 				slogin_local_steamid64 = (uint64_t)launcher_id;
 				SLogin_SaveID( slogin_local_steamid64 );
 			}
+			else
+			{
+				Slayer_Log_Printf( "steam: launcher agrees, id %" PRIu64, slogin_local_steamid64 );
+			}
 		}
-		else if( (*env)->ExceptionCheck( env ))
+		else
 		{
-			(*env)->ExceptionClear( env );   // old APK without getSteamId
+			// R8 stripping this method is exactly how sign-out silently broke
+			// once already, so say so loudly instead of carrying on.
+			if( (*env)->ExceptionCheck( env ))
+				(*env)->ExceptionClear( env );
+
+			Slayer_Log_Printf( "steam: getSteamId() NOT FOUND — R8 stripped it? "
+				"sign-out cannot reach the engine, saved id %" PRIu64 " kept",
+				slogin_local_steamid64 );
+			Con_Printf( S_WARN "SteamLogin: getSteamId() missing — sign-out will not take effect\n" );
 		}
 	}
 
