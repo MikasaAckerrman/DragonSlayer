@@ -19,6 +19,7 @@ GNU General Public License for more details.
 #include "cl_scoreboard_slayer.h"
 #include "cl_hud_slayer.h"
 #include "cl_sgs_slayer.h"
+#include "cl_loading_slayer.h"
 
 // ===========================================================================
 // Cvars - Third-person camera
@@ -187,6 +188,9 @@ void V_InitSlayerCvars( void )
 	// Side-Game Strafe (mobile auto-strafer)
 	Slayer_SGS_Init();
 
+	// PC-style loading screen overlay
+	Slayer_Loading_Init();
+
 	Con_Printf( "Slayer3D: cvars initialized\n" );
 }
 
@@ -352,6 +356,9 @@ void Slayer_ResetMatchState( void )
 
 	// Clear SGS phase / swipe timestamp / held flag
 	Slayer_SGS_Reset();
+
+	// Reset loading screen overlay state
+	Slayer_Loading_Reset();
 }
 
 // ===========================================================================
