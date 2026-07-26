@@ -24,6 +24,7 @@ GNU General Public License for more details.
 #include "cl_steam_api.h"
 #include "cl_steam_login.h"
 #include "cl_slayer_log.h"
+#include <math.h>
 
 #if XASH_ANDROID
 #include <android/log.h>
@@ -34,12 +35,12 @@ GNU General Public License for more details.
 // ===========================================================================
 
 static CVAR_DEFINE_AUTO( slayer_scoreboard, "1", FCVAR_ARCHIVE, "Slayer3D: enable custom scoreboard (0 = disabled)" );
-static CVAR_DEFINE_AUTO( slayer_scoreboard_bg_color, "0 0 0 150", FCVAR_ARCHIVE, "Slayer3D: scoreboard background RGBA" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_bg_color, "0 0 0 120", FCVAR_ARCHIVE, "Slayer3D: scoreboard background RGBA (near-transparent like PC ScorePanel)" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_text_color, "255 255 255 255", FCVAR_ARCHIVE, "Slayer3D: scoreboard text RGBA" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_ct_color, "153 204 255", FCVAR_ARCHIVE, "Slayer3D: CT team RGB (PC CS blue)" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_t_color, "255 63 63", FCVAR_ARCHIVE, "Slayer3D: T team RGB (PC CS red)" );
 // Border alpha lowered from 200 -> 150 (lighter visual weight, less stair-stepping)
-static CVAR_DEFINE_AUTO( slayer_scoreboard_border_color, "255 255 255 150", FCVAR_ARCHIVE, "Slayer3D: scoreboard border RGBA" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_border_color, "235 231 197 95", FCVAR_ARCHIVE, "Slayer3D: scoreboard border RGBA (BaseText, low alpha)" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_opacity, "220", FCVAR_ARCHIVE, "Slayer3D: overall scoreboard opacity (0-255)" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_ondeath, "1", FCVAR_ARCHIVE, "Slayer3D: show the scoreboard automatically while dead (0 = only when held)" );
 
@@ -632,6 +633,106 @@ static void Slayer_DrawStringRight( cl_font_t *font, int right_x, int y, const c
 	CL_DrawString( (float)( right_x - w ), (float)y, s, color, font, FONT_DRAW_UTF8 );
 }
 
+// Draw the scoreboard panel: a near-transparent fill with anti-aliased raster
+// rounded corners and a beveled 1px border. GoldSrc has only FillRGBA (which
+// takes an alpha), so a smooth corner is a per-pixel signed-distance composite
+// of the border stroke over the fill — the staircase dissolves into the alpha.
+// bg/border already carry their final alpha (global opacity pre-applied).
+static void Slayer_DrawRoundedPanel( int x, int y, int w, int h, int R,
+	const rgba_t bg, const rgba_t border )
+{
+	const float EDGE   = (float)R - 0.5f;
+	const float STROKE = 1.25f;
+	const byte  bR = border[0], bG = border[1], bB = border[2];
+	const float bgA  = bg[3] / 255.0f;
+	const float brA  = border[3] / 255.0f;
+	const float bevA = brA * 0.47f;
+	const byte  bevAA = (byte)( border[3] * 0.47f );
+	int py, xx;
+
+	if( R <= 0 )
+	{
+		Slayer_DrawRect( x, y, w, h, bg[0], bg[1], bg[2], bg[3] );
+		Slayer_DrawRect( x, y, w, 1, bR, bG, bB, border[3] );
+		Slayer_DrawRect( x, y + h - 1, w, 1, bR, bG, bB, border[3] );
+		Slayer_DrawRect( x, y, 1, h, bR, bG, bB, border[3] );
+		Slayer_DrawRect( x + w - 1, y, 1, h, bR, bG, bB, border[3] );
+		return;
+	}
+
+	for( py = 0; py < R; py++ )
+	{
+		float cy = (float)py + 0.5f - (float)R;
+		int   yT = y + py, yB = y + h - 1 - py;
+		int   xIn = R;
+
+		for( xx = 0; xx < R; xx++ )
+		{
+			float cx = (float)xx + 0.5f - (float)R;
+			if( sqrt( cx * cx + cy * cy ) <= EDGE - STROKE - 2.4f )
+			{
+				xIn = xx;
+				break;
+			}
+		}
+
+		// solid fill span for these two mirrored rows
+		Slayer_DrawRect( x + xIn, yT, w - 2 * xIn, 1, bg[0], bg[1], bg[2], bg[3] );
+		Slayer_DrawRect( x + xIn, yB, w - 2 * xIn, 1, bg[0], bg[1], bg[2], bg[3] );
+
+		for( xx = 0; xx < xIn; xx++ )
+		{
+			float cx = (float)xx + 0.5f - (float)R;
+			float d = (float)sqrt( cx * cx + cy * cy );
+			float cov = EDGE - d + 0.5f;
+			float s, bev, t, a;
+			byte  rr, gg, bb, aa;
+
+			if( cov <= 0.0f ) continue;
+			if( cov > 1.0f ) cov = 1.0f;
+
+			s = 1.0f - ( EDGE - STROKE * 0.5f - d ) / STROKE;
+			if( s < 0.0f ) s = 0.0f;
+			if( s > 1.0f ) s = 1.0f;
+			s *= cov;
+
+			bev = 1.0f - (float)fabs( EDGE - STROKE - 1.2f - d ) / 1.4f;
+			if( bev < 0.0f ) bev = 0.0f;
+			if( bev > 1.0f ) bev = 1.0f;
+			bev *= cov * 0.55f;
+
+			t = s + bev;
+			if( t > 1.0f ) t = 1.0f;
+
+			a = bgA * cov * ( 1.0f - t ) + brA * s + bevA * bev;
+			if( a > 1.0f ) a = 1.0f;
+			aa = (byte)( a * 255.0f + 0.5f );
+			if( aa < 2 ) continue;
+
+			rr = (byte)( bR * t );
+			gg = (byte)( bG * t );
+			bb = (byte)( bB * t );
+
+			Slayer_DrawRect( x + xx,         yT, 1, 1, rr, gg, bb, aa );
+			Slayer_DrawRect( x + w - 1 - xx, yT, 1, 1, rr, gg, bb, aa );
+			Slayer_DrawRect( x + xx,         yB, 1, 1, rr, gg, bb, aa );
+			Slayer_DrawRect( x + w - 1 - xx, yB, 1, 1, rr, gg, bb, aa );
+		}
+	}
+
+	// solid middle band
+	Slayer_DrawRect( x, y + R, w, h - 2 * R, bg[0], bg[1], bg[2], bg[3] );
+
+	// straight border runs: outer stroke + inner bevel
+	Slayer_DrawRect( x,         y + R, 1, h - 2 * R, bR, bG, bB, border[3] );
+	Slayer_DrawRect( x + w - 1, y + R, 1, h - 2 * R, bR, bG, bB, border[3] );
+	Slayer_DrawRect( x + 1,     y + R, 1, h - 2 * R, bR, bG, bB, bevAA );
+	Slayer_DrawRect( x + w - 2, y + R, 1, h - 2 * R, bR, bG, bB, bevAA );
+	Slayer_DrawRect( x + R,     y,         w - 2 * R, 1, bR, bG, bB, border[3] );
+	Slayer_DrawRect( x + R,     y + h - 1, w - 2 * R, 1, bR, bG, bB, border[3] );
+	Slayer_DrawRect( x + R,     y + 1,     w - 2 * R, 1, bR, bG, bB, bevAA );
+}
+
 // Draw one rounded corner of the border by walking slayer_border_corner_segs[]
 // and reflecting each segment across X/Y as requested. The corner table
 // describes the top-left quadrant; all other quadrants are exact mirrors.
@@ -697,6 +798,8 @@ void Slayer_Scoreboard_Draw( void )
 	int          screen_w, screen_h;
 	int          board_x, board_y, board_w, board_h;
 	int          row_h, col_name_x, col_frags_x, col_deaths_x, col_ping_x, col_health_x;
+	int          col_money_x;       // "Деньги" column (right edge)
+	int          col_kit_x;         // "Компл." (defuse kit) fixed column, left-aligned
 	int          col_name_text_x;   // fixed name-column origin (after the reserved avatar gutter)
 	int          text_dy;           // vertical centering offset for row text (replaces hardcoded +2)
 	int          cur_y;
@@ -892,15 +995,15 @@ void Slayer_Scoreboard_Draw( void )
 			spec_player_count++;
 	}
 
-	// Screen-relative width, slightly larger than PC (~0.55-0.60), clamped to a
+	// Screen-relative width. Measured ~80-86% on the PC references; clamp to a
 	// sane band so it stays card-like on narrow and ultrawide phone panels.
-	board_w = (int)( screen_w * 0.72f );
+	board_w = (int)( screen_w * 0.82f );
 	{
-		int min_w = (int)( screen_w * 0.55f );
-		int max_w = (int)( screen_w * 0.80f );
+		int min_w = (int)( screen_w * 0.62f );
+		int max_w = (int)( screen_w * 0.88f );
 		if( board_w < min_w ) board_w = min_w;
 		if( board_w > max_w ) board_w = max_w;
-		if( board_w > (int)( screen_h * 1.6f ) ) board_w = (int)( screen_h * 1.6f ); // ultrawide guard
+		if( board_w > (int)( screen_h * 1.9f ) ) board_w = (int)( screen_h * 1.9f ); // ultrawide guard
 	}
 
 	// === DIAG: build summary (visible to user via adb logcat -s Xash; Con_DPrintf
@@ -947,9 +1050,13 @@ void Slayer_Scoreboard_Draw( void )
 			if( f && f->valid ) font = f;
 		}
 
-		// Density-aware full row height: roomier when the roster is sparse
-		// (this is what makes the board "slightly larger when few players").
-		row_pad    = ( content_rows <= 14 ) ? 7 : ( content_rows <= 22 ? 5 : 4 );
+		// Density-aware full row height: much roomier when the roster is sparse
+		// so the board fills more of the screen (like PC) instead of shrinking
+		// to a stamp. The engine font can't scale continuously, so a sparse
+		// board grows via taller rows rather than bigger glyphs.
+		row_pad    = ( content_rows <= 8 )  ? font->charHeight
+		           : ( content_rows <= 14 ) ? ( font->charHeight * 2 / 3 )
+		           : ( content_rows <= 22 ) ? 6 : 4;
 		row_h_full = font->charHeight + row_pad;
 
 		// Compression coefficient. natural_h is the auto-expand height; when it
@@ -970,8 +1077,8 @@ void Slayer_Scoreboard_Draw( void )
 		board_h = row_h * content_rows + chrome_h;
 		if( board_h > avail_h )
 			board_h = avail_h;
-		if( board_h < (int)( screen_h * 0.22f ) )
-			board_h = (int)( screen_h * 0.22f );   // tiny-roster floor
+		if( board_h < (int)( screen_h * 0.30f ) )
+			board_h = (int)( screen_h * 0.30f );   // never a tiny stamp
 
 		// === DIAG: layout summary (Con_DPrintf avoids per-frame in-game console
 		// flood; logcat path stays INFO so the user can capture it) ===
@@ -988,37 +1095,61 @@ void Slayer_Scoreboard_Draw( void )
 	board_x = ( screen_w - board_w ) / 2;
 	board_y = ( screen_h - board_h ) / 2;
 
-	// Flat semi-transparent panel (PC CS 1.6 style) with a 1px frame.
+	// Near-transparent panel with anti-aliased rounded corners (PC ScorePanel).
 	{
-		byte bg_r = color_bg[0], bg_g = color_bg[1], bg_b = color_bg[2];
-		byte bg_a = (byte)( color_bg[3] * global_opacity / 255 );
-		byte br_r = cached_color_border[0], br_g = cached_color_border[1];
-		byte br_b = cached_color_border[2];
-		byte br_a = (byte)( cached_color_border[3] * global_opacity / 255 );
+		rgba_t panel_bg, panel_br;
+		int    radius = (int)( board_h * 0.028f );
 
-		Slayer_DrawRect( board_x, board_y, board_w, board_h, bg_r, bg_g, bg_b, bg_a );
+		if( radius < 8 )  radius = 8;
+		if( radius > 22 ) radius = 22;
+		if( radius > board_w / 2 ) radius = board_w / 2;
+		if( radius > board_h / 2 ) radius = board_h / 2;
 
-		// 1px flat frame (top / bottom / left / right)
-		Slayer_DrawRect( board_x, board_y, board_w, 1, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x, board_y + board_h - 1, board_w, 1, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x, board_y, 1, board_h, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 1, board_y, 1, board_h, br_r, br_g, br_b, br_a );
+		// pre-apply the global opacity so the panel helper gets final alphas
+		MakeRGBA( panel_bg, color_bg[0], color_bg[1], color_bg[2],
+			(byte)( color_bg[3] * global_opacity / 255 ));
+		MakeRGBA( panel_br, cached_color_border[0], cached_color_border[1], cached_color_border[2],
+			(byte)( cached_color_border[3] * global_opacity / 255 ));
+
+		Slayer_DrawRoundedPanel( board_x, board_y, board_w, board_h, radius, panel_bg, panel_br );
 	}
 
 	cur_y = board_y;
 
-	// Column layout. The numeric columns (health/frags/deaths/ping) are RIGHT
-	// edges — text is right-aligned to them so digits line up like PC CS 1.6.
-	col_name_x   = board_x + (int)( board_w * 0.04f );
-	col_health_x = board_x + (int)( board_w * 0.50f );
-	col_frags_x  = board_x + (int)( board_w * 0.62f );
-	col_deaths_x = board_x + (int)( board_w * 0.74f );
-	col_ping_x   = board_x + (int)( board_w * 0.88f );
+	// Column layout: five right-aligned stat columns (HP | Деньги | Счет |
+	// Смертей | Задержка). Their x positions are derived from the MEASURED
+	// header widths, laid out right-to-left with a guaranteed gap, so the
+	// (wider) Russian labels can never collide at any font size.
+	{
+		int gap = font->charHeight + 4;   // ~one glyph of breathing room
+		int hw, hh;
+
+		col_name_x = board_x + (int)( board_w * 0.012f );
+		col_ping_x = board_x + (int)( board_w * 0.978f );   // rightmost = Задержка
+
+		CL_DrawStringLen( font, "Задержка", &hw, &hh, FONT_DRAW_UTF8 );
+		col_deaths_x = col_ping_x - hw - gap;
+		CL_DrawStringLen( font, "Смертей", &hw, &hh, FONT_DRAW_UTF8 );
+		col_frags_x  = col_deaths_x - hw - gap;
+		CL_DrawStringLen( font, "Счет", &hw, &hh, FONT_DRAW_UTF8 );
+		col_money_x  = col_frags_x - hw - gap;
+		CL_DrawStringLen( font, "Деньги", &hw, &hh, FONT_DRAW_UTF8 );
+		col_health_x = col_money_x - hw - gap;
+
+		// "Компл." sits in its own fixed column between the names and HP so
+		// every marker lines up vertically like PC.
+		col_kit_x = board_x + (int)( board_w * 0.40f );
+	}
 
 	// Fixed name-column origin: a constant avatar gutter is ALWAYS reserved so
 	// the name never jumps when a Steam avatar finishes downloading (or is
-	// absent). The gutter tracks row_h but only changes when the roster does.
-	col_name_text_x = col_name_x + row_h + 4;
+	// absent). The gutter tracks the avatar box (capped so a sparse, tall-row
+	// board doesn't reserve a huge slot next to small text).
+	{
+		int av = row_h - 2;
+		if( av > font->charHeight * 2 ) av = font->charHeight * 2;
+		col_name_text_x = col_name_x + av + 4;
+	}
 
 	// Vertical centering of per-row text inside row_h: 0 when the row is floored
 	// to exactly charHeight, ~row_pad/2 at normal sizes. Replaces the old fixed
@@ -1048,28 +1179,37 @@ void Slayer_Scoreboard_Draw( void )
 		{
 			rgba_t color_map;
 			MakeRGBA( color_map, color_text[0] * 160 / 255, color_text[1] * 160 / 255, color_text[2] * 160 / 255, 200 );
-			Slayer_DrawStringRight( font, col_ping_x + (int)( board_w * 0.10f ), cur_y, mapname, color_map );
+			Slayer_DrawStringRight( font, board_x + board_w - (int)( board_w * 0.012f ), cur_y, mapname, color_map );
 		}
 	}
 	cur_y += row_h + 2;
 
-	// Separator below hostname/mapname
-	Slayer_DrawRect( board_x + 2, cur_y, board_w - 4, 1, 60, 60, 60, (byte)global_opacity );
+	// Separator below hostname/mapname (inset from the rounded edges)
+	{
+		int sep_inset = (int)( board_w * 0.022f );
+		Slayer_DrawRect( board_x + sep_inset, cur_y, board_w - 2 * sep_inset, 1,
+			214, 214, 208, (byte)( 90 * global_opacity / 255 ));
+	}
 	cur_y += 4;
 
-	// Column headers row (slightly dimmer text, no "Name" label)
+	// Column headers row — gold SectionTextColor (255 192 0), Russian labels.
 	{
 		rgba_t color_hdr;
-		MakeRGBA( color_hdr, color_text[0] * 200 / 255, color_text[1] * 200 / 255, color_text[2] * 200 / 255, color_text[3] );
+		MakeRGBA( color_hdr, 255, 192, 0, color_text[3] );
 		Slayer_DrawStringRight( font, col_health_x, cur_y, "HP", color_hdr );
-		Slayer_DrawStringRight( font, col_frags_x, cur_y, "Score", color_hdr );
-		Slayer_DrawStringRight( font, col_deaths_x, cur_y, "Deaths", color_hdr );
-		Slayer_DrawStringRight( font, col_ping_x, cur_y, "Latency", color_hdr );
+		Slayer_DrawStringRight( font, col_money_x, cur_y, "Деньги", color_hdr );
+		Slayer_DrawStringRight( font, col_frags_x, cur_y, "Счет", color_hdr );
+		Slayer_DrawStringRight( font, col_deaths_x, cur_y, "Смертей", color_hdr );
+		Slayer_DrawStringRight( font, col_ping_x, cur_y, "Задержка", color_hdr );
 	}
 	cur_y += row_h;
 
-	// Separator below column headers
-	Slayer_DrawRect( board_x + 2, cur_y, board_w - 4, 1, 60, 60, 60, (byte)global_opacity );
+	// Separator below column headers (inset)
+	{
+		int sep_inset = (int)( board_w * 0.022f );
+		Slayer_DrawRect( board_x + sep_inset, cur_y, board_w - 2 * sep_inset, 1,
+			214, 214, 208, (byte)( 90 * global_opacity / 255 ));
+	}
 	cur_y += 4;
 
 	// Draw player rows
@@ -1146,16 +1286,13 @@ void Slayer_Scoreboard_Draw( void )
 			break;
 		}
 
-		// Alternating row backgrounds (every other row slightly lighter)
-		if( row % 2 == 0 )
-		{
-			Slayer_DrawRect( board_x + 2, cur_y, board_w - 4, row_h, 255, 255, 255, 8 );
-		}
-
-		// Highlight local player row (brighter)
+		// No alternating stripes on PC — rows are plain text over the panel.
+		// Only the LOCAL player gets a highlight bar, inset from the rounded
+		// edges so it doesn't run into the corners.
 		if( pidx == cl.playernum )
 		{
-			Slayer_DrawRect( board_x + 2, cur_y, board_w - 4, row_h, 255, 255, 255, 35 );
+			int hi = (int)( board_w * 0.022f );
+			Slayer_DrawRect( board_x + hi, cur_y, board_w - 2 * hi, row_h, 235, 231, 197, 38 );
 		}
 
 		// Player name
@@ -1183,7 +1320,9 @@ void Slayer_Scoreboard_Draw( void )
 		// it never jumps when a Steam avatar finishes downloading (Requirement 2).
 		{
 			int avatar_size = row_h - 2;
-			int avatar_y    = cur_y + ( row_h - avatar_size ) / 2; // vertically centered
+			int avatar_y;
+			if( avatar_size > font->charHeight * 2 ) avatar_size = font->charHeight * 2;
+			avatar_y = cur_y + ( row_h - avatar_size ) / 2; // vertically centered
 
 			if( slayer_avatar_tex[pidx] > 0 && avatar_size > 0 )
 			{
@@ -1194,6 +1333,17 @@ void Slayer_Scoreboard_Draw( void )
 			}
 
 			CL_DrawString( col_name_text_x, cur_y + text_dy, name, name_color, font, FONT_DRAW_UTF8 );
+		}
+
+		// "Компл." — defuse-kit marker in its own fixed column (CT only). The
+		// defuser bit is 1<<3 in the ScoreAttrib flags byte; if the server does
+		// not set it, nothing draws (harmless).
+		if( team == SLAYER_TEAM_CT && !( slayer_scores[pidx].flags & 1 )
+		 && ( slayer_scores[pidx].flags & 8 ))
+		{
+			rgba_t kit_color;
+			MakeRGBA( kit_color, 214, 214, 208, ( row_alpha * 78 ) / 100 );
+			CL_DrawString( col_kit_x, cur_y + text_dy, "Компл.", kit_color, font, FONT_DRAW_UTF8 );
 		}
 
 		// Score / Deaths / Latency (right-aligned to their column edges)
