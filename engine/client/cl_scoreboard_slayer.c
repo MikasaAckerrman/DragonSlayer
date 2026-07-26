@@ -816,6 +816,7 @@ void Slayer_Scoreboard_Draw( void )
 	int          col_kit_x;         // "Компл." (defuse kit) fixed column, left-aligned
 	int          col_name_text_x;   // fixed name-column origin (after the reserved avatar gutter)
 	int          text_dy;           // vertical centering offset for row text (replaces hardcoded +2)
+	int          rule_h;            // team/section underline thickness (measured off the PC reference)
 	int          cur_y;
 	int          ct_player_count = 0, t_player_count = 0, spec_player_count = 0;
 	int          drawn_ct_header = 0, drawn_t_header = 0, drawn_spec_header = 0;
@@ -1213,6 +1214,12 @@ void Slayer_Scoreboard_Draw( void )
 	text_dy = ( row_h - font->charHeight ) / 2;
 	if( text_dy < 0 ) text_dy = 0;
 
+	// Team/section underline thickness. Measured off the PC reference: the rules
+	// under "Terrorists"/"Counter-Terrorists" are 2px at 1920x1080, i.e. 0.185%
+	// of screen height, so tie it to the screen rather than to the row height.
+	rule_h = (int)( screen_h * 0.00185f + 0.5f );
+	if( rule_h < 2 ) rule_h = 2;
+
 	// Draw server name (left-aligned)
 	hostname = Info_ValueForKey( cl.serverinfo, "hostname" );
 	if( !hostname || hostname[0] == '\0' || !Q_stricmp( hostname, "empty" ) )
@@ -1253,13 +1260,15 @@ void Slayer_Scoreboard_Draw( void )
 	}
 	cur_y += row_h;
 
-	// Separator under the header row — thicker, scales with the row height, and
-	// inset so it doesn't run into the rounded corners.
+	// Separator under the header row. Measured off the PC reference (1920x1080
+	// ScorePanel): the rule runs the FULL board width (0.00%..99.94% — it is not
+	// inset from the corners) and reads as a solid line, roughly twice the panel
+	// luma, not a faint wash. Thickness there is 1px at 1080p; keep a 2px floor
+	// so it stays visible on a high-DPI phone panel.
 	{
-		int sep_inset = (int)( board_w * 0.03f );
-		int sep_h = row_h / 20; if( sep_h < 2 ) sep_h = 2;
-		Slayer_DrawRect( board_x + sep_inset, cur_y, board_w - 2 * sep_inset, sep_h,
-			214, 214, 208, (byte)( 120 * global_opacity / 255 ));
+		int sep_h = (int)( screen_h * 0.0019f ); if( sep_h < 2 ) sep_h = 2;
+		Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, sep_h,
+			214, 214, 208, (byte)( 200 * global_opacity / 255 ));
 	}
 	cur_y += 6;
 
@@ -1296,9 +1305,11 @@ void Slayer_Scoreboard_Draw( void )
 			Q_snprintf( buf, sizeof( buf ), "Terrorists  -  %d players", t_player_count );
 			CL_DrawString( col_name_text_x, cur_y, buf, color_t, font, FONT_DRAW_UTF8 );
 			cur_y += row_h;
-			// Thin separator below T header
-			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, ( row_h > 40 ? 3 : 2 ), color_t[0], color_t[1], color_t[2], 100 );
-			cur_y += 3;
+			// Rule below the T header. Reference: 2px at 1080p (0.185% of screen
+			// height) drawn SOLID — the old alpha 100 made it read as "too thin".
+			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, rule_h,
+				color_t[0], color_t[1], color_t[2], (byte)( 210 * global_opacity / 255 ));
+			cur_y += rule_h + 1;
 		}
 		else if( team == SLAYER_TEAM_CT && !drawn_ct_header )
 		{
@@ -1307,9 +1318,10 @@ void Slayer_Scoreboard_Draw( void )
 			Q_snprintf( buf, sizeof( buf ), "Counter-Terrorists  -  %d players", ct_player_count );
 			CL_DrawString( col_name_text_x, cur_y, buf, color_ct, font, FONT_DRAW_UTF8 );
 			cur_y += row_h;
-			// Thin separator below CT header
-			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, ( row_h > 40 ? 3 : 2 ), color_ct[0], color_ct[1], color_ct[2], 100 );
-			cur_y += 3;
+			// Rule below the CT header (same measured treatment as the T rule).
+			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, rule_h,
+				color_ct[0], color_ct[1], color_ct[2], (byte)( 210 * global_opacity / 255 ));
+			cur_y += rule_h + 1;
 		}
 		else if( team != SLAYER_TEAM_CT && team != SLAYER_TEAM_T && !drawn_spec_header )
 		{
@@ -1318,9 +1330,11 @@ void Slayer_Scoreboard_Draw( void )
 			Q_snprintf( buf, sizeof( buf ), "Spectators  -  %d players", spec_player_count );
 			CL_DrawString( col_name_text_x, cur_y, buf, color_spec, font, FONT_DRAW_UTF8 );
 			cur_y += row_h;
-			// Thin separator below Spectator header
-			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, ( row_h > 40 ? 3 : 2 ), 100, 100, 100, 80 );
-			cur_y += 3;
+			// Rule below the Spectator header — dimmer than the team rules, as on
+			// the reference, but still solid rather than a faint wash.
+			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, rule_h,
+				150, 150, 150, (byte)( 170 * global_opacity / 255 ));
+			cur_y += rule_h + 1;
 		}
 
 		// Stop drawing if we exceed the board after team header
