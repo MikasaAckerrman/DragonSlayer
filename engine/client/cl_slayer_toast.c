@@ -56,12 +56,12 @@ void Slayer_Toast_OnConnected( void )
 
 	if( id != 0 )
 	{
-		Q_snprintf( line, sizeof( line ), "Вход выполнен — SteamID %" PRIu64, id );
+		Q_snprintf( line, sizeof( line ), "Ваш аккаунт: SteamID %" PRIu64, id );
 		Slayer_Toast_Show( "Steam", line );
 	}
 	else
 	{
-		Slayer_Toast_Show( "Steam", "Вход не выполнен" );
+		Slayer_Toast_Show( "Steam", "Аккаунт Steam не привязан" );
 	}
 }
 

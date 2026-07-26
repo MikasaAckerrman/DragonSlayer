@@ -53,6 +53,7 @@ Other platforms: Uses non-blocking HTTP sockets (port 80, no TLS).
 static JavaVM   *avd_jvm;             // cached from Init()
 static jclass    avd_activity_class;   // global ref to XashActivity class
 static jmethodID avd_download_method;  // downloadAvatar method ID
+static volatile int avd_slot_started[MAX_CLIENTS]; // worker reached the JNI call (diag)
 
 static volatile int avd_slot_result[MAX_CLIENTS];  // thread-safe via volatile + barriers
 static uint64_t     avd_slot_id[MAX_CLIENTS];
@@ -126,6 +127,13 @@ static void *AVD_WorkerThread( void *arg )
 		free( work );
 		return NULL;
 	}
+
+	// Mark that the worker reached the JNI call (main thread logs this in
+	// Frame). If we later see "reached downloadAvatar" but never SUCCESS/FAIL,
+	// the Java call itself is blocking; if we never see it, the thread/attach
+	// is the problem.
+	avd_slot_started[work->slot] = 1;
+	__sync_synchronize();
 
 	// Call Java method
 	result = (*env)->CallStaticIntMethod( env, avd_activity_class,
@@ -425,6 +433,12 @@ qboolean Slayer_AvatarDownload_Frame( void )
 
 	for( i = 0; i < MAX_CLIENTS; i++ )
 	{
+		if( avd_slot_started[i] == 1 )
+		{
+			avd_slot_started[i] = 2;   // logged once
+			Slayer_Log_Printf( "avatar worker: slot %d reached downloadAvatar() JNI call", i );
+		}
+
 		if( avd_slot_result[i] == AVD_RESULT_SUCCESS )
 		{
 			avd_slot_result[i] = AVD_RESULT_DONE;
