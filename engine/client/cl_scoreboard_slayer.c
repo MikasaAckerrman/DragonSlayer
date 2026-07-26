@@ -45,6 +45,7 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_border_color, "235 231 197 95", FCVAR
 static CVAR_DEFINE_AUTO( slayer_scoreboard_opacity, "220", FCVAR_ARCHIVE, "Slayer3D: overall scoreboard opacity (0-255)" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_width, "0.92", FCVAR_ARCHIVE, "Slayer3D: scoreboard width as a fraction of screen width (0.50-0.99; PC reference is 0.843)" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_avatar, "3.0", FCVAR_ARCHIVE, "Slayer3D: avatar icon size as a multiple of the font glyph height" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_rowscale, "1.15", FCVAR_ARCHIVE, "Slayer3D: scoreboard cell height multiplier (1.0-2.0; PC reference works out to ~1.3)" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_ondeath, "1", FCVAR_ARCHIVE, "Slayer3D: show the scoreboard automatically while dead (0 = only when held)" );
 
 // ===========================================================================
@@ -494,6 +495,7 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_scoreboard_ondeath );
 	Cvar_RegisterVariable( &slayer_scoreboard_width );
 	Cvar_RegisterVariable( &slayer_scoreboard_avatar );
+	Cvar_RegisterVariable( &slayer_scoreboard_rowscale );
 
 	Cmd_AddCommand( "+slayer_scoreboard", Cmd_ScoreboardDown_f,
 		"show Slayer3D custom scoreboard" );
@@ -1063,17 +1065,29 @@ void Slayer_Scoreboard_Draw( void )
 		if( board_w > (int)( screen_h * 2.1f ) ) board_w = (int)( screen_h * 2.1f ); // ultrawide guard
 	}
 
-	// === DIAG: build summary (visible to user via adb logcat -s Xash; Con_DPrintf
-	// avoids per-frame in-game console flood while the scoreboard is held) ===
-	Con_DPrintf( "Slayer SB: built %d players (CT=%d T=%d SPEC=%d) maxclients=%d playernum=%d\n",
-		num_players, ct_player_count, t_player_count, spec_player_count,
-		cl.maxclients, cl.playernum );
+	// === DIAG: build summary. This runs every frame the board is held, so it is
+	// emitted ONLY when the roster actually changes — it used to flood both the
+	// in-game console and logcat with an identical line per frame. ===
+	{
+		static int last_n = -1, last_ct = -1, last_t = -1, last_spec = -1;
+
+		if( num_players != last_n || ct_player_count != last_ct
+		 || t_player_count != last_t || spec_player_count != last_spec )
+		{
+			last_n = num_players; last_ct = ct_player_count;
+			last_t = t_player_count; last_spec = spec_player_count;
+
+			Con_DPrintf( "Slayer SB: built %d players (CT=%d T=%d SPEC=%d) maxclients=%d playernum=%d\n",
+				num_players, ct_player_count, t_player_count, spec_player_count,
+				cl.maxclients, cl.playernum );
 #if XASH_ANDROID
-	__android_log_print( ANDROID_LOG_INFO, "Xash",
-		"Slayer SB: built %d players (CT=%d T=%d SPEC=%d) maxclients=%d playernum=%d",
-		num_players, ct_player_count, t_player_count, spec_player_count,
-		cl.maxclients, cl.playernum );
+			__android_log_print( ANDROID_LOG_INFO, "Xash",
+				"Slayer SB: built %d players (CT=%d T=%d SPEC=%d) maxclients=%d playernum=%d",
+				num_players, ct_player_count, t_player_count, spec_player_count,
+				cl.maxclients, cl.playernum );
 #endif
+		}
+	}
 
 	// Layout: font-size tier + row compression + board height.
 	// Preserves AUTO-EXPAND (few players => board grows with the roster) while
@@ -1118,6 +1132,19 @@ void Slayer_Scoreboard_Draw( void )
 		if( content_rows > 24 && row_pad > 4 ) row_pad = 4;
 		row_h_full = font->charHeight + row_pad;
 
+		// Cell height coefficient. On the measured PC reference the glyph fills
+		// 0.58 of the row pitch; the default tiers here give ~0.75 (charHeight 30,
+		// row_h 40 on a 2800x1260 panel), i.e. tighter cells than PC. This cvar
+		// opens them up without touching the crowded-roster path, since the
+		// compression step below still clamps everything to the available height.
+		{
+			float rscale = slayer_scoreboard_rowscale.value;
+
+			if( rscale < 1.0f ) rscale = 1.0f;
+			if( rscale > 2.0f ) rscale = 2.0f;
+			row_h_full = (int)( row_h_full * rscale + 0.5f );
+		}
+
 		// Compression coefficient. natural_h is the auto-expand height; when it
 		// fits inside avail_h, comp stays 1.0 and nothing shrinks.
 		natural_h = row_h_full * content_rows + chrome_h;
@@ -1136,18 +1163,40 @@ void Slayer_Scoreboard_Draw( void )
 		board_h = row_h * content_rows + chrome_h;
 		if( board_h > avail_h )
 			board_h = avail_h;
-		if( board_h < (int)( screen_h * 0.30f ) )
-			board_h = (int)( screen_h * 0.30f );   // never a tiny stamp
 
-		// === DIAG: layout summary (Con_DPrintf avoids per-frame in-game console
-		// flood; logcat path stays INFO so the user can capture it) ===
-		Con_DPrintf( "Slayer SB: layout font=%d row_h=%d(full=%d comp=%.2f) hdr=%d rows=%d board_h=%d avail=%d screen=%dx%d\n",
-			fidx, row_h, row_h_full, comp, team_headers, content_rows, board_h, avail_h, screen_w, screen_h );
+		// The board hugs its content. There used to be a "never a tiny stamp"
+		// floor of 30% of screen height, but with a small roster that floor was
+		// the whole board — a couple of rows of text followed by a large empty
+		// panel (e.g. board_h=638 on a 1260-tall screen for four drawn rows).
+		// Floor at the chrome plus a few rows instead, so a near-empty server
+		// still reads as a board without padding out dead space.
+		{
+			int min_h = chrome_h + row_h * 3;
+			if( board_h < min_h ) board_h = min_h;
+			if( board_h > avail_h ) board_h = avail_h;
+		}
+
+		// === DIAG: layout summary — emitted only when the layout actually changes.
+		// It previously printed once per frame while the board was held, which is
+		// what flooded the in-game console. ===
+		{
+			static int last_font = -1, last_row_h = -1, last_rows = -1, last_board_h = -1;
+
+			if( fidx != last_font || row_h != last_row_h
+			 || content_rows != last_rows || board_h != last_board_h )
+			{
+				last_font = fidx; last_row_h = row_h;
+				last_rows = content_rows; last_board_h = board_h;
+
+				Con_DPrintf( "Slayer SB: layout font=%d row_h=%d(full=%d comp=%.2f) hdr=%d rows=%d board_h=%d avail=%d screen=%dx%d\n",
+					fidx, row_h, row_h_full, comp, team_headers, content_rows, board_h, avail_h, screen_w, screen_h );
 #if XASH_ANDROID
-		__android_log_print( ANDROID_LOG_INFO, "Xash",
-			"Slayer SB: layout font=%d row_h=%d(full=%d comp=%.2f) hdr=%d rows=%d board_h=%d avail=%d screen=%dx%d",
-			fidx, row_h, row_h_full, comp, team_headers, content_rows, board_h, avail_h, screen_w, screen_h );
+				__android_log_print( ANDROID_LOG_INFO, "Xash",
+					"Slayer SB: layout font=%d row_h=%d(full=%d comp=%.2f) hdr=%d rows=%d board_h=%d avail=%d screen=%dx%d",
+					fidx, row_h, row_h_full, comp, team_headers, content_rows, board_h, avail_h, screen_w, screen_h );
 #endif
+			}
+		}
 	}
 
 	// Center the board
@@ -1314,14 +1363,24 @@ void Slayer_Scoreboard_Draw( void )
 		// Stop drawing if we exceed the board
 		if( cur_y + row_h > board_y + board_h - 4 )
 		{
-			// === DIAG: row clipped by board height (pre-team-header) ===
-			Con_Printf( "Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d (pre-hdr)\n",
-				row, num_players, cur_y, board_y + board_h );
+			// === DIAG: row clipped by board height (pre-team-header). This is hit
+			// every frame while the board is clipping, so report it only when the
+			// clip point actually moves — it used to flood the console. ===
+			{
+				static int last_clip_pre = -1;
+
+				if( row != last_clip_pre )
+				{
+					last_clip_pre = row;
+					Con_DPrintf( "Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d (pre-hdr)\n",
+						row, num_players, cur_y, board_y + board_h );
 #if XASH_ANDROID
-			__android_log_print( ANDROID_LOG_INFO, "Xash",
-				"Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d (pre-hdr)",
-				row, num_players, cur_y, board_y + board_h );
+					__android_log_print( ANDROID_LOG_INFO, "Xash",
+						"Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d (pre-hdr)",
+						row, num_players, cur_y, board_y + board_h );
 #endif
+				}
+			}
 			break;
 		}
 
@@ -1370,14 +1429,23 @@ void Slayer_Scoreboard_Draw( void )
 		// Stop drawing if we exceed the board after team header
 		if( cur_y + row_h > board_y + board_h - 4 )
 		{
-			// === DIAG: row clipped by board height (post-team-header) ===
-			Con_Printf( "Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d (post-hdr)\n",
-				row, num_players, cur_y, board_y + board_h );
+			// === DIAG: row clipped by board height (post-team-header). Same
+			// per-frame flood as the pre-header case; report only on change. ===
+			{
+				static int last_clip_post = -1;
+
+				if( row != last_clip_post )
+				{
+					last_clip_post = row;
+					Con_DPrintf( "Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d (post-hdr)\n",
+						row, num_players, cur_y, board_y + board_h );
 #if XASH_ANDROID
-			__android_log_print( ANDROID_LOG_INFO, "Xash",
-				"Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d (post-hdr)",
-				row, num_players, cur_y, board_y + board_h );
+					__android_log_print( ANDROID_LOG_INFO, "Xash",
+						"Slayer SB: height-clip break at row=%d/%d cur_y=%d board_bottom=%d (post-hdr)",
+						row, num_players, cur_y, board_y + board_h );
 #endif
+				}
+			}
 			break;
 		}
 
