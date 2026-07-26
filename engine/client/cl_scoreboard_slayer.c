@@ -33,10 +33,10 @@ GNU General Public License for more details.
 // ===========================================================================
 
 static CVAR_DEFINE_AUTO( slayer_scoreboard, "1", FCVAR_ARCHIVE, "Slayer3D: enable custom scoreboard (0 = disabled)" );
-static CVAR_DEFINE_AUTO( slayer_scoreboard_bg_color, "20 20 20 180", FCVAR_ARCHIVE, "Slayer3D: scoreboard background RGBA" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_bg_color, "0 0 0 150", FCVAR_ARCHIVE, "Slayer3D: scoreboard background RGBA" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_text_color, "255 255 255 255", FCVAR_ARCHIVE, "Slayer3D: scoreboard text RGBA" );
-static CVAR_DEFINE_AUTO( slayer_scoreboard_ct_color, "120 180 255", FCVAR_ARCHIVE, "Slayer3D: CT team RGB" );
-static CVAR_DEFINE_AUTO( slayer_scoreboard_t_color, "255 100 80", FCVAR_ARCHIVE, "Slayer3D: T team RGB" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_ct_color, "153 204 255", FCVAR_ARCHIVE, "Slayer3D: CT team RGB (PC CS blue)" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_t_color, "255 63 63", FCVAR_ARCHIVE, "Slayer3D: T team RGB (PC CS red)" );
 // Border alpha lowered from 200 -> 150 (lighter visual weight, less stair-stepping)
 static CVAR_DEFINE_AUTO( slayer_scoreboard_border_color, "255 255 255 150", FCVAR_ARCHIVE, "Slayer3D: scoreboard border RGBA" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_opacity, "220", FCVAR_ARCHIVE, "Slayer3D: overall scoreboard opacity (0-255)" );
@@ -56,7 +56,7 @@ typedef struct
 	int  deaths;
 	int  team_id;    // SLAYER_TEAM_*
 	int  health;     // HP from cl.local.health (only valid for local/spectated player)
-	byte flags;      // bit 0 = dead, bit 2 = has bomb
+	byte flags;      // bit0=dead(1) bit1=bomb(2) bit2=vip(4) bit3=defuser(8)  [VERIFY on live server]
 	byte connected;  // set when ScoreInfo received for this slot
 } slayer_score_t;
 
@@ -74,6 +74,12 @@ static double          slayer_status_next_time;       // throttle: next allowed 
 static double          slayer_status_deadline;        // until: parse # lines from svc_print
 static qboolean        slayer_status_pending;          // true while we expect status reply
 static int             slayer_steam_reject_count;     // debounce: non-STEAM lines logged per session (reset on map change)
+
+// Ping "hold-last-good" cache: cl.players[].ping drops to 0 on transient
+// snapshots and when the board is (re)opened cold. Keep the last non-zero
+// value briefly so the Latency column doesn't flicker to "-".
+static int             slayer_ping_cache[MAX_CLIENTS];
+static double          slayer_ping_cache_time[MAX_CLIENTS];
 
 // Cached parsed cvar colors (re-parsed only when cvar string changes)
 static char   cached_bg_str[64] = "";
@@ -485,6 +491,8 @@ void Slayer_Scoreboard_Reset( void )
 	memset( slayer_scores, 0, sizeof( slayer_scores ) );
 	memset( slayer_steamid64, 0, sizeof( slayer_steamid64 ) );
 	memset( slayer_avatar_tex, 0, sizeof( slayer_avatar_tex ) );
+	memset( slayer_ping_cache, 0, sizeof( slayer_ping_cache ) );
+	memset( slayer_ping_cache_time, 0, sizeof( slayer_ping_cache_time ) );
 	slayer_scoreboard_active = false;
 	slayer_status_pending = false;
 	slayer_status_next_time = 0.0;   // allow immediate re-fetch on next connect
@@ -593,6 +601,20 @@ static void Slayer_DrawRect( int x, int y, int w, int h, byte r, byte g, byte b,
 	ref.dllFuncs.FillRGBA( kRenderTransTexture, x, y, w, h, r, g, b, a );
 }
 
+// Draw a proportional string right-aligned so its RIGHT edge sits at right_x.
+// Used for the numeric columns (HP/Score/Deaths/Latency) so digits line up
+// regardless of 1/2/3-digit values, matching PC CS 1.6.
+static void Slayer_DrawStringRight( cl_font_t *font, int right_x, int y, const char *s, const rgba_t color )
+{
+	int w = 0, h = 0;
+
+	if( !font || !s )
+		return;
+
+	CL_DrawStringLen( font, s, &w, &h, FONT_DRAW_UTF8 );
+	CL_DrawString( (float)( right_x - w ), (float)y, s, color, font, FONT_DRAW_UTF8 );
+}
+
 // Draw one rounded corner of the border by walking slayer_border_corner_segs[]
 // and reflecting each segment across X/Y as requested. The corner table
 // describes the top-left quadrant; all other quadrants are exact mirrors.
@@ -627,14 +649,14 @@ static int Slayer_SortCompare( const void *a, const void *b )
 	const slayer_sort_entry_t *ea = (const slayer_sort_entry_t *)a;
 	const slayer_sort_entry_t *eb = (const slayer_sort_entry_t *)b;
 
-	// CT first (2), then T (1), then others
+	// T first (1), then CT (2), then others — matches PC CS 1.6 scoreboard order
 	if( ea->team_id != eb->team_id )
 	{
-		// CT (2) before T (1) before unassigned (0) / spectator (3)
-		int order_a = ( ea->team_id == SLAYER_TEAM_CT ) ? 0 :
-		              ( ea->team_id == SLAYER_TEAM_T ) ? 1 : 2;
-		int order_b = ( eb->team_id == SLAYER_TEAM_CT ) ? 0 :
-		              ( eb->team_id == SLAYER_TEAM_T ) ? 1 : 2;
+		// T (1) before CT (2) before unassigned (0) / spectator (3)
+		int order_a = ( ea->team_id == SLAYER_TEAM_T ) ? 0 :
+		              ( ea->team_id == SLAYER_TEAM_CT ) ? 1 : 2;
+		int order_b = ( eb->team_id == SLAYER_TEAM_T ) ? 0 :
+		              ( eb->team_id == SLAYER_TEAM_CT ) ? 1 : 2;
 		if( order_a != order_b )
 			return order_a - order_b;
 	}
@@ -658,7 +680,7 @@ void Slayer_Scoreboard_Draw( void )
 	int          screen_w, screen_h;
 	int          board_x, board_y, board_w, board_h;
 	int          row_h, col_name_x, col_frags_x, col_deaths_x, col_ping_x, col_health_x;
-	int          text_w;
+	int          col_name_text_x;   // fixed name-column origin (after the reserved avatar gutter)
 	int          cur_y;
 	int          ct_player_count = 0, t_player_count = 0, spec_player_count = 0;
 	int          drawn_ct_header = 0, drawn_t_header = 0, drawn_spec_header = 0;
@@ -734,12 +756,12 @@ void Slayer_Scoreboard_Draw( void )
 	if( screen_w <= 0 || screen_h <= 0 )
 		return;
 
-	// Get font metrics
+	// Get font metrics. This is only the fallback; once the player count is
+	// known a resolution- and crowd-appropriate size tier is selected in the
+	// compression block below, and row_h is computed there.
 	font = Con_GetCurFont();
-	if( !font )
+	if( !font || !font->valid )
 		return;
-
-	row_h = font->charHeight + 4;
 
 	// Use cached cvar colors (re-parsed only when cvar string changes)
 	if( Q_strcmp( cached_bg_str, slayer_scoreboard_bg_color.string ) )
@@ -789,6 +811,8 @@ void Slayer_Scoreboard_Draw( void )
 			slayer_scores[i].connected = 0;
 			slayer_steamid64[i] = 0;
 			slayer_avatar_tex[i] = 0;
+			slayer_ping_cache[i] = 0;
+			slayer_ping_cache_time[i] = 0.0;
 			continue;
 		}
 
@@ -832,8 +856,16 @@ void Slayer_Scoreboard_Draw( void )
 			spec_player_count++;
 	}
 
-	// Fixed board width: 65% of screen_w
-	board_w = (int)( screen_w * 0.65f );
+	// Screen-relative width, slightly larger than PC (~0.55-0.60), clamped to a
+	// sane band so it stays card-like on narrow and ultrawide phone panels.
+	board_w = (int)( screen_w * 0.72f );
+	{
+		int min_w = (int)( screen_w * 0.55f );
+		int max_w = (int)( screen_w * 0.80f );
+		if( board_w < min_w ) board_w = min_w;
+		if( board_w > max_w ) board_w = max_w;
+		if( board_w > (int)( screen_h * 1.6f ) ) board_w = (int)( screen_h * 1.6f ); // ultrawide guard
+	}
 
 	// === DIAG: build summary (visible to user via adb logcat -s Xash; Con_DPrintf
 	// avoids per-frame in-game console flood while the scoreboard is held) ===
@@ -847,35 +879,68 @@ void Slayer_Scoreboard_Draw( void )
 		cl.maxclients, cl.playernum );
 #endif
 
-	// Height adapts to content: hostname + column-headers + populated team headers + rows + padding
+	// Layout: font-size tier + row compression + board height.
+	// Preserves AUTO-EXPAND (few players => board grows with the roster) while
+	// adding COMPRESSION so a FULL server still fits on a phone screen instead
+	// of silently clipping the last rows (the old clamp-then-break behaviour).
 	{
-		// Count only team headers that will actually render (have >=1 player).
-		// Old code assumed exactly 2 (CT+T); when all 3 (CT+T+SPEC) fire the
-		// content under-allocated by one row and the inner height-clip break
-		// silently dropped the last row. Add +60 of slack to cover the
-		// cumulative top-pad / inter-team-spacing / separator pixels (was 40
-		// which is too tight when 3 team headers fire).
 		int team_headers = ( ct_player_count > 0 ? 1 : 0 )
 		                 + ( t_player_count > 0 ? 1 : 0 )
 		                 + ( spec_player_count > 0 ? 1 : 0 );
-		int content_rows = num_players + 2 + team_headers;
-		int min_h = row_h * content_rows + 60;
-		int max_h = (int)( screen_h * 0.92f );
+		// content rows = players + team headers + title row + column-header row
+		int content_rows = num_players + team_headers + 2;
 
-		board_h = min_h;
-		if( board_h > max_h )
-			board_h = max_h;
-		if( board_h < (int)( screen_h * 0.20f ) )
-			board_h = (int)( screen_h * 0.20f );
+		// Fixed non-row chrome: title/header paddings + separators + per-team
+		// spacing + bottom margin. Kept slightly generous so the last row never
+		// touches the border.
+		int chrome_h = 34 + team_headers * 7;
+		int avail_h  = (int)( screen_h * 0.94f );   // vertical budget (a touch > PC ~0.90)
 
-		// === DIAG: layout summary (Con_DPrintf to avoid per-frame in-game
-		// console flood; logcat path stays INFO so the user can capture it) ===
-		Con_DPrintf( "Slayer SB: layout row_h=%d team_hdr=%d board_h=%d (min=%d max=%d) screen=%dx%d\n",
-			row_h, team_headers, board_h, min_h, max_h, screen_w, screen_h );
+		int   fidx, row_pad, row_h_full, natural_h;
+		float comp = 1.0f;
+
+		// Base font size by resolution, then downshift one tier per crowd
+		// threshold so tall rosters fit on short screens without crushing glyphs.
+		fidx = ( screen_w >= 1280 ) ? 2 : ( screen_w >= 640 ) ? 1 : 0;
+		if( content_rows > 24 && fidx > 0 ) fidx--;
+		if( content_rows > 32 && fidx > 0 ) fidx--;
+		{
+			cl_font_t *f = Con_GetFont( fidx );
+			if( f && f->valid ) font = f;
+		}
+
+		// Density-aware full row height: roomier when the roster is sparse
+		// (this is what makes the board "slightly larger when few players").
+		row_pad    = ( content_rows <= 14 ) ? 7 : ( content_rows <= 22 ? 5 : 4 );
+		row_h_full = font->charHeight + row_pad;
+
+		// Compression coefficient. natural_h is the auto-expand height; when it
+		// fits inside avail_h, comp stays 1.0 and nothing shrinks.
+		natural_h = row_h_full * content_rows + chrome_h;
+		if( natural_h > avail_h && row_h_full * content_rows > 0 )
+			comp = (float)( avail_h - chrome_h ) / (float)( row_h_full * content_rows );
+		if( comp > 1.0f ) comp = 1.0f;
+
+		row_h = (int)( row_h_full * comp + 0.5f );
+		if( row_h < font->charHeight + 1 )
+			row_h = font->charHeight + 1;   // a glyph must still fit inside its row
+
+		// Board height from the row height ACTUALLY used, so it stays exactly
+		// consistent with the row loop's advances.
+		board_h = row_h * content_rows + chrome_h;
+		if( board_h > avail_h )
+			board_h = avail_h;
+		if( board_h < (int)( screen_h * 0.22f ) )
+			board_h = (int)( screen_h * 0.22f );   // tiny-roster floor
+
+		// === DIAG: layout summary (Con_DPrintf avoids per-frame in-game console
+		// flood; logcat path stays INFO so the user can capture it) ===
+		Con_DPrintf( "Slayer SB: layout font=%d row_h=%d(full=%d comp=%.2f) hdr=%d rows=%d board_h=%d avail=%d screen=%dx%d\n",
+			fidx, row_h, row_h_full, comp, team_headers, content_rows, board_h, avail_h, screen_w, screen_h );
 #if XASH_ANDROID
 		__android_log_print( ANDROID_LOG_INFO, "Xash",
-			"Slayer SB: layout row_h=%d team_hdr=%d board_h=%d (min=%d max=%d) screen=%dx%d",
-			row_h, team_headers, board_h, min_h, max_h, screen_w, screen_h );
+			"Slayer SB: layout font=%d row_h=%d(full=%d comp=%.2f) hdr=%d rows=%d board_h=%d avail=%d screen=%dx%d",
+			fidx, row_h, row_h_full, comp, team_headers, content_rows, board_h, avail_h, screen_w, screen_h );
 #endif
 	}
 
@@ -883,58 +948,37 @@ void Slayer_Scoreboard_Draw( void )
 	board_x = ( screen_w - board_w ) / 2;
 	board_y = ( screen_h - board_h ) / 2;
 
-	// Simulated rounded corners (20px radius, 5 strips per side)
+	// Flat semi-transparent panel (PC CS 1.6 style) with a 1px frame.
 	{
 		byte bg_r = color_bg[0], bg_g = color_bg[1], bg_b = color_bg[2];
 		byte bg_a = (byte)( color_bg[3] * global_opacity / 255 );
-		// Main body (inset 20px top/bottom)
-		Slayer_DrawRect( board_x, board_y + 20, board_w, board_h - 40, bg_r, bg_g, bg_b, bg_a );
-		// Top rounding (5 strips, progressively narrower)
-		Slayer_DrawRect( board_x + 16, board_y, board_w - 32, 4, bg_r, bg_g, bg_b, bg_a );
-		Slayer_DrawRect( board_x + 12, board_y + 4, board_w - 24, 4, bg_r, bg_g, bg_b, bg_a );
-		Slayer_DrawRect( board_x + 8, board_y + 8, board_w - 16, 4, bg_r, bg_g, bg_b, bg_a );
-		Slayer_DrawRect( board_x + 4, board_y + 12, board_w - 8, 4, bg_r, bg_g, bg_b, bg_a );
-		Slayer_DrawRect( board_x + 2, board_y + 16, board_w - 4, 4, bg_r, bg_g, bg_b, bg_a );
-		// Bottom rounding (5 strips, progressively narrower)
-		Slayer_DrawRect( board_x + 2, board_y + board_h - 20, board_w - 4, 4, bg_r, bg_g, bg_b, bg_a );
-		Slayer_DrawRect( board_x + 4, board_y + board_h - 16, board_w - 8, 4, bg_r, bg_g, bg_b, bg_a );
-		Slayer_DrawRect( board_x + 8, board_y + board_h - 12, board_w - 16, 4, bg_r, bg_g, bg_b, bg_a );
-		Slayer_DrawRect( board_x + 12, board_y + board_h - 8, board_w - 24, 4, bg_r, bg_g, bg_b, bg_a );
-		Slayer_DrawRect( board_x + 16, board_y + board_h - 4, board_w - 32, 4, bg_r, bg_g, bg_b, bg_a );
-	}
-
-	// Rounded border (1px thick, follows same contour as background)
-	{
 		byte br_r = cached_color_border[0], br_g = cached_color_border[1];
-		byte br_b = cached_color_border[2], br_a = (byte)( cached_color_border[3] * global_opacity / 255 );
+		byte br_b = cached_color_border[2];
+		byte br_a = (byte)( cached_color_border[3] * global_opacity / 255 );
 
-		// Four staircase corners (table-driven, no overlap at the step elbows).
-		Slayer_DrawBorderCorner( board_x, board_y, board_w, board_h, false, false, br_r, br_g, br_b, br_a );
-		Slayer_DrawBorderCorner( board_x, board_y, board_w, board_h, true,  false, br_r, br_g, br_b, br_a );
-		Slayer_DrawBorderCorner( board_x, board_y, board_w, board_h, false, true,  br_r, br_g, br_b, br_a );
-		Slayer_DrawBorderCorner( board_x, board_y, board_w, board_h, true,  true,  br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x, board_y, board_w, board_h, bg_r, bg_g, bg_b, bg_a );
 
-		// Top horizontal cap
-		Slayer_DrawRect( board_x + 16, board_y, board_w - 32, 1, br_r, br_g, br_b, br_a );
-
-		// Bottom horizontal cap
-		Slayer_DrawRect( board_x + 16, board_y + board_h - 1, board_w - 32, 1, br_r, br_g, br_b, br_a );
-
-		// Body side walls. Height is board_h - 42 because the two body shoulder
-		// rows (y = board_y + 20 and y = board_y + board_h - 21) are now painted
-		// by the corner template's {0,20,2,1} entry under the y-mirror.
-		Slayer_DrawRect( board_x, board_y + 21, 1, board_h - 42, br_r, br_g, br_b, br_a );
-		Slayer_DrawRect( board_x + board_w - 1, board_y + 21, 1, board_h - 42, br_r, br_g, br_b, br_a );
+		// 1px flat frame (top / bottom / left / right)
+		Slayer_DrawRect( board_x, board_y, board_w, 1, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x, board_y + board_h - 1, board_w, 1, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x, board_y, 1, board_h, br_r, br_g, br_b, br_a );
+		Slayer_DrawRect( board_x + board_w - 1, board_y, 1, board_h, br_r, br_g, br_b, br_a );
 	}
 
 	cur_y = board_y;
 
-	// Column layout (percentage of board width)
+	// Column layout. The numeric columns (health/frags/deaths/ping) are RIGHT
+	// edges — text is right-aligned to them so digits line up like PC CS 1.6.
 	col_name_x   = board_x + (int)( board_w * 0.04f );
-	col_health_x = board_x + (int)( board_w * 0.45f );
-	col_frags_x  = board_x + (int)( board_w * 0.58f );
-	col_deaths_x = board_x + (int)( board_w * 0.70f );
-	col_ping_x   = board_x + (int)( board_w * 0.82f );
+	col_health_x = board_x + (int)( board_w * 0.50f );
+	col_frags_x  = board_x + (int)( board_w * 0.62f );
+	col_deaths_x = board_x + (int)( board_w * 0.74f );
+	col_ping_x   = board_x + (int)( board_w * 0.88f );
+
+	// Fixed name-column origin: a constant avatar gutter is ALWAYS reserved so
+	// the name never jumps when a Steam avatar finishes downloading (or is
+	// absent). The gutter tracks row_h but only changes when the roster does.
+	col_name_text_x = col_name_x + row_h + 4;
 
 	// Draw server name (left-aligned)
 	hostname = Info_ValueForKey( cl.serverinfo, "hostname" );
@@ -946,7 +990,7 @@ void Slayer_Scoreboard_Draw( void )
 		hostname = cls.servername;
 
 	cur_y += 4;
-	Con_DrawString( col_name_x, cur_y, hostname, color_text );
+	CL_DrawString( col_name_x, cur_y, hostname, color_text, font, FONT_DRAW_UTF8 );
 
 	// Draw map name (right-aligned, same line as hostname)
 	{
@@ -956,10 +1000,8 @@ void Slayer_Scoreboard_Draw( void )
 		if( mapname && mapname[0] != '\0' )
 		{
 			rgba_t color_map;
-			int text_h_unused;
 			MakeRGBA( color_map, color_text[0] * 160 / 255, color_text[1] * 160 / 255, color_text[2] * 160 / 255, 200 );
-			Con_DrawStringLen( mapname, &text_w, &text_h_unused );
-			Con_DrawString( col_ping_x + (int)( board_w * 0.10f ) - text_w, cur_y, mapname, color_map );
+			Slayer_DrawStringRight( font, col_ping_x + (int)( board_w * 0.10f ), cur_y, mapname, color_map );
 		}
 	}
 	cur_y += row_h + 2;
@@ -972,10 +1014,10 @@ void Slayer_Scoreboard_Draw( void )
 	{
 		rgba_t color_hdr;
 		MakeRGBA( color_hdr, color_text[0] * 200 / 255, color_text[1] * 200 / 255, color_text[2] * 200 / 255, color_text[3] );
-		Con_DrawString( col_health_x, cur_y, "Health", color_hdr );
-		Con_DrawString( col_frags_x, cur_y, "Kills", color_hdr );
-		Con_DrawString( col_deaths_x, cur_y, "Deaths", color_hdr );
-		Con_DrawString( col_ping_x, cur_y, "Ping", color_hdr );
+		Slayer_DrawStringRight( font, col_health_x, cur_y, "HP", color_hdr );
+		Slayer_DrawStringRight( font, col_frags_x, cur_y, "Score", color_hdr );
+		Slayer_DrawStringRight( font, col_deaths_x, cur_y, "Deaths", color_hdr );
+		Slayer_DrawStringRight( font, col_ping_x, cur_y, "Latency", color_hdr );
 	}
 	cur_y += row_h;
 
@@ -1006,36 +1048,37 @@ void Slayer_Scoreboard_Draw( void )
 			break;
 		}
 
-		// Team section headers
-		if( team == SLAYER_TEAM_CT && !drawn_ct_header )
-		{
-			drawn_ct_header = 1;
-			Q_snprintf( buf, sizeof( buf ), "Counter-Terrorists  -  %d", ct_player_count );
-			Con_DrawString( col_name_x, cur_y, buf, color_ct );
-			cur_y += row_h;
-			// Thin separator below CT header
-			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, color_ct[0], color_ct[1], color_ct[2], 100 );
-			cur_y += 3;
-		}
-		else if( team == SLAYER_TEAM_T && !drawn_t_header )
+		// Team section headers (T first, then CT, then Spectators — PC order).
+		// A gap is added before every section except the first one drawn, so the
+		// leading section never has an odd top gap regardless of team ordering.
+		if( team == SLAYER_TEAM_T && !drawn_t_header )
 		{
 			drawn_t_header = 1;
-			// Spacing between teams
-			cur_y += 4;
-			Q_snprintf( buf, sizeof( buf ), "Terrorists  -  %d", t_player_count );
-			Con_DrawString( col_name_x, cur_y, buf, color_t );
+			if( drawn_ct_header || drawn_spec_header ) cur_y += 4;
+			Q_snprintf( buf, sizeof( buf ), "Terrorists  -  %d players", t_player_count );
+			CL_DrawString( col_name_x, cur_y, buf, color_t, font, FONT_DRAW_UTF8 );
 			cur_y += row_h;
 			// Thin separator below T header
 			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, color_t[0], color_t[1], color_t[2], 100 );
 			cur_y += 3;
 		}
+		else if( team == SLAYER_TEAM_CT && !drawn_ct_header )
+		{
+			drawn_ct_header = 1;
+			if( drawn_t_header || drawn_spec_header ) cur_y += 4;
+			Q_snprintf( buf, sizeof( buf ), "Counter-Terrorists  -  %d players", ct_player_count );
+			CL_DrawString( col_name_x, cur_y, buf, color_ct, font, FONT_DRAW_UTF8 );
+			cur_y += row_h;
+			// Thin separator below CT header
+			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, color_ct[0], color_ct[1], color_ct[2], 100 );
+			cur_y += 3;
+		}
 		else if( team != SLAYER_TEAM_CT && team != SLAYER_TEAM_T && !drawn_spec_header )
 		{
 			drawn_spec_header = 1;
-			// Spacing before spectator section
-			cur_y += 4;
-			Q_snprintf( buf, sizeof( buf ), "Spectators  -  %d", spec_player_count );
-			Con_DrawString( col_name_x, cur_y, buf, color_spec );
+			if( drawn_ct_header || drawn_t_header ) cur_y += 4;
+			Q_snprintf( buf, sizeof( buf ), "Spectators  -  %d players", spec_player_count );
+			CL_DrawString( col_name_x, cur_y, buf, color_spec, font, FONT_DRAW_UTF8 );
 			cur_y += row_h;
 			// Thin separator below Spectator header
 			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, 100, 100, 100, 80 );
@@ -1088,24 +1131,28 @@ void Slayer_Scoreboard_Draw( void )
 			row_alpha = 128;
 		}
 
-		// Draw avatar if available
+		// Avatar (optional) is drawn inside a FIXED reserved gutter; the name
+		// ALWAYS starts at col_name_text_x whether or not an avatar exists, so
+		// it never jumps when a Steam avatar finishes downloading (Requirement 2).
 		{
-			int name_x_offset = 0;
+			int avatar_size = row_h - 2;
+			int avatar_y    = cur_y + ( row_h - avatar_size ) / 2; // vertically centered
 
-			if( slayer_avatar_tex[pidx] > 0 )
+			if( slayer_avatar_tex[pidx] > 0 && avatar_size > 0 )
 			{
 				ref.dllFuncs.GL_SetRenderMode( kRenderTransTexture );
 				ref.dllFuncs.Color4ub( 255, 255, 255, row_alpha );
-				ref.dllFuncs.R_DrawStretchPic( col_name_x, cur_y, row_h, row_h, 0, 0, 1, 1, slayer_avatar_tex[pidx] );
-				name_x_offset = row_h + 4;
+				ref.dllFuncs.R_DrawStretchPic( col_name_x, avatar_y, avatar_size, avatar_size, 0, 0, 1, 1, slayer_avatar_tex[pidx] );
+				ref.dllFuncs.Color4ub( 255, 255, 255, 255 ); // restore, don't rely on the next drawer
 			}
 
-			Con_DrawString( col_name_x + name_x_offset, cur_y + 2, name, name_color );
+			CL_DrawString( col_name_text_x, cur_y + 2, name, name_color, font, FONT_DRAW_UTF8 );
 		}
 
-		// Frags
+		// Score / Deaths / Latency (right-aligned to their column edges)
 		{
 			rgba_t stat_color;
+			int    ping_now, ping_show;
 
 			if( team == SLAYER_TEAM_CT )
 				MakeRGBA( stat_color, color_ct[0], color_ct[1], color_ct[2], row_alpha );
@@ -1113,19 +1160,35 @@ void Slayer_Scoreboard_Draw( void )
 				MakeRGBA( stat_color, color_t[0], color_t[1], color_t[2], row_alpha );
 			else
 				MakeRGBA( stat_color, color_text[0], color_text[1], color_text[2], row_alpha );
+
+			// Score (frags)
 			Q_snprintf( buf, sizeof( buf ), "%d", slayer_scores[pidx].frags );
-			Con_DrawString( col_frags_x, cur_y + 2, buf, stat_color );
+			Slayer_DrawStringRight( font, col_frags_x, cur_y + 2, buf, stat_color );
 
 			// Deaths
 			Q_snprintf( buf, sizeof( buf ), "%d", slayer_scores[pidx].deaths );
-			Con_DrawString( col_deaths_x, cur_y + 2, buf, stat_color );
+			Slayer_DrawStringRight( font, col_deaths_x, cur_y + 2, buf, stat_color );
 
-			// Ping
-			if( cl.players[pidx].ping == 0 )
+			// Latency (hold-last-good): cl.players[].ping drops to 0 on transient
+			// snapshots and on a cold board-open; keep the last non-zero value for
+			// a few seconds so the column doesn't flicker to "-".
+			ping_now = cl.players[pidx].ping;
+			if( ping_now > 0 )
+			{
+				slayer_ping_cache[pidx]      = ping_now;
+				slayer_ping_cache_time[pidx] = host.realtime;
+				ping_show = ping_now;
+			}
+			else if( slayer_ping_cache[pidx] > 0 && host.realtime - slayer_ping_cache_time[pidx] < 5.0 )
+				ping_show = slayer_ping_cache[pidx];
+			else
+				ping_show = 0;
+
+			if( ping_show <= 0 )
 				Q_snprintf( buf, sizeof( buf ), "-" );
 			else
-				Q_snprintf( buf, sizeof( buf ), "%d", cl.players[pidx].ping );
-			Con_DrawString( col_ping_x, cur_y + 2, buf, stat_color );
+				Q_snprintf( buf, sizeof( buf ), "%d", ping_show );
+			Slayer_DrawStringRight( font, col_ping_x, cur_y + 2, buf, stat_color );
 
 			// Health column - only meaningful for CT/T (active round players).
 			// Spectators / unassigned: draw nothing (avoids leaking stale HP from
@@ -1140,7 +1203,7 @@ void Slayer_Scoreboard_Draw( void )
 						MakeRGBA( dead_color, color_ct[0], color_ct[1], color_ct[2], 200 );
 					else
 						MakeRGBA( dead_color, color_t[0], color_t[1], color_t[2], 200 );
-					Con_DrawString( col_health_x, cur_y + 2, "DEAD", dead_color );
+					Slayer_DrawStringRight( font, col_health_x, cur_y + 2, "DEAD", dead_color );
 				}
 				else
 				{
@@ -1159,7 +1222,7 @@ void Slayer_Scoreboard_Draw( void )
 					if( hp > 0 )
 					{
 						Q_snprintf( buf, sizeof( buf ), "%d", hp );
-						Con_DrawString( col_health_x, cur_y + 2, buf, stat_color );
+						Slayer_DrawStringRight( font, col_health_x, cur_y + 2, buf, stat_color );
 					}
 				}
 			}
