@@ -24,6 +24,7 @@ GNU General Public License for more details.
 #include "cl_view_slayer.h" // Slayer3D third-person camera
 #include "cl_scoreboard_slayer.h" // Slayer3D custom scoreboard
 #include "cl_hud_slayer.h" // Slayer3D crosshair HUD (damage indicator)
+#include "cl_slayer_toast.h" // Slayer3D Steam-style connect notification
 
 /*
 ===============
@@ -581,6 +582,7 @@ void V_PostRender( void )
 		R_ShowTree();
 		Slayer_HUD_Draw();
 		Slayer_Scoreboard_Draw();
+		Slayer_Toast_Draw();
 		Con_DrawConsole();
 		UI_UpdateMenu( host.realtime );
 		Con_DrawVersion();

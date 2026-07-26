@@ -25,6 +25,7 @@ GNU General Public License for more details.
 #include "cl_hud_slayer.h"
 #include "cl_sgs_slayer.h"
 #include "cl_steam_login.h"
+#include "cl_slayer_toast.h"
 #include "vid_common.h"
 #include "pm_local.h"
 #include "multi_emulator.h"
@@ -218,6 +219,8 @@ static void CL_CheckClientState( void )
 		cls.changelevel = false;		// changelevel is done
 		cls.changedemo = false;		// changedemo is done
 		cl.first_frame = true;		// first rendering frame
+
+		Slayer_Toast_OnConnected();	// Steam-style "connected" notification
 
 		SCR_MakeLevelShot();		// make levelshot if needs
 		Cvar_SetValue( "scr_loading", 0.0f );	// reset progress bar

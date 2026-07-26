@@ -24,6 +24,7 @@ GNU General Public License for more details.
 #include "cl_steam_api.h"
 #include "cl_steam_login.h"
 #include "cl_slayer_log.h"
+#include "cl_slayer_toast.h"
 #include <math.h>
 
 #if XASH_ANDROID
@@ -495,6 +496,7 @@ void Slayer_Scoreboard_Init( void )
 		"print Steam avatar download URLs for all players" );
 
 	Slayer_Log_Init();
+	Slayer_Toast_Init();
 	Slayer_AvatarDownload_Init();
 	Slayer_SteamAPI_Init();
 	Slayer_SteamLogin_Init();
