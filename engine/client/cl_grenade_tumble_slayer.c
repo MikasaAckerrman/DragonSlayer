@@ -263,8 +263,25 @@ static void Slayer_GT_CompensatePivot( struct cl_entity_s *ent )
 	if( DotProduct( L_center, L_center ) < 0.01f )
 		return;
 
-	// Pure rotation matrix from current angles (translation = origin = 0)
-	Matrix3x4_CreateFromEntity( mat, ent->angles, vec3_origin, 1.0f );
+	// Pure rotation matrix from current angles (translation = origin = 0).
+	//
+	// CRITICAL: this must be the SAME rotation the studio renderer will apply,
+	// or the compensation shifts the origin in the wrong direction and the mesh
+	// orbits instead of staying put. R_StudioSetUpTransform (ref/gl/gl_studio.c)
+	// negates PITCH before building its matrix — the inherited "stupid quake
+	// bug" — unless ENGINE_COMPENSATE_QUAKE_BUG is set. Building the matrix from
+	// ent->angles verbatim, as this used to, only agrees with the renderer while
+	// pitch is 0. During a tumble pitch is almost never 0, which is exactly when
+	// the wobble showed up.
+	{
+		vec3_t r_angles;
+
+		VectorCopy( ent->angles, r_angles );
+		if( !FBitSet( host.features, ENGINE_COMPENSATE_QUAKE_BUG ))
+			r_angles[PITCH] = -r_angles[PITCH];
+
+		Matrix3x4_CreateFromEntity( mat, r_angles, vec3_origin, 1.0f );
+	}
 	Matrix3x4_VectorRotate( mat, L_center, rotated_L );
 
 	VectorSubtract( rotated_L, L_center, shift );
