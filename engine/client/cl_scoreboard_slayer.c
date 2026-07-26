@@ -731,6 +731,7 @@ static void Slayer_DrawRoundedPanel( int x, int y, int w, int h, int R,
 	Slayer_DrawRect( x + R,     y,         w - 2 * R, 1, bR, bG, bB, border[3] );
 	Slayer_DrawRect( x + R,     y + h - 1, w - 2 * R, 1, bR, bG, bB, border[3] );
 	Slayer_DrawRect( x + R,     y + 1,     w - 2 * R, 1, bR, bG, bB, bevAA );
+	Slayer_DrawRect( x + R,     y + h - 2, w - 2 * R, 1, bR, bG, bB, bevAA );
 }
 
 // Draw one rounded corner of the border by walking slayer_border_corner_segs[]
@@ -1116,17 +1117,23 @@ void Slayer_Scoreboard_Draw( void )
 
 	cur_y = board_y;
 
-	// Column layout: five right-aligned stat columns (HP | Деньги | Счет |
-	// Смертей | Задержка). Their x positions are derived from the MEASURED
-	// header widths, laid out right-to-left with a guaranteed gap, so the
-	// (wider) Russian labels can never collide at any font size.
+	// Column layout. The name column reserves a fixed avatar gutter (so the
+	// name never shifts when an avatar loads); the five right-aligned stat
+	// columns (HP | Деньги | Счет | Смертей | Задержка) are placed right-to-left
+	// from MEASURED header widths so the Russian labels can't collide.
 	{
 		int gap = font->charHeight + 4;   // ~one glyph of breathing room
-		int hw, hh;
+		int hw, hh, av, min_health_x;
 
 		col_name_x = board_x + (int)( board_w * 0.012f );
-		col_ping_x = board_x + (int)( board_w * 0.978f );   // rightmost = Задержка
 
+		// Avatar gutter, capped so a tall-row sparse board doesn't reserve a
+		// huge slot next to small text -> fixed name-text origin.
+		av = row_h - 2;
+		if( av > font->charHeight * 2 ) av = font->charHeight * 2;
+		col_name_text_x = col_name_x + av + 4;
+
+		col_ping_x = board_x + (int)( board_w * 0.978f );   // rightmost = Задержка
 		CL_DrawStringLen( font, "Задержка", &hw, &hh, FONT_DRAW_UTF8 );
 		col_deaths_x = col_ping_x - hw - gap;
 		CL_DrawStringLen( font, "Смертей", &hw, &hh, FONT_DRAW_UTF8 );
@@ -1136,19 +1143,24 @@ void Slayer_Scoreboard_Draw( void )
 		CL_DrawStringLen( font, "Деньги", &hw, &hh, FONT_DRAW_UTF8 );
 		col_health_x = col_money_x - hw - gap;
 
-		// "Компл." sits in its own fixed column between the names and HP so
-		// every marker lines up vertically like PC.
-		col_kit_x = board_x + (int)( board_w * 0.40f );
-	}
+		// The stat block is a fixed pixel width; on a narrow board its left
+		// (HP) edge can cross into the names or off-screen. If so, shift the
+		// whole block right as a unit so it stays clear of the name column.
+		CL_DrawStringLen( font, "HP", &hw, &hh, FONT_DRAW_UTF8 );
+		min_health_x = col_name_text_x + hw + gap;
+		if( col_health_x < min_health_x )
+		{
+			int shift = min_health_x - col_health_x;
+			col_health_x += shift; col_money_x  += shift; col_frags_x += shift;
+			col_deaths_x += shift; col_ping_x   += shift;
+		}
 
-	// Fixed name-column origin: a constant avatar gutter is ALWAYS reserved so
-	// the name never jumps when a Steam avatar finishes downloading (or is
-	// absent). The gutter tracks the avatar box (capped so a sparse, tall-row
-	// board doesn't reserve a huge slot next to small text).
-	{
-		int av = row_h - 2;
-		if( av > font->charHeight * 2 ) av = font->charHeight * 2;
-		col_name_text_x = col_name_x + av + 4;
+		// "Компл." sits just LEFT of the (measured, floating) HP column so it
+		// can never overrun the HP digits, and is floored against the names.
+		CL_DrawStringLen( font, "Компл.", &hw, &hh, FONT_DRAW_UTF8 );
+		col_kit_x = col_health_x - font->charHeight * 2 - gap - hw;
+		if( col_kit_x < col_name_text_x )
+			col_kit_x = col_name_text_x;
 	}
 
 	// Vertical centering of per-row text inside row_h: 0 when the row is floored
