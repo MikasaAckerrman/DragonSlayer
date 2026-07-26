@@ -1054,13 +1054,13 @@ void Slayer_Scoreboard_Draw( void )
 		// content rows = players + team headers + title row + column-header row
 		int content_rows = num_players + team_headers + 2;
 
-		// Fixed non-row chrome, matched to the ACTUAL per-frame advances so
-		// board_h and the row loop agree (an over-estimate here steals space
-		// from the rows and makes the tail clip on short screens):
-		//   +4 pre-title, +2 title extra, +4 sep, +4 sep, +4 bottom margin = 18,
-		//   plus per rendered team section (+3 separator, +4 inter-section gap).
-		int chrome_h = 26 + team_headers * 7;   // includes the lowered title row
-		int avail_h  = (int)( screen_h * 0.94f );   // vertical budget (a touch > PC ~0.90)
+		// Fixed non-row chrome. Kept GENEROUS: with tall rows (large fonts on
+		// hi-dpi phones) the per-section separators/gaps add up, and an
+		// under-estimate made the last row (often the lone spectator) hit the
+		// height-clip break and vanish. Better a little bottom padding than a
+		// dropped player.
+		int chrome_h = 30 + team_headers * 16;
+		int avail_h  = (int)( screen_h * 0.95f );
 
 		int   fidx, row_pad, row_h_full, natural_h;
 		float comp = 1.0f;

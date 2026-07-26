@@ -54,6 +54,7 @@ static JavaVM   *avd_jvm;             // cached from Init()
 static jclass    avd_activity_class;   // global ref to XashActivity class
 static jmethodID avd_download_method;  // downloadAvatar method ID
 static volatile int avd_slot_started[MAX_CLIENTS]; // worker reached the JNI call (diag)
+static volatile int avd_slot_entered[MAX_CLIENTS]; // worker thread actually started (diag)
 
 static volatile int avd_slot_result[MAX_CLIENTS];  // thread-safe via volatile + barriers
 static uint64_t     avd_slot_id[MAX_CLIENTS];
@@ -83,6 +84,10 @@ static void *AVD_WorkerThread( void *arg )
 	const char *basedir;
 	const char *gamedir;
 	jstring j_steamid, j_path;
+
+	// diag: prove the pthread actually runs (main-thread Frame logs this)
+	avd_slot_entered[work->slot] = 1;
+	__sync_synchronize();
 
 	__android_log_print( ANDROID_LOG_DEBUG, "Xash", "AvatarDL: worker thread starting for slot=%d", work->slot );
 
@@ -338,9 +343,7 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 
 	if( slayer_avatar_download.value == 0.0f )
 	{
-		__android_log_print( ANDROID_LOG_DEBUG, "Xash",
-			"AvatarDL: skip slot=%d steamid=%" PRIu64 " (cvar slayer_avatar_download=0)",
-			slot, steamid64 );
+		Slayer_Log_Printf( "avatar Request slot %d: SKIP (cvar slayer_avatar_download=0)", slot );
 		return;
 	}
 
@@ -348,15 +351,17 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 		return;
 
 	if( !avd_download_method )
+	{
+		Slayer_Log_Printf( "avatar Request slot %d: SKIP (JNI downloadAvatar not initialized)", slot );
 		return;  // JNI not initialized
+	}
 
 	// Already done or in progress?
 	if( avd_slot_result[slot] == AVD_RESULT_DONE ||
 	    avd_slot_result[slot] == AVD_RESULT_IN_PROGRESS )
 	{
-		__android_log_print( ANDROID_LOG_DEBUG, "Xash",
-			"AvatarDL: skip slot=%d steamid=%" PRIu64 " (slot busy: result=%d)",
-			slot, steamid64, avd_slot_result[slot] );
+		Slayer_Log_Printf( "avatar Request slot %d: SKIP (busy: result=%d — prior worker never finished?)",
+			slot, avd_slot_result[slot] );
 		return;
 	}
 
@@ -364,19 +369,15 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 	if( avd_slot_result[slot] == AVD_RESULT_FAIL &&
 	    host.realtime - avd_slot_fail_time[slot] < AVD_RETRY_DELAY )
 	{
-		__android_log_print( ANDROID_LOG_DEBUG, "Xash",
-			"AvatarDL: skip slot=%d steamid=%" PRIu64 " (cooldown, %.1fs left)",
-			slot, steamid64,
-			AVD_RETRY_DELAY - ( host.realtime - avd_slot_fail_time[slot] ) );
+		Slayer_Log_Printf( "avatar Request slot %d: SKIP (cooldown after fail)", slot );
 		return;
 	}
 
 	// Max concurrent check
 	if( avd_active_count >= AVD_MAX_CONCURRENT )
 	{
-		__android_log_print( ANDROID_LOG_DEBUG, "Xash",
-			"AvatarDL: skip slot=%d steamid=%" PRIu64 " (concurrent limit %d reached)",
-			slot, steamid64, AVD_MAX_CONCURRENT );
+		Slayer_Log_Printf( "avatar Request slot %d: SKIP (concurrent limit %d, active=%d)",
+			slot, AVD_MAX_CONCURRENT, avd_active_count );
 		return;
 	}
 
@@ -384,9 +385,7 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 	Q_snprintf( path, sizeof( path ), "avatars/%" PRIu64 ".png", steamid64 );
 	if( FS_FileExists( path, false ) )
 	{
-		__android_log_print( ANDROID_LOG_INFO, "Xash",
-			"AvatarDL: cache hit slot=%d steamid=%" PRIu64 " path=%s",
-			slot, steamid64, path );
+		Slayer_Log_Printf( "avatar Request slot %d: cache HIT %s", slot, path );
 		avd_slot_result[slot] = AVD_RESULT_DONE;
 		return;
 	}
@@ -411,9 +410,11 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 		avd_slot_result[slot] = AVD_RESULT_FAIL;
 		avd_slot_fail_time[slot] = host.realtime;
 		avd_active_count--;
+		Slayer_Log_Printf( "avatar Request slot %d: pthread_create FAILED", slot );
 		return;
 	}
 
+	Slayer_Log_Printf( "avatar Request slot %d: worker SPAWNED (active=%d)", slot, avd_active_count );
 	pthread_detach( thread );
 	__android_log_print( ANDROID_LOG_INFO, "Xash",
 		"AvatarDL: queued slot=%d steamid=%" PRIu64 " (active=%d)",
@@ -433,6 +434,11 @@ qboolean Slayer_AvatarDownload_Frame( void )
 
 	for( i = 0; i < MAX_CLIENTS; i++ )
 	{
+		if( avd_slot_entered[i] == 1 )
+		{
+			avd_slot_entered[i] = 2;   // logged once
+			Slayer_Log_Printf( "avatar worker: slot %d THREAD ENTERED (pthread runs)", i );
+		}
 		if( avd_slot_started[i] == 1 )
 		{
 			avd_slot_started[i] = 2;   // logged once

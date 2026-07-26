@@ -26,9 +26,9 @@ GNU General Public License for more details.
 static CVAR_DEFINE_AUTO( slayer_steam_toast, "1", FCVAR_ARCHIVE,
 	"Slayer3D: show a Steam-style notification on connect (0 = off)" );
 
-#define TOAST_DURATION  5.0
-#define TOAST_FADE_IN   0.30f
-#define TOAST_FADE_OUT  0.60f
+#define TOAST_DURATION  7.5
+#define TOAST_FADE_IN   0.35f
+#define TOAST_FADE_OUT  0.70f
 
 static char   toast_header[64];
 static char   toast_text[160];
@@ -48,21 +48,23 @@ void Slayer_Toast_Show( const char *header, const char *text )
 
 void Slayer_Toast_OnConnected( void )
 {
-	uint64_t id = Slayer_SteamLogin_GetLocalID();
-	char     line[160];
+	static qboolean shown_this_session = false;
+	uint64_t id;
 
 	if( slayer_steam_toast.value == 0.0f )
 		return;
 
-	if( id != 0 )
-	{
-		Q_snprintf( line, sizeof( line ), "Ваш аккаунт: SteamID %" PRIu64, id );
-		Slayer_Toast_Show( "Steam", line );
-	}
-	else
-	{
-		Slayer_Toast_Show( "Steam", "Аккаунт Steam не привязан" );
-	}
+	// Only once per game launch, and only if actually signed in — so it reads
+	// as "you're playing under Steam", not a banner that pops on every connect.
+	if( shown_this_session )
+		return;
+
+	id = Slayer_SteamLogin_GetLocalID();
+	if( id == 0 )
+		return;
+
+	shown_this_session = true;
+	Slayer_Toast_Show( "Steam", "Вы вошли через Steam" );
 }
 
 void Slayer_Toast_Draw( void )
