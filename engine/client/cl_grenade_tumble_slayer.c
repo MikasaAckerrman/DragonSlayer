@@ -73,6 +73,14 @@ GNU General Public License for more details.
 #include "studio.h"
 #include "xash3d_mathlib.h"
 #include "cl_grenade_tumble_slayer.h"
+#include "cl_slayer_log.h"
+
+// Last pivot-compensation values, captured for the throttled diagnostic below.
+// Written on the main thread by Slayer_GT_CompensatePivot, read by the diag.
+static vec3_t gt_diag_lcenter;
+static vec3_t gt_diag_shift;
+static vec3_t gt_diag_rangles;
+static char   gt_diag_model[64];
 
 // =============================================================================
 // Cvars
@@ -281,11 +289,17 @@ static void Slayer_GT_CompensatePivot( struct cl_entity_s *ent )
 			r_angles[PITCH] = -r_angles[PITCH];
 
 		Matrix3x4_CreateFromEntity( mat, r_angles, vec3_origin, 1.0f );
+		VectorCopy( r_angles, gt_diag_rangles );
 	}
 	Matrix3x4_VectorRotate( mat, L_center, rotated_L );
 
 	VectorSubtract( rotated_L, L_center, shift );
 	VectorSubtract( ent->origin, shift, ent->origin );
+
+	// Capture for the throttled diagnostic (see the tumble step below).
+	VectorCopy( L_center, gt_diag_lcenter );
+	VectorCopy( shift, gt_diag_shift );
+	Q_strncpy( gt_diag_model, ent->model->name, sizeof( gt_diag_model ));
 
 	// Diagnostic one-shot print (only when cvar >= 2)
 	if( slayer_grenade_pivot_fix.value >= 2.0f )
@@ -505,15 +519,30 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	VectorCopy( ent->origin, gt->last_origin );
 	gt->last_time = now;
 
-	// Level 2+: throttled diagnostic output
-	if( slayer_grenade_pivot_fix.value >= 2.0f && cl.time - gt_diag_last_print_l2 >= GT_DIAG_INTERVAL )
-	{
-		Con_Printf( "[SlayerGT] idx=%d speed=%.0f rate=%.0f deg=%.0f\n",
-			ent->index, speed, rate, RAD2DEG( gt->accum_theta ) );
-		gt_diag_last_print_l2 = cl.time;
-	}
-
 	Slayer_GT_AxisAngleToEngineEuler( gt->avel_dir, gt->accum_theta, ent->angles );
 	Slayer_GT_CompensatePivot( ent );
+
+	// Level 2+: throttled diagnostic. Runs AFTER the angles and the pivot shift
+	// are computed, so the log shows what was actually applied this frame, and
+	// goes to the Slayer file log so it can be sent back rather than only
+	// scrolling past in the console.
+	if( slayer_grenade_pivot_fix.value >= 2.0f && cl.time - gt_diag_last_print_l2 >= GT_DIAG_INTERVAL )
+	{
+		gt_diag_last_print_l2 = cl.time;
+
+		Con_Printf( "[SlayerGT] idx=%d speed=%.0f rate=%.0f deg=%.0f\n",
+			ent->index, speed, rate, RAD2DEG( gt->accum_theta ) );
+
+		Slayer_Log_Printf( "GT idx=%d model=%s speed=%.0f rate=%.0f theta=%.0fdeg "
+			"axis=(%.2f %.2f %.2f) ang=(%.1f %.1f %.1f) rang=(%.1f %.1f %.1f) "
+			"lcen=(%.1f %.1f %.1f) shift=(%.1f %.1f %.1f)",
+			ent->index, gt_diag_model[0] ? gt_diag_model : "?",
+			speed, rate, RAD2DEG( gt->accum_theta ),
+			gt->avel_dir[0], gt->avel_dir[1], gt->avel_dir[2],
+			ent->angles[0], ent->angles[1], ent->angles[2],
+			gt_diag_rangles[0], gt_diag_rangles[1], gt_diag_rangles[2],
+			gt_diag_lcenter[0], gt_diag_lcenter[1], gt_diag_lcenter[2],
+			gt_diag_shift[0], gt_diag_shift[1], gt_diag_shift[2] );
+	}
 }
 

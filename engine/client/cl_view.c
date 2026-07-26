@@ -582,9 +582,11 @@ void V_PostRender( void )
 		R_ShowTree();
 		Slayer_HUD_Draw();
 		Slayer_Scoreboard_Draw();
-		Slayer_Toast_Draw();
 		Con_DrawConsole();
 		UI_UpdateMenu( host.realtime );
+		// Toast goes AFTER the menu: it is raised at client start, and the menu
+		// covers the whole screen, so drawing it earlier hid the banner entirely.
+		Slayer_Toast_Draw();
 		Con_DrawVersion();
 		Con_DrawDebug(); // must be last
 		Touch_Draw();

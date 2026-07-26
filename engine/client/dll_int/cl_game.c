@@ -1976,6 +1976,32 @@ pfnDrawConsoleString
 drawing string like a console string
 =============
 */
+// Slayer3D: echo one assembled chat line to the console, skipping anything we
+// already printed. The ring holds more entries than a HUD can show at once, so
+// a full screen of chat still dedups instead of reprinting every frame.
+static void Slayer_EchoChatLine( const char *line )
+{
+	static char ring_buf[16][512];
+	static int  ring_idx = 0;
+	int         k;
+
+	if( !line || Q_strlen( line ) < 3 )
+		return;
+
+	for( k = 0; k < 16; k++ )
+	{
+		if( ring_buf[k][0] && !Q_strcmp( ring_buf[k], line ))
+			return;   // already echoed
+	}
+
+	Q_strncpy( ring_buf[ring_idx], line, sizeof( ring_buf[ring_idx] ));
+	ring_idx = ( ring_idx + 1 ) % 16;
+
+	// The body segment carries the trailing newline; a line assembled without
+	// one still needs to terminate.
+	Con_Printf( "%s%s", line, Q_strchr( line, '\n' ) ? "" : "\n" );
+}
+
 int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 {
 	cl_font_t *font = Con_GetFont( con_fontsize.value );
@@ -2025,34 +2051,33 @@ int GAME_EXPORT pfnDrawConsoleString( int x, int y, char *string )
 		}
 	}
 
-	// Slayer3D: echo chat strings to console with full-string dedup (ring buffer).
-	// pfnDrawConsoleString is called every frame for each visible HUD line, so
-	// we'd otherwise see massive console spam.
+	// Slayer3D: echo chat lines to the console.
+	//
+	// CS draws ONE chat line as several coloured segments through separate calls
+	// that share the same y: the speaker's name first, then ": " and the message
+	// body. The old filter only echoed a segment that was long or ended in '\n',
+	// so the short name segment was dropped and the console showed messages with
+	// nobody attached to them. Assemble the segments of a line, then echo once.
+	//
+	// pfnDrawConsoleString also runs every frame for every visible HUD line, so
+	// the assembled line still goes through a dedup ring to avoid flooding.
 	{
-		static char ring_buf[6][256];
-		static int  ring_idx = 0;
-		int slen = Q_strlen( string );
+		static char line_buf[512];
+		static int  line_y = -99999;
 
-		if( slen > 2 && ( Q_strchr( string, '\n' ) != NULL || slen > 20 ) )
+		if( y != line_y )
 		{
-			int k, dup = 0;
+			Slayer_EchoChatLine( line_buf );   // previous line is complete
+			line_buf[0] = '\0';
+			line_y = y;
+		}
 
-			for( k = 0; k < 6; k++ )
-			{
-				// Compare full strings (Q_strcmp). Same content = duplicate.
-				if( ring_buf[k][0] && !Q_strcmp( ring_buf[k], string ) )
-				{
-					dup = 1;
-					break;
-				}
-			}
+		Q_strncat( line_buf, string, sizeof( line_buf ));
 
-			if( !dup )
-			{
-				Q_strncpy( ring_buf[ring_idx], string, sizeof( ring_buf[ring_idx] ) );
-				ring_idx = ( ring_idx + 1 ) % 6;
-				Con_Printf( "%s", string );
-			}
+		if( Q_strchr( string, '\n' ) != NULL )
+		{
+			Slayer_EchoChatLine( line_buf );
+			line_buf[0] = '\0';
 		}
 	}
 
