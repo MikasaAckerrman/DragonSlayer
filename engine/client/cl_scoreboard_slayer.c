@@ -70,6 +70,7 @@ typedef struct
 
 static slayer_score_t  slayer_scores[MAX_CLIENTS];
 static qboolean        slayer_scoreboard_active = false;
+static qboolean        slayer_death_dismissed = false;  // hid the death auto-show until respawn/re-press
 
 // Avatar state: SteamID64 per player slot and cached texture handles
 static uint64_t        slayer_steamid64[MAX_CLIENTS];
@@ -424,6 +425,7 @@ static void Cmd_AvatarUrls_f( void )
 static void Cmd_ScoreboardDown_f( void )
 {
 	slayer_scoreboard_active = true;
+	slayer_death_dismissed = false;   // explicit open re-arms the death view
 
 	// Request status to get SteamIDs (throttled to once per 30 seconds).
 	if( host.realtime >= slayer_status_next_time )
@@ -452,6 +454,7 @@ static void Cmd_ScoreboardDown_f( void )
 static void Cmd_ScoreboardUp_f( void )
 {
 	slayer_scoreboard_active = false;
+	slayer_death_dismissed = true;   // releasing while dead hides the auto-show
 }
 
 // ===========================================================================
@@ -782,7 +785,15 @@ static int Slayer_SortCompare( const void *a, const void *b )
 			return order_a - order_b;
 	}
 
-	// Within same team: higher frags first
+	// Within a team, dead players sink to the bottom (like PC CS 1.6).
+	{
+		int dead_a = ( slayer_scores[ea->idx].flags & 1 ) ? 1 : 0;
+		int dead_b = ( slayer_scores[eb->idx].flags & 1 ) ? 1 : 0;
+		if( dead_a != dead_b )
+			return dead_a - dead_b;
+	}
+
+	// Then: higher frags first
 	if( ea->frags != eb->frags )
 		return eb->frags - ea->frags;
 
@@ -872,21 +883,28 @@ void Slayer_Scoreboard_Draw( void )
 		return;
 
 	// Show automatically where CS shows its own board — end of map and while
-	// dead — so ours covers the game library's stock scoreboard instead of it
-	// appearing there. We draw after CL_DrawHUD, so ours lands on top.
+	// dead — so ours covers the game library's stock scoreboard. We draw after
+	// CL_DrawHUD so ours lands on top. The death auto-show is DISMISSIBLE: a
+	// tap of the scoreboard button (release -> slayer_death_dismissed) hides it
+	// until you press again or respawn, so you're never stuck staring at it.
 	if( !slayer_scoreboard_active )
 	{
 		qboolean auto_show = cl.intermission != 0;
+		qboolean dead = false;
 
-		if( !auto_show && slayer_scoreboard_ondeath.value != 0.0f
-		 && cl.playernum >= 0 && cl.playernum < MAX_CLIENTS )
+		if( cl.playernum >= 0 && cl.playernum < MAX_CLIENTS )
 		{
 			int myteam = slayer_scores[cl.playernum].team_id;
-
-			if(( myteam == SLAYER_TEAM_CT || myteam == SLAYER_TEAM_T )
-			 && ( slayer_scores[cl.playernum].flags & 1 ))
-				auto_show = true;
+			dead = ( myteam == SLAYER_TEAM_CT || myteam == SLAYER_TEAM_T )
+			    && ( slayer_scores[cl.playernum].flags & 1 );
 		}
+
+		if( !dead )
+			slayer_death_dismissed = false;   // rearm for the next death
+
+		if( !auto_show && slayer_scoreboard_ondeath.value != 0.0f
+		 && dead && !slayer_death_dismissed )
+			auto_show = true;
 
 		if( !auto_show )
 			return;
@@ -1000,10 +1018,10 @@ void Slayer_Scoreboard_Draw( void )
 
 	// Screen-relative width. Measured ~80-86% on the PC references; clamp to a
 	// sane band so it stays card-like on narrow and ultrawide phone panels.
-	board_w = (int)( screen_w * 0.82f );
+	board_w = (int)( screen_w * 0.86f );
 	{
-		int min_w = (int)( screen_w * 0.62f );
-		int max_w = (int)( screen_w * 0.88f );
+		int min_w = (int)( screen_w * 0.66f );
+		int max_w = (int)( screen_w * 0.90f );
 		if( board_w < min_w ) board_w = min_w;
 		if( board_w > max_w ) board_w = max_w;
 		if( board_w > (int)( screen_h * 1.9f ) ) board_w = (int)( screen_h * 1.9f ); // ultrawide guard
@@ -1037,7 +1055,7 @@ void Slayer_Scoreboard_Draw( void )
 		// from the rows and makes the tail clip on short screens):
 		//   +4 pre-title, +2 title extra, +4 sep, +4 sep, +4 bottom margin = 18,
 		//   plus per rendered team section (+3 separator, +4 inter-section gap).
-		int chrome_h = 18 + team_headers * 7;
+		int chrome_h = 26 + team_headers * 7;   // includes the lowered title row
 		int avail_h  = (int)( screen_h * 0.94f );   // vertical budget (a touch > PC ~0.90)
 
 		int   fidx, row_pad, row_h_full, natural_h;
@@ -1057,9 +1075,10 @@ void Slayer_Scoreboard_Draw( void )
 		// so the board fills more of the screen (like PC) instead of shrinking
 		// to a stamp. The engine font can't scale continuously, so a sparse
 		// board grows via taller rows rather than bigger glyphs.
-		row_pad    = ( content_rows <= 8 )  ? font->charHeight
-		           : ( content_rows <= 14 ) ? ( font->charHeight * 2 / 3 )
-		           : ( content_rows <= 22 ) ? 6 : 4;
+		row_pad    = ( content_rows <= 10 ) ? ( font->charHeight * 3 / 2 )
+		           : ( content_rows <= 16 ) ? ( font->charHeight )
+		           : ( content_rows <= 24 ) ? ( font->charHeight * 2 / 3 )
+		           : 5;
 		row_h_full = font->charHeight + row_pad;
 
 		// Compression coefficient. natural_h is the auto-expand height; when it
@@ -1181,10 +1200,12 @@ void Slayer_Scoreboard_Draw( void )
 	if( !hostname || hostname[0] == '\0' || !Q_stricmp( hostname, "empty" ) )
 		hostname = cls.servername;
 
-	cur_y += 4;
+	// Title row: server name and map name side-by-side on the left (map right
+	// after the IP with a clear gap) and dropped a little so it doesn't hug the
+	// rounded top edge, and so it clears the column headers on the right.
+	cur_y += row_h / 2 + 4;
 	CL_DrawString( col_name_x, cur_y, hostname, color_text, font, FONT_DRAW_UTF8 );
 
-	// Draw map name (right-aligned, same line as hostname)
 	{
 		const char *mapname = Info_ValueForKey( cl.serverinfo, "map" );
 		if( !mapname || mapname[0] == '\0' )
@@ -1192,11 +1213,13 @@ void Slayer_Scoreboard_Draw( void )
 		if( mapname && mapname[0] != '\0' )
 		{
 			rgba_t color_map;
+			int    iw, ih;
+			CL_DrawStringLen( font, hostname, &iw, &ih, FONT_DRAW_UTF8 );
 			MakeRGBA( color_map, color_text[0] * 160 / 255, color_text[1] * 160 / 255, color_text[2] * 160 / 255, 200 );
-			Slayer_DrawStringRight( font, board_x + board_w - (int)( board_w * 0.012f ), cur_y, mapname, color_map );
+			CL_DrawString( col_name_x + iw + font->charHeight * 2, cur_y, mapname, color_map, font, FONT_DRAW_UTF8 );
 		}
 	}
-	cur_y += row_h + 2;
+	cur_y += row_h + 4;
 
 	// Separator below hostname/mapname (inset from the rounded edges)
 	{
@@ -1206,10 +1229,10 @@ void Slayer_Scoreboard_Draw( void )
 	}
 	cur_y += 4;
 
-	// Column headers row — gold SectionTextColor (255 192 0), Russian labels.
+	// Column headers row — soft light grey (vanilla-CS-ish), Russian labels.
 	{
 		rgba_t color_hdr;
-		MakeRGBA( color_hdr, 255, 192, 0, color_text[3] );
+		MakeRGBA( color_hdr, 206, 206, 200, color_text[3] );
 		Slayer_DrawStringRight( font, col_health_x, cur_y, "HP", color_hdr );
 		Slayer_DrawStringRight( font, col_money_x, cur_y, "Деньги", color_hdr );
 		Slayer_DrawStringRight( font, col_frags_x, cur_y, "Счет", color_hdr );
