@@ -73,6 +73,22 @@ class Game(val ctx: Context, val basedir: File, val gameInfoFile: File) {
 
 		commandLineArgs += pref.getString("arguments", "-console -log") ?: ""
 
+		// Steam account settings live in the launcher-wide preferences rather
+		// than the per-game ones, so read them separately and hand them to the
+		// engine as cvar assignments. Values are digits / API tokens, so they
+		// never contain the space that XashActivity splits argv on.
+		val appPref = ctx.getSharedPreferences("app_preferences", Context.MODE_PRIVATE)
+
+		appPref.getString("steam_id", null)?.takeIf { it.isNotEmpty() }?.let {
+			commandLineArgs += " +slayer_steam_setid $it"
+		}
+		appPref.getString("steam_apikey", null)?.takeIf { it.isNotEmpty() }?.let {
+			commandLineArgs += " +slayer_steam_apikey $it"
+		}
+		if (appPref.getBoolean("steam_advertise_id", false)) {
+			commandLineArgs += " +slayer_steam_advertise_id 1"
+		}
+
 		if (externalGame && packageNames != null) {
 			var packageName: String? = null
 			var gameLibDir: String? = null

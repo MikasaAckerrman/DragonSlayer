@@ -65,4 +65,16 @@
 	<string name="engine_install_failed">Update install failed: %1$s</string>
 	<string name="game_path_restart_required">Requires app restart</string>
 	<string name="game_path_invalid_folder">Selected folder must contain valve/ or cstrike/ subfolder</string>
+
+	<!-- Steam account -->
+	<string name="steam_category">Steam account</string>
+	<string name="steam_account">Steam account</string>
+	<string name="steam_account_signed_out">Not signed in. Tap to sign in with Steam.</string>
+	<string name="steam_account_signed_in">Signed in — SteamID %1$s. Tap to sign out.</string>
+	<string name="steam_signed_out_toast">Signed out of Steam</string>
+	<string name="steam_apikey">Steam Web API key</string>
+	<string name="steam_apikey_summary">Needed to load player avatars. Get a free key at steamcommunity.com/dev/apikey</string>
+	<string name="steam_apikey_unset">Not set — avatars will not load</string>
+	<string name="steam_advertise">Show my Steam avatar to others</string>
+	<string name="steam_advertise_summary">Sends your real SteamID to servers so other players see your avatar. Turn off if a server refuses the connection.</string>
 </resources>

@@ -182,8 +182,32 @@ public class SteamLoginActivity extends Activity
 		}
 
 		Log.i( TAG, "Login successful! SteamID64 = " + steamId64 );
+		persistSteamId( steamId64 );
 		notifyEngine( steamId64 );
 		finish();
+	}
+
+
+	/**
+	 * Store the SteamID in the launcher's preferences.
+	 *
+	 * This is what makes signing in from the Settings screen work: the engine
+	 * is not running then, so the JNI callback below is a no-op. Game.kt reads
+	 * this value at launch and passes it to the engine on the command line.
+	 */
+	private void persistSteamId( long steamId64 )
+	{
+		try
+		{
+			getSharedPreferences( "app_preferences", MODE_PRIVATE )
+				.edit()
+				.putString( "steam_id", Long.toString( steamId64 ) )
+				.apply();
+		}
+		catch( Exception e )
+		{
+			Log.e( TAG, "Failed to persist SteamID: " + e.getMessage() );
+		}
 	}
 
 

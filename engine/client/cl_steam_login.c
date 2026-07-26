@@ -87,6 +87,30 @@ static void Cmd_SteamLogin_f( void )
 	Slayer_SteamLogin_Start();
 }
 
+// Set the SteamID directly, without the WebView flow. This is how the Android
+// launcher hands over an account the user signed into from its Settings screen
+// (the engine isn't running at that point, so the JNI callback can't fire):
+// Game.kt appends "+slayer_steam_setid <id>" to the command line.
+static void Cmd_SteamSetID_f( void )
+{
+	uint64_t id;
+
+	if( Cmd_Argc() != 2 )
+	{
+		Con_Printf( S_USAGE "slayer_steam_setid <steamid64>\n" );
+		return;
+	}
+
+	id = strtoull( Cmd_Argv( 1 ), NULL, 10 );
+	if( id == 0 )
+	{
+		Con_Printf( S_ERROR "slayer_steam_setid: invalid SteamID64 '%s'\n", Cmd_Argv( 1 ));
+		return;
+	}
+
+	Slayer_SteamLogin_OnComplete( id );
+}
+
 static void Cmd_SteamLogout_f( void )
 {
 	slogin_local_steamid64 = 0;
@@ -133,6 +157,8 @@ void Slayer_SteamLogin_Init( void )
 		"Clear saved Steam login" );
 	Cmd_AddCommand( "slayer_steam_status", Cmd_SteamStatus_f,
 		"Show current Steam login status" );
+	Cmd_AddCommand( "slayer_steam_setid", Cmd_SteamSetID_f,
+		"Set SteamID64 directly (used by the Android launcher's Settings screen)" );
 
 	SLogin_LoadSavedID();
 
@@ -287,6 +313,8 @@ void Slayer_SteamLogin_Init( void )
 		"Clear saved Steam login" );
 	Cmd_AddCommand( "slayer_steam_status", Cmd_SteamStatus_f,
 		"Show current Steam login status" );
+	Cmd_AddCommand( "slayer_steam_setid", Cmd_SteamSetID_f,
+		"Set SteamID64 directly (used by the Android launcher's Settings screen)" );
 
 	SLogin_LoadSavedID();
 	slogin_initialized = true;

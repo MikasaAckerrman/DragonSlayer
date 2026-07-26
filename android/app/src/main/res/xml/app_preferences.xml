@@ -11,6 +11,28 @@
 		app:layout="@layout/switch_preference"
 		app:title="@string/preferences_use_icons" />
 
+	<PreferenceCategory app:title="@string/steam_category">
+
+		<Preference
+			app:key="steam_account"
+			app:title="@string/steam_account"
+			app:summary="@string/steam_account_signed_out" />
+
+		<EditTextPreference
+			app:key="steam_apikey"
+			app:layout="@layout/edit_text_preference"
+			app:title="@string/steam_apikey"
+			app:dialogMessage="@string/steam_apikey_summary" />
+
+		<SwitchPreferenceCompat
+			app:key="steam_advertise_id"
+			app:layout="@layout/switch_preference"
+			app:title="@string/steam_advertise"
+			app:summary="@string/steam_advertise_summary"
+			app:defaultValue="false" />
+
+	</PreferenceCategory>
+
 	<Preference
 		app:key="crash_logs"
 		app:title="@string/crash_logs" />

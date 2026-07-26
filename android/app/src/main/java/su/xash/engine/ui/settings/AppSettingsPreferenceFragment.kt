@@ -1,5 +1,6 @@
 package su.xash.engine.ui.settings
 
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
@@ -8,6 +9,7 @@ import androidx.navigation.fragment.findNavController
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import su.xash.engine.R
+import su.xash.engine.SteamLoginActivity
 import java.io.File
 
 class AppSettingsPreferenceFragment() : PreferenceFragmentCompat() {
@@ -63,6 +65,54 @@ class AppSettingsPreferenceFragment() : PreferenceFragmentCompat() {
 		findPreference<Preference>("crash_logs")?.setOnPreferenceClickListener {
 			findNavController().navigate(R.id.action_appSettingsFragment_to_crashLogsFragment)
 			true
+		}
+
+		setupSteamAccount()
+	}
+
+	override fun onResume() {
+		super.onResume()
+		// The sign-in runs in SteamLoginActivity, so refresh when we come back
+		refreshSteamSummaries()
+	}
+
+	private fun setupSteamAccount() {
+		findPreference<Preference>("steam_account")?.setOnPreferenceClickListener {
+			val prefs = preferenceManager.sharedPreferences
+			val id = prefs?.getString("steam_id", null)
+
+			if (id.isNullOrEmpty()) {
+				// Sign in: SteamLoginActivity drives the Steam OpenID web flow
+				// and writes steam_id back into these same preferences.
+				// realm/returnTo are left unset — the activity falls back to its
+				// own callback scheme, which is the same pair the engine passes.
+				startActivity(Intent(requireContext(), SteamLoginActivity::class.java))
+			} else {
+				prefs.edit().remove("steam_id").apply()
+				refreshSteamSummaries()
+				Toast.makeText(requireContext(), R.string.steam_signed_out_toast, Toast.LENGTH_SHORT).show()
+			}
+			true
+		}
+		refreshSteamSummaries()
+	}
+
+	private fun refreshSteamSummaries() {
+		val prefs = preferenceManager.sharedPreferences ?: return
+
+		val id = prefs.getString("steam_id", null)
+		findPreference<Preference>("steam_account")?.summary = if (id.isNullOrEmpty()) {
+			getString(R.string.steam_account_signed_out)
+		} else {
+			getString(R.string.steam_account_signed_in, id)
+		}
+
+		val key = prefs.getString("steam_apikey", null)
+		findPreference<Preference>("steam_apikey")?.summary = if (key.isNullOrEmpty()) {
+			getString(R.string.steam_apikey_unset)
+		} else {
+			// never show the key itself
+			"•".repeat(8) + key.takeLast(4)
 		}
 	}
 

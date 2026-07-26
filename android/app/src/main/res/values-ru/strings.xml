@@ -61,4 +61,16 @@
 	<string name="engine_update_permission_message">Чтобы установить обновление, разрешите Xash3D FWGS устанавливать неизвестные приложения в настройках системы.</string>
 	<string name="engine_update_open_settings">Открыть настройки</string>
 	<string name="engine_install_failed">Не удалось установить обновление: %1$s</string>
+
+	<!-- Steam account -->
+	<string name="steam_category">Аккаунт Steam</string>
+	<string name="steam_account">Аккаунт Steam</string>
+	<string name="steam_account_signed_out">Вход не выполнен. Нажмите, чтобы войти через Steam.</string>
+	<string name="steam_account_signed_in">Выполнен вход — SteamID %1$s. Нажмите, чтобы выйти.</string>
+	<string name="steam_signed_out_toast">Выход из Steam выполнен</string>
+	<string name="steam_apikey">Ключ Steam Web API</string>
+	<string name="steam_apikey_summary">Нужен для загрузки аватарок игроков. Бесплатно получить: steamcommunity.com/dev/apikey</string>
+	<string name="steam_apikey_unset">Не задан — аватарки не загрузятся</string>
+	<string name="steam_advertise">Показывать мою аватарку другим</string>
+	<string name="steam_advertise_summary">Отправляет ваш настоящий SteamID на сервер, чтобы другие игроки видели вашу аватарку. Выключите, если сервер отклоняет подключение.</string>
 </resources>
