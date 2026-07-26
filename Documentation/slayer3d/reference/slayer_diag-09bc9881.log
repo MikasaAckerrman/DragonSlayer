@@ -1,0 +1,59 @@
+[    0.00] === scoreboard init; local SteamID=76561199229322725 ===
+[   62.27] status request queued (parse window 30s)
+[   62.27] SteamAPI batch: requesting 32 avatar(s) via Web API
+[   62.34] status: slot 10 -> SteamID 76561198916886264 (name 'молодец')
+[   62.34] avatar slot 9 SteamID 76561198916886264: not cached -> request download
+[   62.34] status: slot 11 -> SteamID 76561198380996074 (name '亗『ᴵᶜʰⁱᵍᵒ』亗')
+[   62.34] avatar slot 10 SteamID 76561198380996074: not cached -> request download
+[   65.35] SteamAPI batch: requesting 32 avatar(s) via Web API
+[   67.46] SteamAPI batch: requesting 32 avatar(s) via Web API
+[  134.26] status request queued (parse window 30s)
+[  134.26] SteamAPI batch: requesting 32 avatar(s) via Web API
+[  134.40] status: slot 10 -> SteamID 76561198916886264 (name 'молодец')
+[  134.40] avatar slot 9 SteamID 76561198916886264: not cached -> request download
+[  134.40] status: slot 11 -> SteamID 76561198380996074 (name '亗『ᴵᶜʰⁱᵍᵒ』亗')
+[  134.40] avatar slot 10 SteamID 76561198380996074: not cached -> request download
+[  135.99] SteamAPI batch: requesting 32 avatar(s) via Web API
+[  138.17] SteamAPI batch: requesting 32 avatar(s) via Web API
+[  148.13] SteamAPI batch: requesting 32 avatar(s) via Web API
+[  161.97] SteamAPI batch: requesting 32 avatar(s) via Web API
+[  182.24] status request queued (parse window 30s)
+[  182.24] SteamAPI batch: requesting 32 avatar(s) via Web API
+[  182.35] status: slot 10 -> SteamID 76561198916886264 (name 'молодец')
+[  182.35] avatar slot 9 SteamID 76561198916886264: not cached -> request download
+[  182.35] status: slot 11 -> SteamID 76561198380996074 (name '亗『ᴵᶜʰⁱᵍᵒ』亗')
+[  182.35] avatar slot 10 SteamID 76561198380996074: not cached -> request download
+[  231.44] status request queued (parse window 30s)
+[  231.44] SteamAPI batch: requesting 32 avatar(s) via Web API
+[  231.52] status: slot 10 -> SteamID 76561198916886264 (name 'молодец')
+[  231.52] avatar slot 9 SteamID 76561198916886264: not cached -> request download
+[  231.52] status: slot 11 -> SteamID 76561198380996074 (name '亗『ᴵᶜʰⁱᵍᵒ』亗')
+[  231.52] avatar slot 10 SteamID 76561198380996074: not cached -> request download
+[  455.33] status request queued (parse window 30s)
+[  455.33] SteamAPI batch: requesting 32 avatar(s) via Web API
+[  455.45] status: slot 10 -> SteamID 76561198916886264 (name 'молодец')
+[  455.45] avatar slot 9 SteamID 76561198916886264: not cached -> request download
+[  455.45] status: slot 11 -> SteamID 76561198380996074 (name '亗『ᴵᶜʰⁱᵍᵒ』亗')
+[  455.45] avatar slot 10 SteamID 76561198380996074: not cached -> request download
+[  455.45] status: slot 12 -> SteamID 76561199989983910 (name 'Lemon4ik')
+[  455.45] avatar slot 11 SteamID 76561199989983910: not cached -> request download
+[    0.00] avatar JNI: downloadAvatar() found, downloader ready
+[    0.00] === scoreboard init; local SteamID=76561199229322725 ===
+[  118.43] status request queued (parse window 30s)
+[  118.43] SteamAPI batch: requesting 32 avatar(s) via Web API
+[  118.52] status: slot 10 -> SteamID 76561198916886264 (name 'молодец')
+[  118.52] avatar slot 9 SteamID 76561198916886264: not cached -> request download
+[  118.52] status: slot 12 -> SteamID 76561199989983910 (name 'Lemon4ik')
+[  118.52] avatar slot 11 SteamID 76561199989983910: not cached -> request download
+[  119.52] SteamAPI batch: requesting 32 avatar(s) via Web API
+[  120.45] SteamAPI batch: requesting 32 avatar(s) via Web API
+[  121.14] SteamAPI batch: requesting 32 avatar(s) via Web API
+[  150.99] status request queued (parse window 30s)
+[  150.99] SteamAPI batch: requesting 32 avatar(s) via Web API
+[  151.06] status: slot 10 -> SteamID 76561198916886264 (name 'молодец')
+[  151.06] avatar slot 9 SteamID 76561198916886264: not cached -> request download
+[  151.06] status: slot 12 -> SteamID 76561199989983910 (name 'Lemon4ik')
+[  151.06] avatar slot 11 SteamID 76561199989983910: not cached -> request download
+[  153.07] SteamAPI batch: requesting 32 avatar(s) via Web API
+[  154.51] SteamAPI batch: requesting 32 avatar(s) via Web API
+[  156.58] SteamAPI batch: requesting 32 avatar(s) via Web API
