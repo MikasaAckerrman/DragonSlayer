@@ -1052,7 +1052,7 @@ void Slayer_Scoreboard_Draw( void )
 		                 + ( t_player_count > 0 ? 1 : 0 )
 		                 + ( spec_player_count > 0 ? 1 : 0 );
 		// content rows = players + team headers + title row + column-header row
-		int content_rows = num_players + team_headers + 2;
+		int content_rows = num_players + team_headers + 1;   // 1 = merged header row
 
 		// Fixed non-row chrome. Kept GENEROUS: with tall rows (large fonts on
 		// hi-dpi phones) the per-section separators/gaps add up, and an
@@ -1075,14 +1075,15 @@ void Slayer_Scoreboard_Draw( void )
 			if( f && f->valid ) font = f;
 		}
 
-		// Density-aware full row height: much roomier when the roster is sparse
-		// so the board fills more of the screen (like PC) instead of shrinking
-		// to a stamp. The engine font can't scale continuously, so a sparse
-		// board grows via taller rows rather than bigger glyphs.
-		row_pad    = ( content_rows <= 10 ) ? ( font->charHeight * 3 / 2 )
-		           : ( content_rows <= 16 ) ? ( font->charHeight )
-		           : ( content_rows <= 24 ) ? ( font->charHeight * 2 / 3 )
-		           : 5;
+		// Compact rows that hug the text. The engine font can't scale
+		// continuously, so inflating rows for a sparse roster just leaves big
+		// empty cells with small text (looks wrong). Instead keep row height
+		// tight to the glyph — the board is content-sized, like PC — and only
+		// tighten further when crowded.
+		row_pad    = font->charHeight / 3;
+		if( row_pad < 4 )  row_pad = 4;
+		if( row_pad > 12 ) row_pad = 12;
+		if( content_rows > 24 && row_pad > 4 ) row_pad = 4;
 		row_h_full = font->charHeight + row_pad;
 
 		// Compression coefficient. natural_h is the auto-expand height; when it
@@ -1124,10 +1125,10 @@ void Slayer_Scoreboard_Draw( void )
 	// Near-transparent panel with anti-aliased rounded corners (PC ScorePanel).
 	{
 		rgba_t panel_bg, panel_br;
-		int    radius = (int)( board_h * 0.028f );
+		int    radius = (int)( board_h * 0.06f );   // noticeably rounded, like the user asked
 
-		if( radius < 8 )  radius = 8;
-		if( radius > 22 ) radius = 22;
+		if( radius < 14 ) radius = 14;
+		if( radius > 60 ) radius = 60;
 		if( radius > board_w / 2 ) radius = board_w / 2;
 		if( radius > board_h / 2 ) radius = board_h / 2;
 
@@ -1204,38 +1205,28 @@ void Slayer_Scoreboard_Draw( void )
 	if( !hostname || hostname[0] == '\0' || !Q_stricmp( hostname, "empty" ) )
 		hostname = cls.servername;
 
-	// Title row: server name and map name side-by-side on the left (map right
-	// after the IP with a clear gap) and dropped a little so it doesn't hug the
-	// rounded top edge, and so it clears the column headers on the right.
-	cur_y += row_h / 2 + 4;
-	CL_DrawString( col_name_x, cur_y, hostname, color_text, font, FONT_DRAW_UTF8 );
-
+	// ONE header row: server IP + map on the LEFT, column labels on the RIGHT.
+	// (No separate title strip — the user asked to fold the IP/map into the
+	// HP/Деньги/… band and delete the old title row above it.)
+	cur_y += row_h / 3 + 4;
 	{
 		const char *mapname = Info_ValueForKey( cl.serverinfo, "map" );
+		rgba_t color_hdr, color_map;
+		int    iw, ih;
+
 		if( !mapname || mapname[0] == '\0' )
 			mapname = clgame.mapname;
+
+		// left: IP then map, side by side with a clear gap
+		CL_DrawString( col_name_x, cur_y, hostname, color_text, font, FONT_DRAW_UTF8 );
 		if( mapname && mapname[0] != '\0' )
 		{
-			rgba_t color_map;
-			int    iw, ih;
 			CL_DrawStringLen( font, hostname, &iw, &ih, FONT_DRAW_UTF8 );
 			MakeRGBA( color_map, color_text[0] * 160 / 255, color_text[1] * 160 / 255, color_text[2] * 160 / 255, 200 );
 			CL_DrawString( col_name_x + iw + font->charHeight * 2, cur_y, mapname, color_map, font, FONT_DRAW_UTF8 );
 		}
-	}
-	cur_y += row_h + 4;
 
-	// Separator below hostname/mapname (inset from the rounded edges)
-	{
-		int sep_inset = (int)( board_w * 0.022f );
-		Slayer_DrawRect( board_x + sep_inset, cur_y, board_w - 2 * sep_inset, 1,
-			214, 214, 208, (byte)( 90 * global_opacity / 255 ));
-	}
-	cur_y += 4;
-
-	// Column headers row — soft light grey (vanilla-CS-ish), Russian labels.
-	{
-		rgba_t color_hdr;
+		// right: column labels (soft light grey, Russian)
 		MakeRGBA( color_hdr, 206, 206, 200, color_text[3] );
 		Slayer_DrawStringRight( font, col_health_x, cur_y, "HP", color_hdr );
 		Slayer_DrawStringRight( font, col_money_x, cur_y, "Деньги", color_hdr );
@@ -1245,13 +1236,15 @@ void Slayer_Scoreboard_Draw( void )
 	}
 	cur_y += row_h;
 
-	// Separator below column headers (inset)
+	// Separator under the header row — thicker, scales with the row height, and
+	// inset so it doesn't run into the rounded corners.
 	{
-		int sep_inset = (int)( board_w * 0.022f );
-		Slayer_DrawRect( board_x + sep_inset, cur_y, board_w - 2 * sep_inset, 1,
-			214, 214, 208, (byte)( 90 * global_opacity / 255 ));
+		int sep_inset = (int)( board_w * 0.03f );
+		int sep_h = row_h / 20; if( sep_h < 2 ) sep_h = 2;
+		Slayer_DrawRect( board_x + sep_inset, cur_y, board_w - 2 * sep_inset, sep_h,
+			214, 214, 208, (byte)( 120 * global_opacity / 255 ));
 	}
-	cur_y += 4;
+	cur_y += 6;
 
 	// Draw player rows
 	for( row = 0; row < num_players; row++ )
@@ -1284,10 +1277,10 @@ void Slayer_Scoreboard_Draw( void )
 			drawn_t_header = 1;
 			if( drawn_ct_header || drawn_spec_header ) cur_y += 4;
 			Q_snprintf( buf, sizeof( buf ), "Terrorists  -  %d players", t_player_count );
-			CL_DrawString( col_name_x, cur_y, buf, color_t, font, FONT_DRAW_UTF8 );
+			CL_DrawString( col_name_text_x, cur_y, buf, color_t, font, FONT_DRAW_UTF8 );
 			cur_y += row_h;
 			// Thin separator below T header
-			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, color_t[0], color_t[1], color_t[2], 100 );
+			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, ( row_h > 40 ? 3 : 2 ), color_t[0], color_t[1], color_t[2], 100 );
 			cur_y += 3;
 		}
 		else if( team == SLAYER_TEAM_CT && !drawn_ct_header )
@@ -1295,10 +1288,10 @@ void Slayer_Scoreboard_Draw( void )
 			drawn_ct_header = 1;
 			if( drawn_t_header || drawn_spec_header ) cur_y += 4;
 			Q_snprintf( buf, sizeof( buf ), "Counter-Terrorists  -  %d players", ct_player_count );
-			CL_DrawString( col_name_x, cur_y, buf, color_ct, font, FONT_DRAW_UTF8 );
+			CL_DrawString( col_name_text_x, cur_y, buf, color_ct, font, FONT_DRAW_UTF8 );
 			cur_y += row_h;
 			// Thin separator below CT header
-			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, color_ct[0], color_ct[1], color_ct[2], 100 );
+			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, ( row_h > 40 ? 3 : 2 ), color_ct[0], color_ct[1], color_ct[2], 100 );
 			cur_y += 3;
 		}
 		else if( team != SLAYER_TEAM_CT && team != SLAYER_TEAM_T && !drawn_spec_header )
@@ -1306,10 +1299,10 @@ void Slayer_Scoreboard_Draw( void )
 			drawn_spec_header = 1;
 			if( drawn_ct_header || drawn_t_header ) cur_y += 4;
 			Q_snprintf( buf, sizeof( buf ), "Spectators  -  %d players", spec_player_count );
-			CL_DrawString( col_name_x, cur_y, buf, color_spec, font, FONT_DRAW_UTF8 );
+			CL_DrawString( col_name_text_x, cur_y, buf, color_spec, font, FONT_DRAW_UTF8 );
 			cur_y += row_h;
 			// Thin separator below Spectator header
-			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, 1, 100, 100, 100, 80 );
+			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, ( row_h > 40 ? 3 : 2 ), 100, 100, 100, 80 );
 			cur_y += 3;
 		}
 
@@ -1332,8 +1325,10 @@ void Slayer_Scoreboard_Draw( void )
 		// edges so it doesn't run into the corners.
 		if( pidx == cl.playernum )
 		{
-			int hi = (int)( board_w * 0.022f );
-			Slayer_DrawRect( board_x + hi, cur_y, board_w - 2 * hi, row_h, 235, 231, 197, 38 );
+			// span the whole row (small fixed inset off the 1px border); player
+			// rows sit in the straight-side region so this never hits a corner,
+			// and it clears the right-most Latency column instead of ending on it.
+			Slayer_DrawRect( board_x + 3, cur_y, board_w - 6, row_h, 235, 231, 197, 34 );
 		}
 
 		// Player name
