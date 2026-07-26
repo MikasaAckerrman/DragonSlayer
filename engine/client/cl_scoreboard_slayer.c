@@ -40,6 +40,7 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_t_color, "255 63 63", FCVAR_ARCHIVE, 
 // Border alpha lowered from 200 -> 150 (lighter visual weight, less stair-stepping)
 static CVAR_DEFINE_AUTO( slayer_scoreboard_border_color, "255 255 255 150", FCVAR_ARCHIVE, "Slayer3D: scoreboard border RGBA" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_opacity, "220", FCVAR_ARCHIVE, "Slayer3D: overall scoreboard opacity (0-255)" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_ondeath, "1", FCVAR_ARCHIVE, "Slayer3D: show the scoreboard automatically while dead (0 = only when held)" );
 
 // ===========================================================================
 // Types
@@ -471,6 +472,7 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_scoreboard_t_color );
 	Cvar_RegisterVariable( &slayer_scoreboard_border_color );
 	Cvar_RegisterVariable( &slayer_scoreboard_opacity );
+	Cvar_RegisterVariable( &slayer_scoreboard_ondeath );
 
 	Cmd_AddCommand( "+slayer_scoreboard", Cmd_ScoreboardDown_f,
 		"show Slayer3D custom scoreboard" );
@@ -742,14 +744,32 @@ void Slayer_Scoreboard_Draw( void )
 		}
 	}
 
-	if( !slayer_scoreboard_active )
-		return;
-
 	if( slayer_scoreboard.value == 0.0f )
 		return;
 
 	if( cls.state != ca_active )
 		return;
+
+	// Show automatically where CS shows its own board — end of map and while
+	// dead — so ours covers the game library's stock scoreboard instead of it
+	// appearing there. We draw after CL_DrawHUD, so ours lands on top.
+	if( !slayer_scoreboard_active )
+	{
+		qboolean auto_show = cl.intermission != 0;
+
+		if( !auto_show && slayer_scoreboard_ondeath.value != 0.0f
+		 && cl.playernum >= 0 && cl.playernum < MAX_CLIENTS )
+		{
+			int myteam = slayer_scores[cl.playernum].team_id;
+
+			if(( myteam == SLAYER_TEAM_CT || myteam == SLAYER_TEAM_T )
+			 && ( slayer_scores[cl.playernum].flags & 1 ))
+				auto_show = true;
+		}
+
+		if( !auto_show )
+			return;
+	}
 
 	screen_w = refState.width;
 	screen_h = refState.height;
