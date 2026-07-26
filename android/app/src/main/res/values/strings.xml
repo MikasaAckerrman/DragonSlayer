@@ -72,9 +72,9 @@
 	<string name="steam_account_signed_out">Not signed in. Tap to sign in with Steam.</string>
 	<string name="steam_account_signed_in">Signed in — SteamID %1$s. Tap to sign out.</string>
 	<string name="steam_signed_out_toast">Signed out of Steam</string>
-	<string name="steam_apikey">Steam Web API key</string>
-	<string name="steam_apikey_summary">Needed to load player avatars. Get a free key at steamcommunity.com/dev/apikey</string>
-	<string name="steam_apikey_unset">Not set — avatars will not load</string>
+	<string name="steam_apikey">Steam Web API key (optional)</string>
+	<string name="steam_apikey_summary">Optional — speeds up bulk avatar loading. Avatars already load without it from public profiles. Free key: steamcommunity.com/dev/apikey</string>
+	<string name="steam_apikey_unset">Not set — avatars load from public profiles</string>
 	<string name="steam_advertise">Show my Steam avatar to others</string>
 	<string name="steam_advertise_summary">Sends your real SteamID to servers so other players see your avatar. Turn off if a server refuses the connection.</string>
 </resources>

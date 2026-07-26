@@ -423,17 +423,22 @@ static void Cmd_ScoreboardDown_f( void )
 {
 	slayer_scoreboard_active = true;
 
-	// Request status to get SteamIDs (throttled to once per 30 seconds)
+	// Request status to get SteamIDs (throttled to once per 30 seconds).
 	if( host.realtime >= slayer_status_next_time )
 	{
 		Cbuf_AddText( "status\n" );
 		slayer_status_next_time = host.realtime + 30.0;
 		slayer_status_pending = true;
-		slayer_status_deadline = host.realtime + 5.0; // 5s parse window
+		// Parse window == throttle interval: on slow mobile networks the
+		// server's status reply can arrive many seconds late, and a short 5s
+		// window closed before it landed — so SteamIDs (and therefore avatars)
+		// were never parsed. Keep it open until the next allowed request.
+		slayer_status_deadline = host.realtime + 30.0;
 		slayer_steam_reject_count = 0; // reset debounce per request
+		Slayer_Log_Printf( "status request queued (parse window 30s)" );
 #if XASH_ANDROID
 		__android_log_print( ANDROID_LOG_INFO, "Xash",
-			"Slayer SB: status request queued, parse window 5s" );
+			"Slayer SB: status request queued, parse window 30s" );
 #endif
 		Con_DPrintf( "Slayer SB: status request queued, parse window 5s\n" );
 	}
