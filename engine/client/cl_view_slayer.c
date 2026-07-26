@@ -20,6 +20,7 @@ GNU General Public License for more details.
 #include "cl_hud_slayer.h"
 #include "cl_sgs_slayer.h"
 #include "cl_loading_slayer.h"
+#include "cl_grenade_tumble_slayer.h"
 
 // ===========================================================================
 // Cvars - Third-person camera
@@ -190,6 +191,9 @@ void V_InitSlayerCvars( void )
 
 	// PC-style loading screen overlay
 	Slayer_Loading_Init();
+
+	// Client-side grenade tumble
+	Slayer_GrenadeTumble_Init();
 
 	Con_Printf( "Slayer3D: cvars initialized\n" );
 }
