@@ -22,10 +22,9 @@ void Slayer_Toast_Init( void );
 // Queue a bottom-left Steam-style notification (header + one line of text).
 void Slayer_Toast_Show( const char *header, const char *text );
 
-// Fired when the connection to a server completes; shows the Steam status.
-void Slayer_Toast_OnConnected( void );
-
 // Draw the active toast (fade + slide). Call from V_PostRender.
+// Also raises the once-per-launch Steam sign-in banner shortly after the client
+// starts, so it appears over the menu rather than on joining a server.
 void Slayer_Toast_Draw( void );
 
 #endif // CL_SLAYER_TOAST_H

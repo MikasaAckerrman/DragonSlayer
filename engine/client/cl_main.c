@@ -220,8 +220,6 @@ static void CL_CheckClientState( void )
 		cls.changedemo = false;		// changedemo is done
 		cl.first_frame = true;		// first rendering frame
 
-		Slayer_Toast_OnConnected();	// Steam-style "connected" notification
-
 		SCR_MakeLevelShot();		// make levelshot if needs
 		Cvar_SetValue( "scr_loading", 0.0f );	// reset progress bar
 		Netchan_ReportFlow( &cls.netchan );
