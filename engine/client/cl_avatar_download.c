@@ -327,12 +327,23 @@ void Slayer_AvatarDownload_Shutdown( void )
 
 void Slayer_AvatarDownload_Reset( void )
 {
-	Slayer_AvatarDownload_Shutdown();
+	// Do NOT call Shutdown() here. Reset runs on every level change and
+	// reconnect (Slayer_Scoreboard_Reset -> here), and Shutdown() nulls
+	// avd_download_method — which nothing ever re-acquires, because
+	// Slayer_AvatarDownload_Init() only runs once at scoreboard init. That
+	// permanently disabled avatar downloads for the rest of the process: the
+	// diag log showed "downloadAvatar() found, downloader ready" at startup and
+	// then "SKIP (JNI downloadAvatar not initialized)" for every later request.
+	// Only per-slot state belongs in a reset; the JNI binding must survive.
+	avd_active_count = 0;
+
 	// Note: a racing detached thread may write to avd_slot_result after this memset.
 	// This is benign - Frame() will just pick it up as a spurious completion.
 	memset( (void *)avd_slot_result, 0, sizeof( avd_slot_result ) );
 	memset( avd_slot_id, 0, sizeof( avd_slot_id ) );
 	memset( avd_slot_fail_time, 0, sizeof( avd_slot_fail_time ) );
+	memset( (void *)avd_slot_started, 0, sizeof( avd_slot_started ) );
+	memset( (void *)avd_slot_entered, 0, sizeof( avd_slot_entered ) );
 }
 
 void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
