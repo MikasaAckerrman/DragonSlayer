@@ -130,7 +130,10 @@ typedef struct
 	float     last_time;    // cl.time of last update (also slot expiry)
 	vec3_t    last_origin;  // for linear velocity estimation
 	float     accum_theta;  // total accumulated rotation angle in RADIANS
-	vec3_t    avel_dir;     // unit vector — fixed rotation axis (random per entity)
+	vec3_t    avel_dir;     // unit vector — current tumble axis, eased toward the
+	                        // one derived from the flight direction each frame
+	float     spin_bias;    // how much spin about the flight line to mix in,
+	                        // fixed per grenade so they do not all tumble alike
 	qboolean  inited;
 } grenade_tumble_t;
 
@@ -153,12 +156,13 @@ static qboolean Slayer_GT_IsGrenadeModel( const char *name )
 	if( !name || !name[0] )
 		return false;
 
-	// CS 1.6 weaponbox model names — covers HE, smoke, flashbang
-	if( Q_strstr( name, "w_hegrenade" ))    return true;
-	if( Q_strstr( name, "w_smokegrenade" )) return true;
-	if( Q_strstr( name, "w_flashbang" ))    return true;
-	// HL1 generic grenade (in case someone runs DragonSlayer on plain HLDM)
-	if( Q_strstr( name, "w_grenade" ))      return true;
+	// Match on the substrings rather than exact CS 1.6 filenames, so custom and
+	// reskinned models on modded servers tumble too — "grenade" or "flashbang"
+	// anywhere in a model path only ever means a grenade. This covers the stock
+	// w_hegrenade / w_smokegrenade / w_flashbang, the HL1 generic w_grenade, and
+	// whatever a server renames them to.
+	if( Q_strstr( name, "grenade" ))   return true;
+	if( Q_strstr( name, "flashbang" )) return true;
 	return false;
 }
 
@@ -200,7 +204,10 @@ static void Slayer_GT_InitSlot( grenade_tumble_t *gt, struct cl_entity_s *ent, f
 	gt->inited      = true;
 	gt->accum_theta = 0.0f;
 
-	// random unit axis so every grenade tumbles a little differently
+	// Seed axis. Only a starting point now: from the first moving frame onward
+	// the axis is derived from the flight direction and eased toward it, so a
+	// grenade tumbles end-over-end along its path rather than about whatever
+	// direction it happened to be given at spawn.
 	axis[0] = COM_RandomFloat( -1.0f, 1.0f );
 	axis[1] = COM_RandomFloat( -1.0f, 1.0f );
 	axis[2] = COM_RandomFloat( -1.0f, 1.0f );
@@ -211,6 +218,11 @@ static void Slayer_GT_InitSlot( grenade_tumble_t *gt, struct cl_entity_s *ent, f
 	}
 	VectorNormalize( axis );
 	VectorCopy( axis, gt->avel_dir );
+
+	// How much spin about the flight line to mix into the tumble. Kept modest
+	// so the end-over-end motion stays dominant, and varied per grenade so a
+	// handful in the air do not move in lockstep.
+	gt->spin_bias = COM_RandomFloat( 0.10f, 0.35f );
 
 	// IMPORTANT: read ent->origin (post-interp render position), NOT
 	// ent->curstate.origin (raw snapshot, only updates at server tickrate).
@@ -526,6 +538,63 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	{
 		if( speed > GT_MAX_SPEED ) speed = GT_MAX_SPEED;
 		rate = GT_BASE_RATE * ( speed / GT_MAX_SPEED );
+	}
+
+	// --- Tumble axis, derived from the flight direction -----------------------
+	//
+	// A thrown object tumbles END-OVER-END across its direction of travel; it
+	// does not spin about a fixed axis chosen at random, which is what this used
+	// to do and why the motion never looked right no matter how the rate was
+	// tuned. So take the axis from the velocity itself:
+	//
+	//     axis = normalize( velocity x up )
+	//
+	// Because it is derived rather than stored, a bounce re-aims it for free —
+	// the grenade starts tumbling along its new path the moment the velocity
+	// turns, exactly as it does in CS:GO.
+	//
+	// Two refinements keep it from looking mechanical:
+	//   * a per-grenade fraction of the velocity direction is blended in, so
+	//     each one carries some spin about its own flight line instead of every
+	//     grenade tumbling in a perfectly flat plane;
+	//   * the axis is eased toward its target rather than snapped, because the
+	//     velocity is differentiated from interpolated positions and is noisy
+	//     frame to frame.
+	if( dt > 0.0f && speed >= GT_REST_SPEED )
+	{
+		static const vec3_t gt_up = { 0.0f, 0.0f, 1.0f };
+		vec3_t vel, want, flight;
+		float  len;
+
+		VectorScale( delta, 1.0f / dt, vel );
+
+		// Perpendicular to the flight path: the end-over-end tumble axis.
+		CrossProduct( vel, gt_up, want );
+		len = VectorLength( want );
+
+		// Degenerate while falling straight down (velocity parallel to up) —
+		// there is no meaningful "across the path" then, so keep the last axis.
+		if( len > 1.0f )
+		{
+			float t = 12.0f * dt;   // ease rate, ~1/12 s to converge
+
+			VectorScale( want, 1.0f / len, want );
+
+			// Blend in spin about the flight line itself, fixed per grenade, so
+			// they do not all tumble in one flat plane.
+			VectorCopy( vel, flight );
+			VectorNormalize( flight );
+			VectorMA( want, gt->spin_bias, flight, want );
+			VectorNormalize( want );
+
+			if( t > 1.0f ) t = 1.0f;
+
+			// axis += t * (want - axis)
+			gt->avel_dir[0] += t * ( want[0] - gt->avel_dir[0] );
+			gt->avel_dir[1] += t * ( want[1] - gt->avel_dir[1] );
+			gt->avel_dir[2] += t * ( want[2] - gt->avel_dir[2] );
+			VectorNormalize( gt->avel_dir );
+		}
 	}
 
 	// Single scalar accumulator — total rotation in radians around fixed
