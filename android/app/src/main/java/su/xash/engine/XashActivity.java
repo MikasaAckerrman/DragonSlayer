@@ -21,6 +21,7 @@ import su.xash.engine.util.CrashReports;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -292,15 +293,48 @@ public class XashActivity extends SDLActivity {
 				return 2;
 			}
 
-			// Phase 2 - Parse XML for avatar URL
-			String avatarUrl = extractTagContent( xml, "avatarMedium" );
+			// Phase 2 - Parse XML for avatar URL.
+			// Prefer avatarFull (184x184): the scoreboard now draws icons at
+			// roughly three glyph heights, and avatarMedium is only 64x64, so it
+			// was being upscaled and looked soft.
+			String avatarUrl = extractTagContent( xml, "avatarFull" );
 			if( avatarUrl == null )
-				avatarUrl = extractTagContent( xml, "avatarFull" );
+				avatarUrl = extractTagContent( xml, "avatarMedium" );
 
 			if( avatarUrl == null || avatarUrl.isEmpty() )
 			{
 				Log.d( TAG, "downloadAvatar: no avatar URL found" );
 				return 2;
+			}
+
+			// Steam avatar filenames are a content hash, so the URL changes the
+			// moment the user changes their picture — and only then. Compare it
+			// against the one saved next to the cached PNG: unchanged means we
+			// can skip the image download entirely. That is what makes frequent
+			// re-checks cheap, and it replaces the old fixed cache lifetime,
+			// which could not notice a change until it expired.
+			File urlSidecar = new File( savePath + ".url" );
+			File cachedPng = new File( savePath );
+
+			if( cachedPng.exists() && urlSidecar.exists() )
+			{
+				try
+				{
+					byte[] prev = new byte[(int) urlSidecar.length()];
+					FileInputStream fis = new FileInputStream( urlSidecar );
+					try { fis.read( prev ); } finally { fis.close(); }
+
+					if( avatarUrl.equals( new String( prev, "UTF-8" ).trim() ) )
+					{
+						Log.d( TAG, "downloadAvatar: unchanged, keeping cache" );
+						return 4;   // AVD_RESULT_UNCHANGED
+					}
+				}
+				catch( Exception e )
+				{
+					// Unreadable sidecar just means we re-download.
+					Log.d( TAG, "downloadAvatar: sidecar unreadable: " + e.getMessage() );
+				}
 			}
 
 			Log.d( TAG, "downloadAvatar: downloading image from " + avatarUrl );
@@ -384,6 +418,20 @@ public class XashActivity extends SDLActivity {
 				Log.d( TAG, "downloadAvatar: Bitmap.compress(PNG) failed for " + savePath );
 				outFile.delete();
 				return 3;
+			}
+
+			// Record which avatar URL this PNG came from, so the next check can
+			// tell "unchanged" from "needs re-download" without fetching the image.
+			try
+			{
+				FileOutputStream ufos = new FileOutputStream( urlSidecar );
+				try { ufos.write( avatarUrl.getBytes( "UTF-8" ) ); }
+				finally { ufos.close(); }
+			}
+			catch( Exception e )
+			{
+				// Not fatal: without the sidecar we simply re-download next time.
+				Log.d( TAG, "downloadAvatar: could not write sidecar: " + e.getMessage() );
 			}
 
 			Log.d( TAG, "downloadAvatar: saved PNG to " + savePath + " (" + outFile.length() + " bytes)" );

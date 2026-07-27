@@ -207,7 +207,12 @@ static void *AVD_WorkerThread( void *arg )
 	if( avd_download_method != NULL )
 	{
 		__android_log_print( ANDROID_LOG_DEBUG, "Xash", "AvatarDL: worker slot=%d result=%d", work->slot, result );
-		avd_slot_result[work->slot] = ( result == 0 ) ? AVD_RESULT_SUCCESS : AVD_RESULT_FAIL;
+		// 4 = "profile's avatar URL matches the one we already cached", so the
+		// image download was skipped. The cached PNG is valid, so that counts
+		// as success — treating it as failure would arm the retry backoff and
+		// defeat the point of the cheap re-check.
+		avd_slot_result[work->slot] =
+			( result == 0 || result == 4 ) ? AVD_RESULT_SUCCESS : AVD_RESULT_FAIL;
 	}
 	__sync_synchronize();
 

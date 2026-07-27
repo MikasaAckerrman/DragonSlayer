@@ -17,7 +17,6 @@ GNU General Public License for more details.
 // (e.g. ReGameDLL plugin) before per-player avatars can be displayed.
 
 #include <inttypes.h>
-#include <time.h>
 #include "common.h"
 #include "client.h"
 #include "cl_scoreboard_slayer.h"
@@ -47,7 +46,7 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_opacity, "220", FCVAR_ARCHIVE, "Slaye
 static CVAR_DEFINE_AUTO( slayer_scoreboard_width, "0.84", FCVAR_ARCHIVE, "Slayer3D: scoreboard width as a fraction of screen width (0.50-0.99; PC reference is 0.843)" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_avatar, "3.0", FCVAR_ARCHIVE, "Slayer3D: avatar icon size as a multiple of the font glyph height" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_rowscale, "1.15", FCVAR_ARCHIVE, "Slayer3D: scoreboard cell height multiplier (1.0-2.0; PC reference works out to ~1.3)" );
-static CVAR_DEFINE_AUTO( slayer_avatar_maxage, "24", FCVAR_ARCHIVE, "Slayer3D: hours before a cached Steam avatar is re-downloaded (0 = never expire)" );
+static CVAR_DEFINE_AUTO( slayer_avatar_recheck, "10", FCVAR_ARCHIVE, "Slayer3D: minutes between Steam avatar change re-checks (0 = never; the check is one small XML fetch)" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_block_stock, "1", FCVAR_ARCHIVE, "Slayer3D: hide the game's own scoreboard while ours is up (0 = off, 1 = block VGUI, 2 = also block the client HUD redraw)" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_ondeath, "1", FCVAR_ARCHIVE, "Slayer3D: show the scoreboard automatically while dead (0 = only when held)" );
 
@@ -81,6 +80,7 @@ static qboolean        slayer_death_dismissed = false;  // hid the death auto-sh
 // Avatar state: SteamID64 per player slot and cached texture handles
 static uint64_t        slayer_steamid64[MAX_CLIENTS];
 static int             slayer_avatar_tex[MAX_CLIENTS]; // 0 = not tried, >0 = loaded, -1 = failed
+static double          slayer_avatar_next_check[MAX_CLIENTS]; // host.realtime of the next change re-check
 static double          slayer_status_next_time;       // throttle: next allowed "status" send
 static double          slayer_status_deadline;        // until: parse # lines from svc_print
 static qboolean        slayer_status_pending;          // true while we expect status reply
@@ -349,6 +349,23 @@ static void Slayer_LoadAvatarTexture( int slot )
 	if( slayer_steamid64[slot] == 0 )
 		return;
 
+	// Periodic change re-check. A fixed cache lifetime was the wrong tool: a
+	// player can change their Steam picture at any moment, so any expiry is
+	// either too slow to notice it or wastefully re-downloads. Instead ask the
+	// downloader on a short interval — Java compares the profile's avatar URL
+	// (a content hash, so it changes only when the picture does) against the one
+	// saved beside the PNG and skips the image entirely when they match. That
+	// makes a re-check cost one small XML fetch. The result handler reloads the
+	// texture when the file actually changed.
+	if( slayer_avatar_recheck.value > 0.0f && slayer_avatar_tex[slot] > 0 )
+	{
+		if( host.realtime >= slayer_avatar_next_check[slot] )
+		{
+			slayer_avatar_next_check[slot] = host.realtime + slayer_avatar_recheck.value * 60.0;
+			Slayer_AvatarDownload_Request( slayer_steamid64[slot], slot );
+		}
+	}
+
 	if( slayer_avatar_tex[slot] != 0 )
 		return; // already attempted (loaded or failed)
 
@@ -364,24 +381,8 @@ static void Slayer_LoadAvatarTexture( int slot )
 		return;
 	}
 
-	// Expire stale cache entries. Without this a player who changes their Steam
-	// picture keeps showing the old one forever, because the PNG is only ever
-	// fetched when it is missing. slayer_avatar_maxage is in hours; 0 disables.
-	if( slayer_avatar_maxage.value > 0.0f )
-	{
-		int    ftime = FS_FileTime( path, false );
-		double age_h = ( ftime > 0 ) ? ( time( NULL ) - (time_t)ftime ) / 3600.0 : 0.0;
-
-		if( ftime > 0 && age_h > slayer_avatar_maxage.value )
-		{
-			Slayer_Log_Printf( "avatar slot %d SteamID %" PRIu64 ": cache %.1fh old -> refresh",
-				slot, slayer_steamid64[slot], age_h );
-			FS_Delete( path );
-			Slayer_AvatarDownload_Request( slayer_steamid64[slot], slot );
-			slayer_avatar_tex[slot] = -1;
-			return;
-		}
-	}
+	// (Change detection for an already-cached avatar happens in the re-check
+	// block at the top of this function, not here.)
 
 	texid = ref.dllFuncs.GL_LoadTexture( path, NULL, 0, TF_IMAGE );
 	Slayer_Log_Printf( "avatar slot %d SteamID %" PRIu64 ": cached file '%s' -> texid %d",
@@ -421,7 +422,7 @@ static void Slayer_LoadAvatarTexture( int slot )
 
 // Drop every cached avatar PNG we know a SteamID for and re-request it. Use
 // this after changing your Steam picture instead of waiting out
-// slayer_avatar_maxage, or clearing app data.
+// slayer_avatar_recheck to come round, or clearing app data.
 static void Cmd_AvatarRefresh_f( void )
 {
 	uint64_t myid = Slayer_SteamLogin_GetLocalID();
@@ -555,7 +556,7 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_scoreboard_width );
 	Cvar_RegisterVariable( &slayer_scoreboard_avatar );
 	Cvar_RegisterVariable( &slayer_scoreboard_rowscale );
-	Cvar_RegisterVariable( &slayer_avatar_maxage );
+	Cvar_RegisterVariable( &slayer_avatar_recheck );
 	Cvar_RegisterVariable( &slayer_scoreboard_block_stock );
 
 	Cmd_AddCommand( "+slayer_scoreboard", Cmd_ScoreboardDown_f,
