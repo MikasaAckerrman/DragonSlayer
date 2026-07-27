@@ -1279,6 +1279,18 @@ void Slayer_Scoreboard_Draw( void )
 
 			if( rscale < 1.0f ) rscale = 1.0f;
 			if( rscale > 2.0f ) rscale = 2.0f;
+
+			// Open the cells further on a sparse board. With only a handful of
+			// rows there is height to spare, and cells sized for a full server
+			// look mean in all that space. Cannot go via the glyphs — the bitmap
+			// font has three fixed sizes — so the row grows instead. Crowded
+			// rosters are untouched, and the compression step below still clamps
+			// everything to the height actually available.
+			if( content_rows > 0 && content_rows <= 8 )
+				rscale *= 1.30f;
+			else if( content_rows <= 14 )
+				rscale *= 1.15f;
+
 			row_h_full = (int)( row_h_full * rscale + 0.5f );
 		}
 
