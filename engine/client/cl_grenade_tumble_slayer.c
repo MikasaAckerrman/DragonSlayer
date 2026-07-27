@@ -90,9 +90,22 @@ static CVAR_DEFINE_AUTO( slayer_grenade_tumble,
 	"1", FCVAR_ARCHIVE,
 	"Slayer3D: client-side axial grenade tumble proportional to linear speed (0 = off)" );
 
+// Pivot compensation is OFF by default, and the device log is why. It shifts
+// the entity by -(R*bbox_center - bbox_center), but `model->mins/maxs` on a
+// studio model is the CLIPPING hull, not the visual mesh extent: the log shows
+// bbox centres of (0,-2,5) and (1,-2,5) for smoke/flashbang, so the "correction"
+// displaced the model by up to 6-8 units several times a second — larger than
+// the grenade itself. Worse, a resting grenade froze at shift=(4.5 4.5 -3.6),
+// i.e. drawn ~7 units away from where it actually lay. That wobble WAS the bug
+// it was written to cure. The mesh is authored around the entity origin, so the
+// correct offset here is simply zero.
 static CVAR_DEFINE_AUTO( slayer_grenade_pivot_fix,
-	"1", FCVAR_ARCHIVE,
-	"Slayer3D: grenade pivot compensation (0=off, 1=on, 2=on+diag, 3=on+diag+rejected models)" );
+	"0", FCVAR_ARCHIVE,
+	"Slayer3D: grenade pivot compensation (0=off — bbox centre is the clip hull, not the mesh centre)" );
+
+static CVAR_DEFINE_AUTO( slayer_grenade_diag,
+	"0", FCVAR_ARCHIVE,
+	"Slayer3D: grenade tumble diagnostics to slayer_diag.log (0=off, 1=on, 2=on+rejected models)" );
 
 // =============================================================================
 // Tunables
@@ -100,7 +113,10 @@ static CVAR_DEFINE_AUTO( slayer_grenade_pivot_fix,
 
 #define GT_MAX_SLOTS  32      // ~rarely more than a handful of grenades in flight
 #define GT_LIFETIME   5.0f    // sec: slot reclaimed if not refreshed
-#define GT_BASE_RATE  1080.0f // deg/sec at GT_MAX_SPEED (1.5x bump from initial 720)
+#define GT_BASE_RATE  360.0f  // deg/sec at GT_MAX_SPEED — one turn per second at a
+                              // hard throw. Was 1080 (three turns/sec), which read
+                              // as a blur rather than a tumble; the device log
+                              // confirmed a full 540 deg between 0.5 s samples.
 #define GT_MAX_SPEED  600.0f  // hammer units / sec — typical strong throw
 #define GT_REST_SPEED 20.0f   // below this speed rotation halts entirely
 
@@ -258,7 +274,10 @@ static void Slayer_GT_CompensatePivot( struct cl_entity_s *ent )
 	vec3_t    L_center, rotated_L, shift;
 	matrix3x4 mat;
 
-	if( !slayer_grenade_pivot_fix.value )
+	// NOTE: the shift is computed even when the compensation is disabled, so the
+	// diagnostic can still report what it *would* have done. Only the final
+	// application to ent->origin is gated.
+	if( !slayer_grenade_pivot_fix.value && slayer_grenade_diag.value < 1.0f )
 		return;
 	if( !ent->model )
 		return;
@@ -294,7 +313,11 @@ static void Slayer_GT_CompensatePivot( struct cl_entity_s *ent )
 	Matrix3x4_VectorRotate( mat, L_center, rotated_L );
 
 	VectorSubtract( rotated_L, L_center, shift );
-	VectorSubtract( ent->origin, shift, ent->origin );
+
+	// Apply only when explicitly enabled — see the cvar comment for why this is
+	// off by default.
+	if( slayer_grenade_pivot_fix.value )
+		VectorSubtract( ent->origin, shift, ent->origin );
 
 	// Capture for the throttled diagnostic (see the tumble step below).
 	VectorCopy( L_center, gt_diag_lcenter );
@@ -302,7 +325,7 @@ static void Slayer_GT_CompensatePivot( struct cl_entity_s *ent )
 	Q_strncpy( gt_diag_model, ent->model->name, sizeof( gt_diag_model ));
 
 	// Diagnostic one-shot print (only when cvar >= 2)
-	if( slayer_grenade_pivot_fix.value >= 2.0f )
+	if( slayer_grenade_diag.value >= 1.0f )
 	{
 		static char diag_printed_models[GT_DIAG_MAX_MODELS][MAX_QPATH];
 		static int  diag_printed_count = 0;
@@ -404,6 +427,7 @@ void Slayer_GrenadeTumble_Init( void )
 
 	Cvar_RegisterVariable( &slayer_grenade_tumble );
 	Cvar_RegisterVariable( &slayer_grenade_pivot_fix );
+	Cvar_RegisterVariable( &slayer_grenade_diag );
 
 	Cmd_AddCommand( "slayer_quickthrow", Cmd_SlayerQuickThrow_f,
 		"Slayer3D: one-button grenade quick throw — slot4 by default; pass "
@@ -439,7 +463,7 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	if( !Slayer_GT_IsGrenadeModel( ent->model->name ))
 	{
 		// Level 3: log rejected (non-grenade) model names, throttled
-		if( slayer_grenade_pivot_fix.value >= 3.0f && cl.time - gt_diag_last_print_l3 >= GT_DIAG_INTERVAL )
+		if( slayer_grenade_diag.value >= 2.0f && cl.time - gt_diag_last_print_l3 >= GT_DIAG_INTERVAL )
 		{
 			Con_Printf( "[SlayerGT] rejected model: %s\n", ent->model->name );
 			gt_diag_last_print_l3 = cl.time;
@@ -526,7 +550,7 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	// are computed, so the log shows what was actually applied this frame, and
 	// goes to the Slayer file log so it can be sent back rather than only
 	// scrolling past in the console.
-	if( slayer_grenade_pivot_fix.value >= 2.0f && cl.time - gt_diag_last_print_l2 >= GT_DIAG_INTERVAL )
+	if( slayer_grenade_diag.value >= 1.0f && cl.time - gt_diag_last_print_l2 >= GT_DIAG_INTERVAL )
 	{
 		gt_diag_last_print_l2 = cl.time;
 

@@ -922,14 +922,28 @@ Returns 0 when nothing should be suppressed.
 */
 int Slayer_Scoreboard_StockBlockLevel( void )
 {
-	int level = (int)slayer_scoreboard_block_stock.value;
+	static int last_reported = -1;
+	int        cvar_level = (int)slayer_scoreboard_block_stock.value;
+	qboolean   visible = Slayer_Scoreboard_IsVisible();
+	int        level;
 
-	if( level <= 0 )
-		return 0;
-	if( !Slayer_Scoreboard_IsVisible( ))
-		return 0;
+	if( cvar_level <= 0 || !visible )
+		level = 0;
+	else
+		level = ( cvar_level > 2 ) ? 2 : cvar_level;
 
-	return ( level > 2 ) ? 2 : level;
+	// This is asked several times per frame, so report only when the effective
+	// level changes. Without it there is no way to tell from a log whether the
+	// stock board survived because the block never engaged or because it
+	// engaged and was not enough.
+	if( level != last_reported )
+	{
+		last_reported = level;
+		Slayer_Log_Printf( "stock-board block: level=%d (cvar=%d, ours visible=%d, dead-dismissed=%d)",
+			level, cvar_level, (int)visible, (int)slayer_death_dismissed );
+	}
+
+	return level;
 }
 
 void Slayer_Scoreboard_Draw( void )
