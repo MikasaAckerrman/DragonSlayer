@@ -55,7 +55,15 @@ jobs:
     - name: Build engine
       env:
         FWGS_PFX_PASSWORD: ${{ secrets.FWGS_PFX_PASSWORD }}
-        SLAYER_BUILD_MODE: ${{ github.event.inputs.build_mode || 'full' }}
+        # Build mode resolution, in priority order:
+        #   1. workflow_dispatch input, when started manually;
+        #   2. '[quick]' in the pushed commit message - arm64-v8a only,
+        #      ~5 min instead of ~10. Use it for iteration builds;
+        #   3. 'full' - every architecture. Use it for real releases.
+        # The marker exists because workflow_dispatch needs a PAT with the
+        # workflow scope, which our token lacks (403 on dispatches), so a
+        # push to master is the only trigger reliably available.
+        SLAYER_BUILD_MODE: ${{ github.event.inputs.build_mode || (contains(github.event.head_commit.message, '[quick]') && 'quick' || 'full') }}
       run: bash scripts/gha/build_android.sh
     - name: Upload APK (artifact)
       uses: actions/upload-artifact@v7
