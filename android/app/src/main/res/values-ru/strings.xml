@@ -72,5 +72,12 @@
 	<string name="steam_apikey_summary">Необязательно — ускоряет массовую загрузку. Аватарки и так грузятся из публичных профилей без него. Бесплатный ключ: steamcommunity.com/dev/apikey</string>
 	<string name="steam_apikey_unset">Не задан — аватарки грузятся из публичных профилей</string>
 	<string name="steam_advertise">Показывать мою аватарку другим</string>
+	<string name="game_path_restart_required">Нужен перезапуск приложения</string>
+	<string name="game_path_invalid_folder">В выбранной папке должна быть подпапка valve/ или cstrike/</string>
+	<string name="game_path_use_default">Память приложения (рекомендуется)</string>
+	<string name="game_path_use_default_summary">Собственная папка игры в Android/data. Самый быстрый вариант, запись всегда работает. Но Android удалит эту папку вместе с приложением.</string>
+	<string name="game_path_choose_folder">Выбрать папку самому</string>
+	<string name="game_path_choose_folder_summary">Любая папка на выбор. Переживёт удаление приложения, и в неё проще зайти файловым менеджером.</string>
+	<string name="game_path_reset_to_default">Память приложения: %1$s</string>
 	<string name="steam_advertise_summary">Отправляет ваш настоящий SteamID на сервер, чтобы другие игроки видели вашу аватарку. Выключите, если сервер отклоняет подключение.</string>
 </resources>

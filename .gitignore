@@ -374,3 +374,12 @@ GEMINI.md
 .continue/
 .codeium/
 .github/copilot-instructions.md
+
+# Slayer3D dev plans (local only, not for upstream)
+SLAYER_DEVLOG.md
+SLAYER_PLAN_*.md
+SLAYER_STATUS.md
+SLAYER_ROADMAP.md
+
+# library-rag symbol index (rebuilt on demand, machine-local)
+.library-rag/

@@ -65,6 +65,11 @@
 	<string name="engine_install_failed">Update install failed: %1$s</string>
 	<string name="game_path_restart_required">Requires app restart</string>
 	<string name="game_path_invalid_folder">Selected folder must contain valve/ or cstrike/ subfolder</string>
+	<string name="game_path_use_default">App storage (recommended)</string>
+	<string name="game_path_use_default_summary">The game\'s own folder under Android/data. Fastest and always writable, but Android deletes it when the app is uninstalled.</string>
+	<string name="game_path_choose_folder">Choose a folder</string>
+	<string name="game_path_choose_folder_summary">Pick any folder yourself. It survives uninstalling the app, and is easier to reach with a file manager.</string>
+	<string name="game_path_reset_to_default">Using app storage: %1$s</string>
 
 	<!-- Steam account -->
 	<string name="steam_category">Steam account</string>

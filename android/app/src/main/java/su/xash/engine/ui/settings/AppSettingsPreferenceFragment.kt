@@ -3,11 +3,15 @@ package su.xash.engine.ui.settings
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.view.LayoutInflater
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.navigation.fragment.findNavController
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
+import com.google.android.material.bottomsheet.BottomSheetDialog
+import com.google.android.material.card.MaterialCardView
 import su.xash.engine.R
 import su.xash.engine.SteamLoginActivity
 import java.io.File
@@ -37,7 +41,7 @@ class AppSettingsPreferenceFragment() : PreferenceFragmentCompat() {
 			?.putString("game_path", path)
 			?.apply()
 
-		findPreference<Preference>("game_path")?.summary = path
+		refreshGamePathSummary()
 
 		Toast.makeText(
 			requireContext(),
@@ -50,15 +54,9 @@ class AppSettingsPreferenceFragment() : PreferenceFragmentCompat() {
 		preferenceManager.sharedPreferencesName = "app_preferences";
 		setPreferencesFromResource(R.xml.app_preferences, rootKey);
 
-		val gamePathPref = findPreference<Preference>("game_path")
-		val savedPath = preferenceManager.sharedPreferences?.getString("game_path", null)
-		gamePathPref?.summary = if (!savedPath.isNullOrEmpty()) {
-			savedPath
-		} else {
-			getDefaultGamePath()
-		}
-		gamePathPref?.setOnPreferenceClickListener {
-			folderPickerLauncher.launch(null)
+		refreshGamePathSummary()
+		findPreference<Preference>("game_path")?.setOnPreferenceClickListener {
+			showGamePathSheet()
 			true
 		}
 
@@ -113,6 +111,71 @@ class AppSettingsPreferenceFragment() : PreferenceFragmentCompat() {
 		} else {
 			// never show the key itself
 			"•".repeat(8) + key.takeLast(4)
+		}
+	}
+
+	/**
+	 * Offers the two ways to place the game files. They are not
+	 * interchangeable: the app's own directory is the only place the engine
+	 * is guaranteed to be able to write, while a user-chosen folder survives
+	 * the app being uninstalled. Previously the tap went straight to the
+	 * folder picker, so once a folder had been chosen there was no way back to
+	 * the default short of clearing app data.
+	 */
+	private fun showGamePathSheet() {
+		val sheet = BottomSheetDialog(requireContext())
+		val view = LayoutInflater.from(requireContext())
+			.inflate(R.layout.sheet_game_path, null)
+
+		view.findViewById<TextView>(R.id.game_path_current).text = currentGamePath()
+
+		view.findViewById<MaterialCardView>(R.id.game_path_default)
+			.setOnClickListener {
+				sheet.dismiss()
+				useDefaultGamePath()
+			}
+
+		view.findViewById<MaterialCardView>(R.id.game_path_custom)
+			.setOnClickListener {
+				sheet.dismiss()
+				folderPickerLauncher.launch(null)
+			}
+
+		sheet.setContentView(view)
+		sheet.show()
+	}
+
+	/**
+	 * Clearing the stored path is what selects the default, rather than
+	 * writing the default path in: the directory is derived from the package
+	 * name, which differs between the release and .test builds, so a stored
+	 * copy would point at the other build's folder after switching.
+	 */
+	private fun useDefaultGamePath() {
+		preferenceManager.sharedPreferences?.edit()
+			?.remove("game_path")
+			?.apply()
+
+		refreshGamePathSummary()
+
+		Toast.makeText(
+			requireContext(),
+			R.string.game_path_restart_required,
+			Toast.LENGTH_SHORT
+		).show()
+	}
+
+	private fun currentGamePath(): String {
+		val saved = preferenceManager.sharedPreferences?.getString("game_path", null)
+		return if (!saved.isNullOrEmpty()) saved else getDefaultGamePath()
+	}
+
+	private fun refreshGamePathSummary() {
+		val saved = preferenceManager.sharedPreferences?.getString("game_path", null)
+		findPreference<Preference>("game_path")?.summary = if (!saved.isNullOrEmpty()) {
+			saved
+		} else {
+			getString(R.string.game_path_reset_to_default, getDefaultGamePath())
 		}
 	}
 
