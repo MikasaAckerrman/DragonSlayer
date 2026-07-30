@@ -291,7 +291,7 @@ void Slayer_SteamAPI_RequestBatch( const uint64_t *steamids, int count )
 		gamedir = "valve";
 
 	Q_snprintf( work->basepath, sizeof( work->basepath ),
-		"%s/%s/avatars", basedir, gamedir );
+		"%s/%s/" SLAYER_AVATAR_DIR, basedir, gamedir );
 
 	sapi_batch_in_progress = true;
 	sapi_result = SAPI_RESULT_IN_PROGRESS;

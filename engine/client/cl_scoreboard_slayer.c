@@ -385,7 +385,7 @@ static void Slayer_LoadAvatarTexture( int slot )
 	if( slayer_avatar_tex[slot] != 0 )
 		return; // already attempted (loaded or failed)
 
-	Q_snprintf( path, sizeof( path ), "avatars/%"PRIu64".png", slayer_steamid64[slot] );
+	Slayer_AvatarPath( path, sizeof( path ), slayer_steamid64[slot] );
 
 	if( !FS_FileExists( path, false ) )
 	{
@@ -451,7 +451,7 @@ static void Cmd_AvatarRefresh_f( void )
 		if( slayer_steamid64[i] == 0 )
 			continue;
 
-		Q_snprintf( path, sizeof( path ), "avatars/%"PRIu64".png", slayer_steamid64[i] );
+		Slayer_AvatarPath( path, sizeof( path ), slayer_steamid64[i] );
 		FS_Delete( path );
 		slayer_avatar_tex[i] = 0;   // 0 = untried, so the next draw re-requests
 		slayer_avatar_upload_pending[i] = true;
@@ -463,7 +463,7 @@ static void Cmd_AvatarRefresh_f( void )
 	{
 		char path[128];
 
-		Q_snprintf( path, sizeof( path ), "avatars/%"PRIu64".png", myid );
+		Slayer_AvatarPath( path, sizeof( path ), myid );
 		if( FS_FileExists( path, false ))
 		{
 			FS_Delete( path );
@@ -495,7 +495,7 @@ static void Cmd_AvatarUrls_f( void )
 	if( count == 0 )
 		Con_Printf( "No SteamIDs found. Open scoreboard first to fetch player info.\n" );
 	else
-		Con_Printf( "Place avatar images at: avatars/<steamid64>.png\n" );
+		Con_Printf( "Place avatar images at: " SLAYER_AVATAR_DIR "/<steamid64>.png\n" );
 }
 
 // ===========================================================================
@@ -740,6 +740,9 @@ void Slayer_Scoreboard_Init( void )
 	Slayer_Log_Init();
 	Slayer_Toast_Init();
 	Slayer_AvatarDownload_Init();
+	// Cache location moved to downloaded/avatars/; carry over anything the
+	// player already has so a rename does not cost them a full re-download.
+	Slayer_AvatarDownload_MigrateCache();
 	Slayer_SteamAPI_Init();
 	Slayer_SteamLogin_Init();
 
@@ -1191,7 +1194,7 @@ void Slayer_Scoreboard_Draw( void )
 			if( slayer_avatar_tex[i] != -1 || slayer_steamid64[i] == 0 )
 				continue;
 
-			Q_snprintf( avpath, sizeof( avpath ), "avatars/%" PRIu64 ".png", slayer_steamid64[i] );
+			Slayer_AvatarPath( avpath, sizeof( avpath ), slayer_steamid64[i] );
 			if( !FS_FileExists( avpath, false ) )
 				continue;
 

@@ -22,6 +22,93 @@ Other platforms: Uses non-blocking HTTP sockets (port 80, no TLS).
 #include "cl_avatar_download.h"
 #include "cl_slayer_log.h"
 
+// ===========================================================================
+// SHARED - cache location
+// ===========================================================================
+
+// The pre-downloaded/ location. Kept only so existing installs do not lose
+// their cache; nothing writes here any more.
+#define SLAYER_AVATAR_DIR_LEGACY "avatars"
+
+/*
+====================
+Slayer_AvatarPath
+
+One source of truth for where an avatar is cached. The path used to be spelled
+out at each of the ten call sites across four files, which is how a partial
+rename ended up writing to one directory and reading from another.
+====================
+*/
+void Slayer_AvatarPath( char *dst, size_t size, uint64_t steamid64 )
+{
+	Q_snprintf( dst, size, SLAYER_AVATAR_DIR "/%" PRIu64 ".png", steamid64 );
+}
+
+/*
+====================
+Slayer_AvatarDownload_MigrateCache
+
+Moves avatars from the old flat avatars/ directory into downloaded/avatars/.
+
+Without this, changing the location would silently throw away every cached
+avatar an existing player has, and re-download all of them on the next join --
+the exact traffic spike the URL sidecar exists to avoid. Runs once at init and
+costs one directory listing when there is nothing to move.
+====================
+*/
+void Slayer_AvatarDownload_MigrateCache( void )
+{
+	search_t *search;
+	int       i, moved = 0, failed = 0;
+
+	search = FS_Search( SLAYER_AVATAR_DIR_LEGACY "/*", true, false );
+	if( !search )
+		return;   // nothing there: fresh install, or already migrated
+
+	for( i = 0; i < search->numfilenames; i++ )
+	{
+		const char *src = search->filenames[i];
+		const char *base;
+		char        dst[256];
+
+		// Take the leaf name so the sidecar (<id>.png.url) travels with its
+		// image; anything else in there moves too rather than being stranded.
+		base = Q_strrchr( src, '/' );
+		base = base ? base + 1 : src;
+
+		Q_snprintf( dst, sizeof( dst ), SLAYER_AVATAR_DIR "/%s", base );
+
+		if( FS_FileExists( dst, false ) )
+		{
+			// Already migrated (or a re-download beat us to it): drop the stray
+			// copy so the old directory can go away.
+			FS_Delete( src );
+			continue;
+		}
+
+		if( FS_Rename( src, dst ))
+		{
+			moved++;
+		}
+		else
+		{
+			// Not fatal: the avatar simply re-downloads into the new location.
+			failed++;
+		}
+	}
+
+	if( search )
+		Mem_Free( search );
+
+	if( moved || failed )
+	{
+		Slayer_Log_Printf( "avatar cache: migrated %d file(s) from %s to %s (%d failed)",
+			moved, SLAYER_AVATAR_DIR_LEGACY, SLAYER_AVATAR_DIR, failed );
+		Con_Printf( "Slayer3D: moved %d cached avatar(s) into %s\n",
+			moved, SLAYER_AVATAR_DIR );
+	}
+}
+
 #if XASH_ANDROID
 // ===========================================================================
 // ANDROID IMPLEMENTATION - JNI + pthread
@@ -112,7 +199,7 @@ static void *AVD_WorkerThread( void *arg )
 	if( !gamedir || gamedir[0] == '\0' )
 		gamedir = "valve";
 
-	Q_snprintf( save_path, sizeof( save_path ), "%s/%s/avatars/%" PRIu64 ".png",
+	Q_snprintf( save_path, sizeof( save_path ), "%s/%s/" SLAYER_AVATAR_DIR "/%" PRIu64 ".png",
 		basedir, gamedir, work->steamid64 );
 
 	__android_log_print( ANDROID_LOG_DEBUG, "Xash", "AvatarDL: worker slot=%d steamid=%" PRIu64 " path=%s",
@@ -398,7 +485,7 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 	}
 
 	// Already cached on disk?
-	Q_snprintf( path, sizeof( path ), "avatars/%" PRIu64 ".png", steamid64 );
+	Slayer_AvatarPath( path, sizeof( path ), steamid64 );
 	if( FS_FileExists( path, false ) )
 	{
 		Slayer_Log_Printf( "avatar Request slot %d: cache HIT %s", slot, path );
@@ -857,8 +944,7 @@ static qboolean AVD_SaveImage( avd_request_t *req )
 	if( image_size <= 0 )
 		return false;
 
-	Q_snprintf( file_path, sizeof( file_path ),
-		"avatars/%" PRIu64 ".png", req->steamid64 );
+	Slayer_AvatarPath( file_path, sizeof( file_path ), req->steamid64 );
 
 	FS_AllowDirectPaths( true );
 	if( !FS_WriteFile( file_path, image_data, image_size ) )
@@ -1309,7 +1395,7 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 	}
 
 	// Already cached on disk?
-	Q_snprintf( path, sizeof( path ), "avatars/%" PRIu64 ".png", steamid64 );
+	Slayer_AvatarPath( path, sizeof( path ), steamid64 );
 	if( FS_FileExists( path, false ) )
 	{
 		avd_slot_state[slot] = AVD_SLOT_DONE;
