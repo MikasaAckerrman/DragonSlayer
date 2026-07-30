@@ -930,7 +930,10 @@ void CL_DrawHUD( int state )
 		CL_DrawScreenFade ();
 		CL_DrawCrosshair ();
 		CL_DrawCenterPrint ();
-		clgame.dllFuncs.pfnRedraw( cl.time, cl.intermission );
+		// Same protection as CL_ACTIVE: if our scoreboard is visible,
+		// suppress the client DLL redraw so the stock board cannot appear.
+		if( Slayer_Scoreboard_StockBlockLevel() < 2 )
+			clgame.dllFuncs.pfnRedraw( cl.time, cl.intermission );
 		if( showpause.value )
 		{
 			if( !cls.pauseIcon )

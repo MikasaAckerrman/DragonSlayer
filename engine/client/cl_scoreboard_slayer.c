@@ -895,10 +895,15 @@ qboolean Slayer_Scoreboard_IsVisible( void )
 	if( slayer_scoreboard_ondeath.value != 0.0f && !slayer_death_dismissed
 	 && cl.playernum >= 0 && cl.playernum < MAX_CLIENTS )
 	{
-		int myteam = slayer_scores[cl.playernum].team_id;
-
-		if(( myteam == SLAYER_TEAM_CT || myteam == SLAYER_TEAM_T )
-		 && ( slayer_scores[cl.playernum].flags & 1 ))
+		// Consider the player dead if EITHER source says so:
+		// 1) ScoreAttrib flags (from server) — reliable but delayed 1-3 frames
+		// 2) cl.local.health <= 0 — immediate, no round-trip delay
+		// Without the health check, the stock scoreboard is visible for those
+		// 1-3 frames between death and ScoreAttrib, because block_level
+		// returns 0 and the client DLL draws its own board.
+		qboolean dead = ( slayer_scores[cl.playernum].flags & 1 )
+			|| ( cl.local.health <= 0 );
+		if( dead )
 			return true;   // dead: CS shows its board here, and so do we
 	}
 
