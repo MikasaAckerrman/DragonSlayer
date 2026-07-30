@@ -18,6 +18,7 @@ GNU General Public License for more details.
 #include "event_flags.h"
 #include "net_encode.h"
 #include "con_nprint.h"
+#include "cl_tracer_slayer.h"
 
 /*
 ===============
@@ -537,6 +538,12 @@ void GAME_EXPORT CL_PlaybackEvent( int flags, const edict_t *pInvoker, word even
 	SetBits( flags, FEV_CLIENT ); // it's a client event
 	ClearBits( flags, FEV_NOTHOST|FEV_HOSTONLY|FEV_GLOBAL );
 	if( delay < 0.0f ) delay = 0.0f; // fixup negative delays
+
+	// Slayer3D: log which events the game DLL plays back, so we can identify
+	// the shot events to hang custom tracers on. R_TracerEffect turned out not
+	// to be called by CS 1.6 at all, so the tracer has to key off these
+	// instead. Diagnostic only, gated by slayer_log.
+	Slayer_Tracer_LogEvent( eventindex, cl.event_precache[eventindex], origin, angles );
 
 	memset( &args, 0, sizeof( args ));
 

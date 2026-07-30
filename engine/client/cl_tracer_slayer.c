@@ -65,6 +65,13 @@ static CVAR_DEFINE_AUTO( slayer_tracer_hot, "255 70 55", FCVAR_ARCHIVE,
 static CVAR_DEFINE_AUTO( slayer_tracer_sparks, "0", FCVAR_ARCHIVE,
 	"Slayer3D: replace vanilla bullet-impact sparks (0 = keep vanilla until our own sparks exist)" );
 
+// Diagnostic switch: log every event the game DLL plays back, with its
+// precached name. CS 1.6 does not route bullets through R_TracerEffect, so this
+// is how the real shot-event path gets identified from a device log. Off by
+// default because a firefight generates a lot of lines.
+static CVAR_DEFINE_AUTO( slayer_tracer_logevents, "0", FCVAR_ARCHIVE,
+	"Slayer3D: log game DLL events to find the shot event (diagnostic, 0 = off)" );
+
 // ===========================================================================
 // State
 // ===========================================================================
@@ -135,6 +142,7 @@ void Slayer_Tracer_Init( void )
 	Cvar_RegisterVariable( &slayer_tracer_cold );
 	Cvar_RegisterVariable( &slayer_tracer_hot );
 	Cvar_RegisterVariable( &slayer_tracer_sparks );
+	Cvar_RegisterVariable( &slayer_tracer_logevents );
 
 	Slayer_Tracer_Reset();
 }
@@ -214,4 +222,32 @@ void Slayer_Tracer_Frame( void )
 qboolean Slayer_Tracer_SuppressVanillaSparks( void )
 {
 	return ( slayer_tracer.value != 0.0f && slayer_tracer_sparks.value != 0.0f );
+}
+
+void Slayer_Tracer_LogEvent( int eventindex, const char *name,
+	const float *origin, const float *angles )
+{
+	// Only log each distinct event index once per map, and only a bounded
+	// number of them: a firefight replays the same few events hundreds of
+	// times, and the point is to learn WHICH events exist, not to count them.
+	static int  seen[64];
+	static int  seen_count = 0;
+	int         i;
+
+	if( slayer_tracer_logevents.value == 0.0f )
+		return;
+
+	for( i = 0; i < seen_count; i++ )
+	{
+		if( seen[i] == eventindex )
+			return;   // already reported this one
+	}
+
+	if( seen_count < (int)( sizeof( seen ) / sizeof( seen[0] )))
+		seen[seen_count++] = eventindex;
+
+	Slayer_Log_Printf( "event: idx=%d name='%s' org=(%.0f %.0f %.0f) ang=(%.0f %.0f %.0f)",
+		eventindex, name ? name : "?",
+		origin ? origin[0] : 0.0f, origin ? origin[1] : 0.0f, origin ? origin[2] : 0.0f,
+		angles ? angles[0] : 0.0f, angles ? angles[1] : 0.0f, angles ? angles[2] : 0.0f );
 }

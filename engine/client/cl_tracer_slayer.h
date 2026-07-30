@@ -39,4 +39,11 @@ void Slayer_Tracer_Frame( void );
 // can replace them. Checked from R_BulletImpactParticles / R_SparkStreaks.
 qboolean Slayer_Tracer_SuppressVanillaSparks( void );
 
+// Diagnostic: record which events the game DLL plays back, so the shot events
+// worth hooging tracers onto can be identified from a device log. CS 1.6 does
+// not route bullets through R_TracerEffect, so this is how we find the real
+// path. Rate-limited internally; a no-op unless slayer_tracer_logevents is set.
+void Slayer_Tracer_LogEvent( int eventindex, const char *name,
+	const float *origin, const float *angles );
+
 #endif // CL_TRACER_SLAYER_H
