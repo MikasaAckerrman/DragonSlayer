@@ -18,6 +18,7 @@ GNU General Public License for more details.
 #include "cl_view_slayer.h"
 #include "cl_scoreboard_slayer.h"
 #include "cl_hud_slayer.h"
+#include "cl_tracer_slayer.h"
 #include "cl_sgs_slayer.h"
 #include "cl_loading_slayer.h"
 #include "cl_grenade_tumble_slayer.h"
@@ -185,6 +186,9 @@ void V_InitSlayerCvars( void )
 
 	// HUD damage indicator
 	Slayer_HUD_Init();
+
+	// Custom bullet tracers (heat colour + spark replacement)
+	Slayer_Tracer_Init();
 
 	// Side-Game Strafe (mobile auto-strafer)
 	Slayer_SGS_Init();
@@ -357,6 +361,9 @@ void Slayer_ResetMatchState( void )
 
 	// Clear HUD damage indicator events
 	Slayer_HUD_Reset();
+
+	// Clear tracer heat state
+	Slayer_Tracer_Reset();
 
 	// Clear SGS phase / swipe timestamp / held flag
 	Slayer_SGS_Reset();

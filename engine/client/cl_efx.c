@@ -5,6 +5,7 @@
 #include "customentity.h"
 #include "r_efx.h"
 #include "cl_tent.h"
+#include "cl_tracer_slayer.h"
 #include "pm_local.h"
 #define PART_SIZE	Q_max( 0.5f, cl_draw_particles.value )
 
@@ -1777,6 +1778,11 @@ void GAME_EXPORT R_BulletImpactParticles( const vec3_t pos )
 	vec3_t		dir;
 	particle_t	*p;
 
+	// Slayer3D: suppress the vanilla bullet-impact burst so our own effect
+	// (or a clean impact) can take its place.
+	if( Slayer_Tracer_SuppressVanillaSparks( ))
+		return;
+
 	VectorSubtract( pos, refState.vieworg, dir );
 	dist = VectorLength( dir );
 	if( dist > 1000.0f ) dist = 1000.0f;
@@ -1890,6 +1896,11 @@ void GAME_EXPORT R_TracerEffect( const vec3_t start, const vec3_t end )
 	vec3_t	pos, vel, dir;
 	float	len, speed;
 	float	offset;
+
+	// Slayer3D: register the shot for barrel-heat colouring. The colour itself
+	// is pushed to the engine's custom tracer slot each frame; we still let the
+	// engine build the tracer below so its additive, batched draw path is used.
+	Slayer_Tracer_OnFire( start, end );
 
 	speed = Q_max( tracerspeed.value, 3.0f );
 
@@ -2153,6 +2164,10 @@ static void CL_FreeDeadBeams( void )
 
 void CL_DrawEFX( float time, qboolean fTrans )
 {
+	// Slayer3D: advance tracer barrel-heat once per frame before drawing, so
+	// the custom tracer colour tracks sustained fire.
+	Slayer_Tracer_Frame();
+
 	CL_FreeDeadBeams();
 	if( cl_draw_beams.value )
 		ref.dllFuncs.CL_DrawBeams( fTrans, cl_active_beams );
