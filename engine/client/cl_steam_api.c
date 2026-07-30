@@ -39,7 +39,8 @@ static CVAR_DEFINE_AUTO( slayer_steam_apikey, "", FCVAR_ARCHIVE | FCVAR_PROTECTE
 static qboolean sapi_initialized = false;
 static qboolean sapi_batch_in_progress = false;
 static qboolean sapi_batch_disabled = false;   // set on a rejected key; cleared when the key changes
-static char     sapi_last_apikey[128] = "";     // key last sent, to detect an edit after a rejectionstatic uint64_t sapi_batch_ids[SAPI_MAX_PLAYERS];
+static char     sapi_last_apikey[128] = "";     // key last sent, to detect an edit after a rejection
+static uint64_t sapi_batch_ids[SAPI_MAX_PLAYERS];
 static int      sapi_batch_slots[SAPI_MAX_PLAYERS]; // original player slot for each ID
 static int      sapi_batch_count = 0;
 
