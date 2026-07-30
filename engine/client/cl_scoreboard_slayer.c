@@ -85,6 +85,9 @@ static double          slayer_status_next_time;       // throttle: next allowed 
 static double          slayer_status_deadline;        // until: parse # lines from svc_print
 static qboolean        slayer_status_pending;          // true while we expect status reply
 static int             slayer_steam_reject_count;     // debounce: non-STEAM lines logged per session (reset on map change)
+static qboolean        slayer_auto_fetch_done;        // auto status sent for this connection
+static double          slayer_next_auto_fetch;        // next auto status send time
+static qboolean        slayer_batch_after_status;     // trigger SteamAPI batch after status parsed
 
 // Ping "hold-last-good" cache: cl.players[].ping drops to 0 on transient
 // snapshots and when the board is (re)opened cold. Keep the last non-zero
@@ -485,6 +488,43 @@ static void Cmd_AvatarUrls_f( void )
 // +slayer_scoreboard / -slayer_scoreboard commands
 // ===========================================================================
 
+// Auto-fetch player SteamIDs and avatars when connecting to a server.
+// Called every frame from Draw() while ca_active. Sends "status" once per
+// connection (or retry after a timeout), then triggers the Steam Web API
+// batch so avatars start downloading immediately — without waiting for the
+// user to open the scoreboard.
+static void Slayer_AutoFetchAvatars( void )
+{
+	if( !slayer_auto_fetch_done )
+	{
+		// First time on this server — send status immediately
+		Cbuf_AddText( "status\n" );
+		slayer_status_next_time = host.realtime + 30.0;
+		slayer_status_pending = true;
+		slayer_status_deadline = host.realtime + 30.0;
+		slayer_steam_reject_count = 0;
+		slayer_auto_fetch_done = true;
+		slayer_batch_after_status = true;
+		Slayer_Log_Printf( "auto-fetch: status request queued on connect (parse window 30s)" );
+#if XASH_ANDROID
+		__android_log_print( ANDROID_LOG_INFO, "Xash",
+			"Slayer SB: auto status request on connect" );
+#endif
+	}
+	else if( slayer_batch_after_status )
+	{
+		// After status parse window, fire the batch API request for all
+		// players whose SteamIDs we now know. Keep retrying every few seconds
+		// until at least one batch completes — players join over time.
+		if( host.realtime >= slayer_next_auto_fetch )
+		{
+			slayer_next_auto_fetch = host.realtime + 5.0;
+			Slayer_SteamAPI_RequestBatch( slayer_steamid64, MAX_CLIENTS );
+		}
+	}
+}
+
+
 static void Cmd_ScoreboardDown_f( void )
 {
 	slayer_scoreboard_active = true;
@@ -591,6 +631,9 @@ void Slayer_Scoreboard_Reset( void )
 	slayer_status_next_time = 0.0;   // allow immediate re-fetch on next connect
 	slayer_status_deadline = 0.0;
 	slayer_steam_reject_count = 0;
+	slayer_auto_fetch_done = false;   // re-arm auto-fetch for next connection
+	slayer_next_auto_fetch = 0.0;
+	slayer_batch_after_status = false;
 
 	Slayer_AvatarDownload_Reset();
 	Slayer_SteamAPI_Reset();
@@ -987,6 +1030,11 @@ void Slayer_Scoreboard_Draw( void )
 			Slayer_LoadAvatarTexture( cl.playernum );
 		}
 	}
+
+	// Auto-fetch player SteamIDs and avatars on connect, without waiting
+	// for the user to open the scoreboard.
+	if( cls.state == ca_active )
+		Slayer_AutoFetchAvatars();
 
 	// Pump Steam Web API batch requests
 	Slayer_SteamAPI_Frame();
