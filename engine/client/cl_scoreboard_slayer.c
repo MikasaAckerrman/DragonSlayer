@@ -49,6 +49,9 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_rowscale, "1.15", FCVAR_ARCHIVE, "Sla
 static CVAR_DEFINE_AUTO( slayer_avatar_recheck, "10", FCVAR_ARCHIVE, "Slayer3D: minutes between Steam avatar change re-checks (0 = never; the check is one small XML fetch)" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_block_stock, "2", FCVAR_ARCHIVE, "Slayer3D: hide the game's own scoreboard while ours is up (0 = off, 1 = block VGUI, 2 = also block the client HUD redraw)" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_ondeath, "1", FCVAR_ARCHIVE, "Slayer3D: show the scoreboard automatically while dead (0 = only when held)" );
+static CVAR_DEFINE_AUTO( slayer_avatar_autofetch, "1", FCVAR_ARCHIVE, "Slayer3D: fetch avatars as soon as we join a server, without waiting for the scoreboard to be opened (0 = off)" );
+static CVAR_DEFINE_AUTO( slayer_avatar_autofetch_interval, "5", FCVAR_ARCHIVE, "Slayer3D: seconds between auto-fetch attempts while some players are still unresolved" );
+static CVAR_DEFINE_AUTO( slayer_avatar_uploads_per_frame, "1", FCVAR_ARCHIVE, "Slayer3D: how many avatar textures may be uploaded to the GPU in one frame (1 = smoothest)" );
 
 // ===========================================================================
 // Types
@@ -85,6 +88,17 @@ static double          slayer_status_next_time;       // throttle: next allowed 
 static double          slayer_status_deadline;        // until: parse # lines from svc_print
 static qboolean        slayer_status_pending;          // true while we expect status reply
 static int             slayer_steam_reject_count;     // debounce: non-STEAM lines logged per session (reset on map change)
+
+// Auto-fetch state: avatars used to be requested only when the scoreboard was
+// first opened, so nothing happened until the player pressed TAB. These drive
+// an unattended fetch that starts as soon as we are on a server.
+static double          slayer_autofetch_next_time;    // host.realtime of the next auto-fetch attempt
+static qboolean        slayer_autofetch_done;         // true once every connected player has a SteamID
+
+// Texture upload budget. GL_LoadTexture decodes the PNG and uploads it on the
+// calling thread, so doing a whole server's worth in one frame is a visible
+// hitch on join. Slots are queued here and drained a few per frame instead.
+static qboolean        slayer_avatar_upload_pending[MAX_CLIENTS];
 
 // Ping "hold-last-good" cache: cl.players[].ping drops to 0 on transient
 // snapshots and when the board is (re)opened cold. Keep the last non-zero
@@ -334,8 +348,10 @@ void Slayer_ParseStatusLine( const char *line )
 		"Slayer: parsed steamid %"PRIu64" for slot %d", steamid64, slot );
 #endif
 
-	// Load texture immediately at parse time (outside render loop)
-	Slayer_LoadAvatarTexture( i );
+	// Queue the texture upload instead of doing it here. A status reply arrives
+	// as one burst covering every player on the server, and uploading 32 PNGs
+	// from inside this loop was a visible freeze on join.
+	slayer_avatar_upload_pending[i] = true;
 }
 
 static void Slayer_LoadAvatarTexture( int slot )
@@ -438,6 +454,7 @@ static void Cmd_AvatarRefresh_f( void )
 		Q_snprintf( path, sizeof( path ), "avatars/%"PRIu64".png", slayer_steamid64[i] );
 		FS_Delete( path );
 		slayer_avatar_tex[i] = 0;   // 0 = untried, so the next draw re-requests
+		slayer_avatar_upload_pending[i] = true;
 		count++;
 	}
 
@@ -485,30 +502,179 @@ static void Cmd_AvatarUrls_f( void )
 // +slayer_scoreboard / -slayer_scoreboard commands
 // ===========================================================================
 
+// How long to keep parsing '#' lines out of svc_print after asking for status.
+// Kept generous on purpose: on slow mobile networks the reply can arrive many
+// seconds late, and a short window closed before it landed, so SteamIDs (and
+// therefore avatars) were never parsed at all.
+#define SLAYER_STATUS_PARSE_WINDOW  30.0
+
+/*
+====================
+Slayer_RequestStatus
+
+Asks the server for a status listing, which is the only way we learn other
+players' SteamIDs. Throttled: resend_after is how long to wait before another
+request is allowed, so a caller that wants to poll quickly on join can, while
+the scoreboard key stays at a polite interval. Returns true if a request went
+out this call.
+====================
+*/
+static qboolean Slayer_RequestStatus( double resend_after )
+{
+	if( host.realtime < slayer_status_next_time )
+		return false;
+
+	Cbuf_AddText( "status\n" );
+	slayer_status_next_time = host.realtime + resend_after;
+	slayer_status_pending = true;
+	slayer_status_deadline = host.realtime + SLAYER_STATUS_PARSE_WINDOW;
+	slayer_steam_reject_count = 0; // reset debounce per request
+
+	Slayer_Log_Printf( "status request queued (resend in %.0fs, parse window %.0fs)",
+		resend_after, SLAYER_STATUS_PARSE_WINDOW );
+#if XASH_ANDROID
+	__android_log_print( ANDROID_LOG_INFO, "Xash",
+		"Slayer SB: status request queued, parse window %.0fs", SLAYER_STATUS_PARSE_WINDOW );
+#endif
+	Con_DPrintf( "Slayer SB: status request queued, parse window %.0fs\n",
+		SLAYER_STATUS_PARSE_WINDOW );
+
+	return true;
+}
+
+/*
+====================
+Slayer_Scoreboard_AutoFetch
+
+Resolves SteamIDs and starts avatar downloads on its own, without waiting for
+the scoreboard to be opened.
+
+Before this, the only trigger was +slayer_scoreboard, so on joining a server
+nothing was fetched until the player pressed TAB — and then every avatar
+arrived at once, exactly when they wanted to read the board. Now the work
+happens during the walk to the first fight, and stops as soon as every
+connected player is accounted for.
+====================
+*/
+static void Slayer_Scoreboard_AutoFetch( void )
+{
+	int    i, connected = 0, resolved = 0;
+	double interval;
+
+	if( slayer_avatar_autofetch.value == 0.0f )
+		return;
+
+	if( cls.state != ca_active )
+		return;
+
+	for( i = 0; i < MAX_CLIENTS; i++ )
+	{
+		if( cl.players[i].name[0] == '\0' )
+			continue;
+
+		connected++;
+		if( slayer_steamid64[i] != 0 )
+			resolved++;
+	}
+
+	// Everyone accounted for: stop asking. Recomputed every frame rather than
+	// latched, so a player joining later puts us back to work on their own.
+	if( connected > 0 && resolved >= connected )
+	{
+		if( !slayer_autofetch_done )
+		{
+			slayer_autofetch_done = true;
+			Slayer_Log_Printf( "autofetch: all %d player(s) resolved, standing down", resolved );
+		}
+		return;
+	}
+
+	if( slayer_autofetch_done )
+	{
+		slayer_autofetch_done = false;
+		Slayer_Log_Printf( "autofetch: %d unresolved player(s) appeared, resuming",
+			connected - resolved );
+	}
+
+	if( host.realtime < slayer_autofetch_next_time )
+		return;
+
+	interval = slayer_avatar_autofetch_interval.value;
+	if( interval < 1.0 )
+		interval = 1.0;      // a status request per frame would flood the server
+	if( interval > 60.0 )
+		interval = 60.0;
+
+	slayer_autofetch_next_time = host.realtime + interval;
+
+	Slayer_Log_Printf( "autofetch: %d/%d player(s) resolved, requesting status",
+		resolved, connected );
+
+	Slayer_RequestStatus( interval );
+
+	// The batch path needs SteamIDs to ask about, so it only helps once status
+	// has resolved at least one player.
+	if( resolved > 0 )
+		Slayer_SteamAPI_RequestBatch( slayer_steamid64, MAX_CLIENTS );
+}
+
+/*
+====================
+Slayer_DrainAvatarUploads
+
+Uploads at most a few queued avatar textures per frame.
+
+GL_LoadTexture decodes the PNG and uploads it on the calling thread, so pushing
+a full server's worth in one frame is a visible hitch — which is what happened
+when a status reply (one burst covering every player) loaded each texture as it
+was parsed. Spreading them costs a few frames of a placeholder icon and keeps
+the frame time flat.
+====================
+*/
+static void Slayer_DrainAvatarUploads( void )
+{
+	int budget = (int)slayer_avatar_uploads_per_frame.value;
+	int i;
+
+	if( budget < 1 )
+		budget = 1;
+
+	// Re-check sweep. The change detection lives inside Slayer_LoadAvatarTexture,
+	// which now only runs for queued slots, so a loaded avatar would never be
+	// looked at again once auto-fetch stood down. Queue slots whose re-check is
+	// due; the loader decides whether anything actually needs downloading, and
+	// the sidecar comparison keeps it to one small request when nothing changed.
+	if( slayer_avatar_recheck.value > 0.0f )
+	{
+		for( i = 0; i < MAX_CLIENTS; i++ )
+		{
+			if( slayer_avatar_tex[i] <= 0 || slayer_steamid64[i] == 0 )
+				continue;
+
+			if( host.realtime >= slayer_avatar_next_check[i] )
+				slayer_avatar_upload_pending[i] = true;
+		}
+	}
+
+	for( i = 0; i < MAX_CLIENTS && budget > 0; i++ )
+	{
+		if( !slayer_avatar_upload_pending[i] )
+			continue;
+
+		slayer_avatar_upload_pending[i] = false;
+		Slayer_LoadAvatarTexture( i );
+		budget--;
+	}
+}
+
 static void Cmd_ScoreboardDown_f( void )
 {
 	slayer_scoreboard_active = true;
 	slayer_death_dismissed = false;   // explicit open re-arms the death view
 
-	// Request status to get SteamIDs (throttled to once per 30 seconds).
-	if( host.realtime >= slayer_status_next_time )
-	{
-		Cbuf_AddText( "status\n" );
-		slayer_status_next_time = host.realtime + 30.0;
-		slayer_status_pending = true;
-		// Parse window == throttle interval: on slow mobile networks the
-		// server's status reply can arrive many seconds late, and a short 5s
-		// window closed before it landed — so SteamIDs (and therefore avatars)
-		// were never parsed. Keep it open until the next allowed request.
-		slayer_status_deadline = host.realtime + 30.0;
-		slayer_steam_reject_count = 0; // reset debounce per request
-		Slayer_Log_Printf( "status request queued (parse window 30s)" );
-#if XASH_ANDROID
-		__android_log_print( ANDROID_LOG_INFO, "Xash",
-			"Slayer SB: status request queued, parse window 30s" );
-#endif
-		Con_DPrintf( "Slayer SB: status request queued, parse window 5s\n" );
-	}
+	// Opening the board is also a hint that the player wants fresh data, so ask
+	// again — the throttle keeps this from hammering the server on key mashing.
+	Slayer_RequestStatus( 30.0 );
 
 	// Trigger batch avatar fetch via Steam Web API (if API key is set)
 	Slayer_SteamAPI_RequestBatch( slayer_steamid64, MAX_CLIENTS );
@@ -557,6 +723,9 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_scoreboard_avatar );
 	Cvar_RegisterVariable( &slayer_scoreboard_rowscale );
 	Cvar_RegisterVariable( &slayer_avatar_recheck );
+	Cvar_RegisterVariable( &slayer_avatar_autofetch );
+	Cvar_RegisterVariable( &slayer_avatar_autofetch_interval );
+	Cvar_RegisterVariable( &slayer_avatar_uploads_per_frame );
 	Cvar_RegisterVariable( &slayer_scoreboard_block_stock );
 
 	Cmd_AddCommand( "+slayer_scoreboard", Cmd_ScoreboardDown_f,
@@ -586,11 +755,14 @@ void Slayer_Scoreboard_Reset( void )
 	memset( slayer_avatar_tex, 0, sizeof( slayer_avatar_tex ) );
 	memset( slayer_ping_cache, 0, sizeof( slayer_ping_cache ) );
 	memset( slayer_ping_cache_time, 0, sizeof( slayer_ping_cache_time ) );
+	memset( slayer_avatar_upload_pending, 0, sizeof( slayer_avatar_upload_pending ) );
 	slayer_scoreboard_active = false;
 	slayer_status_pending = false;
 	slayer_status_next_time = 0.0;   // allow immediate re-fetch on next connect
 	slayer_status_deadline = 0.0;
 	slayer_steam_reject_count = 0;
+	slayer_autofetch_next_time = 0.0;   // fetch as soon as the next map is live
+	slayer_autofetch_done = false;
 
 	Slayer_AvatarDownload_Reset();
 	Slayer_SteamAPI_Reset();
@@ -989,61 +1161,42 @@ void Slayer_Scoreboard_Draw( void )
 			slayer_avatar_tex[cl.playernum] = 0;   // force (re)load
 			Slayer_Log_Printf( "avatar LOCAL: requesting own avatar, SteamID %" PRIu64 " (slot %d)",
 				myid, cl.playernum );
-			Slayer_LoadAvatarTexture( cl.playernum );
+			slayer_avatar_upload_pending[cl.playernum] = true;
 		}
 	}
 
 	// Pump Steam Web API batch requests
 	Slayer_SteamAPI_Frame();
 
+	// Resolve SteamIDs and start downloads on our own, so avatars are already
+	// there the first time the board is opened.
+	Slayer_Scoreboard_AutoFetch();
+
+	// Upload a bounded number of decoded avatars per frame (see the function
+	// comment: doing them all at once is a visible hitch on join).
+	Slayer_DrainAvatarUploads();
+
 	// Pump avatar downloads every frame (even when scoreboard hidden)
 	if( Slayer_AvatarDownload_Frame() )
 	{
-		// A download completed - try to reload textures for slots that were pending
+		// A download finished. Hand the slot back to the loader by clearing the
+		// "requested" marker and queueing an upload, so the completion path
+		// obeys the same per-frame budget as everything else — a batch fetch can
+		// finish a dozen files at once, and uploading them all here was the
+		// second source of the join hitch.
 		for( i = 0; i < MAX_CLIENTS; i++ )
 		{
-			if( slayer_avatar_tex[i] == -1 && slayer_steamid64[i] != 0 )
-			{
-				char avpath[128];
-				int  texid;
+			char avpath[128];
 
-				Q_snprintf( avpath, sizeof( avpath ), "avatars/%" PRIu64 ".png", slayer_steamid64[i] );
-				if( !FS_FileExists( avpath, false ) )
-					continue;
+			if( slayer_avatar_tex[i] != -1 || slayer_steamid64[i] == 0 )
+				continue;
 
-				texid = ref.dllFuncs.GL_LoadTexture( avpath, NULL, 0, TF_IMAGE );
-				if( texid == 0 )
-				{
-					// Worker reported success but the file is unreadable as a PNG.
-					// Wipe the bad cache and reset to 0 so the next frame
-					// re-queues a fresh download instead of permanently
-					// sticking on -1.
-					FS_Delete( avpath );
-					slayer_avatar_tex[i] = 0;
-					Slayer_Log_Printf( "avatar slot %d SteamID %" PRIu64 ": downloaded file is not a valid image -> deleted",
-						i, slayer_steamid64[i] );
-					Con_Printf( S_WARN "Slayer: post-download avatar load failed for steamid=%" PRIu64 " path=%s, cache invalidated\n",
-						slayer_steamid64[i], avpath );
-#if XASH_ANDROID
-					__android_log_print( ANDROID_LOG_ERROR, "Xash",
-						"Slayer: post-download avatar load failed for steamid=%" PRIu64 " path=%s, cache invalidated",
-						slayer_steamid64[i], avpath );
-#endif
-				}
-				else
-				{
-					slayer_avatar_tex[i] = texid;
-					Slayer_Log_Printf( "avatar slot %d SteamID %" PRIu64 ": DOWNLOADED + loaded, texid %d",
-						i, slayer_steamid64[i], texid );
-					Con_Printf( "Slayer: post-download avatar loaded for steamid=%" PRIu64 " texid=%d path=%s\n",
-						slayer_steamid64[i], texid, avpath );
-#if XASH_ANDROID
-					__android_log_print( ANDROID_LOG_INFO, "Xash",
-						"Slayer: post-download avatar loaded for steamid=%" PRIu64 " texid=%d path=%s",
-						slayer_steamid64[i], texid, avpath );
-#endif
-				}
-			}
+			Q_snprintf( avpath, sizeof( avpath ), "avatars/%" PRIu64 ".png", slayer_steamid64[i] );
+			if( !FS_FileExists( avpath, false ) )
+				continue;
+
+			slayer_avatar_tex[i] = 0;   // let the loader run; it validates the file
+			slayer_avatar_upload_pending[i] = true;
 		}
 	}
 
@@ -1142,6 +1295,7 @@ void Slayer_Scoreboard_Draw( void )
 			slayer_scores[i].connected = 0;
 			slayer_steamid64[i] = 0;
 			slayer_avatar_tex[i] = 0;
+			slayer_avatar_upload_pending[i] = false;
 			slayer_ping_cache[i] = 0;
 			slayer_ping_cache_time[i] = 0.0;
 			continue;
