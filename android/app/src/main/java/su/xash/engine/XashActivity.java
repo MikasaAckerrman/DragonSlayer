@@ -201,6 +201,7 @@ public class XashActivity extends SDLActivity {
 		String basedir = getIntent().getStringExtra("basedir");
 		if (basedir != null) {
 			nativeSetenv("XASH3D_BASEDIR", basedir);
+			SlayerLog.setBaseDir(basedir);
 		} else {
 			String gamePath = getSharedPreferences("app_preferences", MODE_PRIVATE)
 				.getString("game_path", null);
@@ -212,6 +213,7 @@ public class XashActivity extends SDLActivity {
 				rootPath = (extDir != null ? extDir.getAbsolutePath() : getFilesDir().getAbsolutePath()) + "/xash";
 			}
 			nativeSetenv("XASH3D_BASEDIR", rootPath);
+			SlayerLog.setBaseDir(rootPath);
 		}
 
 		mUseVolumeKeys = getIntent().getBooleanExtra("usevolume", false);
@@ -248,7 +250,8 @@ public class XashActivity extends SDLActivity {
 
 		try
 		{
-			Log.d( TAG, "downloadAvatar: fetching profile XML for " + steamid64 );
+			SlayerLog.deriveFrom( savePath );
+			SlayerLog.log( "downloadAvatar", steamid64 + " -> " + savePath );
 
 			// Phase 1 - Fetch Steam profile XML
 			URL profileUrl = new URL( "https://steamcommunity.com/profiles/" + steamid64 + "/?xml=1" );
@@ -272,7 +275,7 @@ public class XashActivity extends SDLActivity {
 					totalRead += n;
 					if( totalRead > MAX_XML_SIZE )
 					{
-						Log.d( TAG, "downloadAvatar: XML response too large, aborting" );
+						SlayerLog.log( "downloadAvatar", steamid64 + " FAIL xml too large (>" + MAX_XML_SIZE + " bytes)" );
 						return 1;
 					}
 					baos.write( buf, 0, n );
@@ -289,7 +292,7 @@ public class XashActivity extends SDLActivity {
 			// Check for private profile
 			if( xml.indexOf( "<privacyState>private</privacyState>" ) != -1 )
 			{
-				Log.d( TAG, "downloadAvatar: profile is private" );
+				SlayerLog.log( "downloadAvatar", steamid64 + " FAIL profile is private" );
 				return 2;
 			}
 
@@ -303,7 +306,7 @@ public class XashActivity extends SDLActivity {
 
 			if( avatarUrl == null || avatarUrl.isEmpty() )
 			{
-				Log.d( TAG, "downloadAvatar: no avatar URL found" );
+				SlayerLog.log( "downloadAvatar", steamid64 + " FAIL no avatar URL in XML (" + xml.length() + " chars)" );
 				return 2;
 			}
 
@@ -326,18 +329,18 @@ public class XashActivity extends SDLActivity {
 
 					if( avatarUrl.equals( new String( prev, "UTF-8" ).trim() ) )
 					{
-						Log.d( TAG, "downloadAvatar: unchanged, keeping cache" );
+						SlayerLog.log( "downloadAvatar", steamid64 + " UNCHANGED, image download skipped" );
 						return 4;   // AVD_RESULT_UNCHANGED
 					}
 				}
 				catch( Exception e )
 				{
 					// Unreadable sidecar just means we re-download.
-					Log.d( TAG, "downloadAvatar: sidecar unreadable: " + e.getMessage() );
+					SlayerLog.log( "downloadAvatar", steamid64 + " sidecar unreadable, will re-download: " + e );
 				}
 			}
 
-			Log.d( TAG, "downloadAvatar: downloading image from " + avatarUrl );
+			SlayerLog.log( "downloadAvatar", steamid64 + " CHANGED, fetching image " + avatarUrl );
 
 			// Phase 3 - Download the avatar image
 			URL imageUrl = new URL( avatarUrl );
@@ -359,7 +362,7 @@ public class XashActivity extends SDLActivity {
 					totalRead += n;
 					if( totalRead > MAX_IMAGE_SIZE )
 					{
-						Log.d( TAG, "downloadAvatar: image too large, aborting" );
+						SlayerLog.log( "downloadAvatar", steamid64 + " FAIL image too large (>" + MAX_IMAGE_SIZE + " bytes)" );
 						return 1;
 					}
 					imgBaos.write( buf, 0, n );
@@ -378,16 +381,16 @@ public class XashActivity extends SDLActivity {
 			// can read it. Also handles WebP / any other format the platform
 			// decoder accepts. Bitmap.compress is bounded by image dimensions,
 			// not arbitrary input size, so re-encoded files stay small.
-			Log.d( TAG, "downloadAvatar: received " + imageData.length + " bytes from " + avatarUrl );
+			SlayerLog.log( "downloadAvatar", steamid64 + " HTTP ok, " + imageData.length + " bytes" );
 
 			Bitmap bitmap = BitmapFactory.decodeByteArray( imageData, 0, imageData.length );
 			if( bitmap == null )
 			{
-				Log.d( TAG, "downloadAvatar: BitmapFactory.decodeByteArray returned null (unsupported image or HTML error page)" );
+				SlayerLog.log( "downloadAvatar", steamid64 + " FAIL decode returned null (unsupported image or HTML error page)" );
 				return 3;
 			}
 
-			Log.d( TAG, "downloadAvatar: decoded image " + bitmap.getWidth() + "x" + bitmap.getHeight() );
+			SlayerLog.log( "downloadAvatar", steamid64 + " decoded " + bitmap.getWidth() + "x" + bitmap.getHeight() );
 
 			outFile = new File( savePath );
 			File parentDir = outFile.getParentFile();
@@ -415,7 +418,7 @@ public class XashActivity extends SDLActivity {
 
 			if( !compressed )
 			{
-				Log.d( TAG, "downloadAvatar: Bitmap.compress(PNG) failed for " + savePath );
+				SlayerLog.log( "downloadAvatar", steamid64 + " FAIL PNG re-encode for " + savePath );
 				outFile.delete();
 				return 3;
 			}
@@ -431,22 +434,22 @@ public class XashActivity extends SDLActivity {
 			catch( Exception e )
 			{
 				// Not fatal: without the sidecar we simply re-download next time.
-				Log.d( TAG, "downloadAvatar: could not write sidecar: " + e.getMessage() );
+				SlayerLog.log( "downloadAvatar", steamid64 + " sidecar write failed, next check will re-download: " + e );
 			}
 
-			Log.d( TAG, "downloadAvatar: saved PNG to " + savePath + " (" + outFile.length() + " bytes)" );
+			SlayerLog.log( "downloadAvatar", steamid64 + " OK saved " + outFile.length() + " bytes -> " + savePath );
 			return 0;
 		}
 		catch( IOException e )
 		{
-			Log.d( TAG, "downloadAvatar: network error: " + e.getMessage() );
+			SlayerLog.log( "downloadAvatar", steamid64 + " FAIL network: " + e );
 			if( outFile != null && outFile.exists() )
 				outFile.delete();
 			return 1;
 		}
 		catch( Exception e )
 		{
-			Log.d( TAG, "downloadAvatar: parse error: " + e.getMessage() );
+			SlayerLog.log( "downloadAvatar", steamid64 + " FAIL parse: " + e );
 			if( outFile != null && outFile.exists() )
 				outFile.delete();
 			return 3;

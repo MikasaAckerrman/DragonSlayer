@@ -323,6 +323,8 @@ qboolean Slayer_SteamAPI_Frame( void )
 		int i;
 
 		Con_Printf( "Slayer3D: batch avatar fetch completed\n" );
+		Slayer_Log_Printf( "batch: fetch completed, %d slot(s) queued for reload",
+			sapi_batch_count );
 
 		// Mark avatar slots for reload — the Java side saved PNGs directly.
 		// Trigger avatar download system to notice new files on disk.
@@ -344,6 +346,7 @@ qboolean Slayer_SteamAPI_Frame( void )
 	if( sapi_result == SAPI_RESULT_FAIL )
 	{
 		Con_Printf( S_WARN "SteamAPI: batch avatar fetch failed\n" );
+		Slayer_Log_Printf( "batch: fetch FAILED (see slayer_java.log for the reason)" );
 		sapi_batch_in_progress = false;
 		sapi_batch_count = 0;
 		sapi_result = SAPI_RESULT_IDLE;
