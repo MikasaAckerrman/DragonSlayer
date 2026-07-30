@@ -31,6 +31,7 @@ GNU General Public License for more details.
 #include "common.h"
 #include "client.h"
 #include "cl_tracer_slayer.h"
+#include "cl_slayer_log.h"
 
 // ===========================================================================
 // Cvars
@@ -61,8 +62,8 @@ static CVAR_DEFINE_AUTO( slayer_tracer_cold, "255 220 90", FCVAR_ARCHIVE,
 static CVAR_DEFINE_AUTO( slayer_tracer_hot, "255 70 55", FCVAR_ARCHIVE,
 	"Slayer3D: hottest tracer colour 'R G B' 0..255" );
 
-static CVAR_DEFINE_AUTO( slayer_tracer_sparks, "1", FCVAR_ARCHIVE,
-	"Slayer3D: replace vanilla bullet-impact sparks (0 = keep vanilla)" );
+static CVAR_DEFINE_AUTO( slayer_tracer_sparks, "0", FCVAR_ARCHIVE,
+	"Slayer3D: replace vanilla bullet-impact sparks (0 = keep vanilla until our own sparks exist)" );
 
 // ===========================================================================
 // State
@@ -156,6 +157,8 @@ qboolean Slayer_Tracer_OnFire( const vec3_t start, const vec3_t end )
 	// engine's custom tracer slot in Slayer_Tracer_Frame so all live tracers
 	// share one coherent, heat-driven colour.
 	s_last_shot = host.realtime;
+
+	Slayer_Log_Printf( "tracer: R_TracerEffect fired (heat=%.2f)", s_heat );
 
 	return true;   // Slayer owns this tracer (caller assigns the custom colour)
 }

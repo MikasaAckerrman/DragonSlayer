@@ -22,6 +22,7 @@ GNU General Public License for more details.
 #include "cl_sgs_slayer.h"
 #include "cl_loading_slayer.h"
 #include "cl_grenade_tumble_slayer.h"
+#include "cl_slayer_log.h"
 
 // ===========================================================================
 // Cvars - Third-person camera
@@ -51,6 +52,23 @@ CVAR_DEFINE_AUTO( slayer_chat_color_ct, "", FCVAR_ARCHIVE, "Slayer3D: CT name co
 static CVAR_DEFINE_AUTO( slayer_ducktap,    "0", FCVAR_ARCHIVE, "Slayer3D: enable ducktap (rapid duck toggling for duckrun speed)" );
 static CVAR_DEFINE_AUTO( slayer_autostrafe, "0", FCVAR_ARCHIVE, "Slayer3D: enable automatic air-strafing based on yaw delta" );
 static CVAR_DEFINE_AUTO( slayer_autojump,   "0", FCVAR_ARCHIVE, "Slayer3D: enable auto-bhop with ladder safety and anti-bhop bypass" );
+
+// JumpBug assist: while falling with +jump held, catch the exact pre-landing
+// frame and inject the unduck+jump input that makes GoldSrc skip the landing
+// tick (no fall damage). It is a timing script, not a no-fall-damage cheat:
+// the server still runs the physics; we only hit the one-frame window a human
+// would have to nail by hand. Guarded so it never triggers on an ordinary
+// ground touch — only when a downward trace shows the ground will be reached
+// within this frame at the current fall speed.
+static CVAR_DEFINE_AUTO( slayer_jumpbug,    "0", FCVAR_ARCHIVE, "Slayer3D: JumpBug timing assist (needs +jump held while falling; 0 = off)" );
+
+// Extra margin on the pre-landing prediction, as a multiple of one frame's
+// fall distance. >1 fires slightly earlier (safer on low FPS), <1 later.
+static CVAR_DEFINE_AUTO( slayer_jumpbug_margin, "1.15", FCVAR_ARCHIVE, "Slayer3D: JumpBug pre-landing trace margin (frames of fall distance)" );
+
+// Minimum downward speed before the assist arms, so tiny hops and steps do not
+// trip it — only real falls.
+static CVAR_DEFINE_AUTO( slayer_jumpbug_minfall, "180", FCVAR_ARCHIVE, "Slayer3D: minimum fall speed (units/s) before JumpBug arms" );
 
 // ===========================================================================
 // Cvars - Smooth zoom
@@ -87,6 +105,7 @@ static int slayer_ducktap_active = 0;
 // Movement tweak state (file-scoped so Slayer_ResetMatchState can clear them)
 static float slayer_prev_yaw = 0.0f;
 static int   slayer_prev_onground = 0;
+static int   slayer_jb_fired = 0;   // JumpBug assist engaged last frame (debounce)
 static int   slayer_yaw_initialized = 0;
 
 static void Cmd_DucktapDown_f( void )
@@ -169,6 +188,9 @@ void V_InitSlayerCvars( void )
 	Cvar_RegisterVariable( &slayer_ducktap );
 	Cvar_RegisterVariable( &slayer_autostrafe );
 	Cvar_RegisterVariable( &slayer_autojump );
+	Cvar_RegisterVariable( &slayer_jumpbug );
+	Cvar_RegisterVariable( &slayer_jumpbug_margin );
+	Cvar_RegisterVariable( &slayer_jumpbug_minfall );
 	Cmd_AddCommand( "+ducktap", Cmd_DucktapDown_f,
 		"begin rapid duck toggling (ducktap)" );
 	Cmd_AddCommand( "-ducktap", Cmd_DucktapUp_f,
@@ -353,6 +375,7 @@ void Slayer_ResetMatchState( void )
 	// do not bleed into the first frame of a new one.
 	slayer_prev_yaw = 0.0f;
 	slayer_prev_onground = 0;
+	slayer_jb_fired = 0;
 	slayer_yaw_initialized = 0;
 	slayer_ducktap_active = 0; // clear sticky +ducktap on disconnect
 
@@ -503,6 +526,103 @@ void Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 }
 
 // ===========================================================================
+// JumpBug - timing assist
+// ===========================================================================
+
+// Was the assist already engaged last frame, so we do not spam the input.
+// (declared near the other movement statics above)
+
+// The JumpBug trick: the frame BEFORE you would hit the ground, release duck
+// and press jump on the same tick. GoldSrc then processes the jump instead of
+// the landing, so no fall damage is applied. The hard part is purely the
+// timing — a one-frame window a human has to feel out. This does the timing:
+//
+//   arm only when   +jump is held  AND  we are airborne and falling fast
+//   fire only when   a straight-down trace of (fall speed * frametime * margin)
+//                    would reach the ground this frame
+//
+// It deliberately does NOT fire on any ground contact (that would be a plain
+// bhop and would trigger on every landing). The server still runs the physics;
+// we only hit the window. This is a movement script, not a no-fall-damage hack.
+void Slayer_JumpBug( usercmd_t *cmd )
+{
+	playermove_t *pm;
+	vec3_t        start, end;
+	pmtrace_t     tr;
+	float         fall_speed, reach, frametime;
+
+	if( cmd == NULL )
+		return;
+
+	if( slayer_jumpbug.value == 0.0f )
+	{
+		slayer_jb_fired = 0;
+		return;
+	}
+
+	// Needs +jump held: this is an assist, not a fully automatic trigger.
+	if( !( cmd->buttons & IN_JUMP ))
+	{
+		slayer_jb_fired = 0;
+		return;
+	}
+
+	pm = clgame.pmove;
+	if( pm == NULL || pm->PM_PlayerTrace == NULL )
+		return;
+
+	// Must be airborne. onground == -1 means not on ground in this engine.
+	if( cl.local.onground >= 0 )
+	{
+		slayer_jb_fired = 0;
+		return;
+	}
+
+	// Not on a ladder / flying.
+	if( pm->movetype == MOVETYPE_FLY )
+		return;
+
+	// Must be falling, and fast enough that this is a real fall, not a step.
+	fall_speed = -pm->velocity[2];   // downward is negative z
+	if( fall_speed < slayer_jumpbug_minfall.value )
+	{
+		slayer_jb_fired = 0;
+		return;
+	}
+
+	// How far we will fall this frame, plus a margin, is the trace length.
+	frametime = pm->frametime;
+	if( frametime <= 0.0f )
+		frametime = (float)host.frametime;
+	reach = fall_speed * frametime * slayer_jumpbug_margin.value;
+	if( reach < 1.0f )
+		reach = 1.0f;
+
+	VectorCopy( pm->origin, start );
+	VectorCopy( pm->origin, end );
+	end[2] -= reach;
+
+	tr = pm->PM_PlayerTrace( start, end, PM_NORMAL, -1 );
+
+	// Ground will be reached within this frame: fire the JumpBug input once.
+	if( tr.fraction < 1.0f && !tr.startsolid && !tr.allsolid )
+	{
+		if( !slayer_jb_fired )
+		{
+			Slayer_Log_Printf( "jumpbug: FIRE (fall=%.0f reach=%.1f frac=%.3f)",
+				fall_speed, reach, tr.fraction );
+		}
+		cmd->buttons &= ~IN_DUCK;   // release duck
+		cmd->buttons |= IN_JUMP;    // and jump on the same tick
+		slayer_jb_fired = 1;
+	}
+	else
+	{
+		slayer_jb_fired = 0;
+	}
+}
+
+// ===========================================================================
 // Movement tweaks - ducktap, autostrafe, autojump
 // ===========================================================================
 
@@ -591,6 +711,9 @@ void V_SlayerMovementTweaks( usercmd_t *cmd )
 	}
 
 	slayer_prev_onground = cl.local.onground;
+
+	// --- JumpBug (timing assist) ---
+	Slayer_JumpBug( cmd );
 }
 
 // ===========================================================================
