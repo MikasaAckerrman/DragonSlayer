@@ -27,6 +27,12 @@ public class SteamAPIHelper
 	private static final int MAX_RESPONSE_SIZE = 262144; // 256 KB
 	private static final int MAX_IMAGE_SIZE = 524288;    // 512 KB
 
+	// HTTP status of the most recent fetchUrl call, so fetchBatchAvatars
+	// can tell an invalid API key (401/403 -- wrong and staying wrong) from
+	// a transient failure, and report it as permanent rather than have the
+	// engine keep retrying a key that will keep being rejected.
+	private static volatile int sLastHttpCode = 0;
+
 
 	/**
 	 * Fetch avatar URLs for multiple players via Steam Web API and download images.
@@ -68,6 +74,12 @@ public class SteamAPIHelper
 			String json = fetchUrl( apiUrl );
 			if( json == null )
 			{
+				if( sLastHttpCode == 401 || sLastHttpCode == 403 )
+				{
+					SlayerLog.log( "batch", "FAIL invalid API key (HTTP " + sLastHttpCode
+						+ ") -- disabling Web API until the key changes" );
+					return -2;   // permanent: bad key
+				}
 				SlayerLog.log( "batch", "FAIL GetPlayerSummaries request" );
 				return -1;
 			}
@@ -154,6 +166,7 @@ public class SteamAPIHelper
 			conn.setInstanceFollowRedirects( true );
 
 			int code = conn.getResponseCode();
+			sLastHttpCode = code;
 			if( code != 200 )
 			{
 				SlayerLog.log( "batch", "FAIL HTTP " + code + " for " + urlStr );

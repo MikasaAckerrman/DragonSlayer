@@ -337,6 +337,23 @@ void Slayer_ParseStatusLine( const char *line )
 
 	// Use the authoritative slot number directly (1-based -> 0-based)
 	i = slot - 1;
+
+	// Never let the server's advertised ID overwrite our own slot. On a
+	// Steam-emulator server that ID is fabricated and has no profile (404),
+	// while Slayer_SteamLogin_GetLocalID() is the real logged-in account whose
+	// avatar actually loads. Without this guard the two stomp each other every
+	// status reply and our own icon never settles.
+	if( i == cl.playernum )
+	{
+		uint64_t myid = Slayer_SteamLogin_GetLocalID();
+		if( myid != 0 )
+		{
+			Slayer_Log_Printf( "status: slot %d is us — keeping real SteamID %" PRIu64 ", ignoring advertised %" PRIu64,
+				slot, myid, steamid64 );
+			return;
+		}
+	}
+
 	slayer_steamid64[i] = steamid64;
 	slayer_avatar_tex[i] = 0; // reset so texture will be reloaded
 

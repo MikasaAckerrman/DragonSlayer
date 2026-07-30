@@ -261,6 +261,20 @@ public class XashActivity extends SDLActivity {
 			conn.setRequestProperty( "User-Agent", "Mozilla/5.0" );
 			conn.setInstanceFollowRedirects( true );
 
+			// A missing profile answers 404. On a Steam-emulator server
+			// (jailbreak, RevEmu and the like) the players' SteamIDs are made
+			// up, so their profiles do not exist and never will. Reading the
+			// body would throw FileNotFoundException, indistinguishable from a
+			// transient network error, which armed a 60s retry that ran forever.
+			// Check the status first and report GONE so the engine stops asking.
+			int httpCode = conn.getResponseCode();
+			if( httpCode == 404 || httpCode == 410 )
+			{
+				conn.disconnect();
+				SlayerLog.log( "downloadAvatar", steamid64 + " GONE, no Steam profile (HTTP " + httpCode + ")" );
+				return 5;   // AVD_RESULT_GONE: do not retry this session
+			}
+
 			String xml;
 			InputStream is = null;
 			try

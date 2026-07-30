@@ -132,6 +132,7 @@ void Slayer_AvatarDownload_MigrateCache( void )
 #define AVD_RESULT_SUCCESS     2
 #define AVD_RESULT_FAIL        3
 #define AVD_RESULT_DONE        4
+#define AVD_RESULT_GONE        5      // no Steam profile (404): never retry this session
 
 // ---------------------------------------------------------------------------
 // Static state
@@ -298,8 +299,13 @@ static void *AVD_WorkerThread( void *arg )
 		// image download was skipped. The cached PNG is valid, so that counts
 		// as success — treating it as failure would arm the retry backoff and
 		// defeat the point of the cheap re-check.
-		avd_slot_result[work->slot] =
-			( result == 0 || result == 4 ) ? AVD_RESULT_SUCCESS : AVD_RESULT_FAIL;
+		// 5 = the profile does not exist (404): a permanent answer on a Steam-
+		// emulator server, so it maps to its own GONE state that never retries.
+		if( result == 5 )
+			avd_slot_result[work->slot] = AVD_RESULT_GONE;
+		else
+			avd_slot_result[work->slot] =
+				( result == 0 || result == 4 ) ? AVD_RESULT_SUCCESS : AVD_RESULT_FAIL;
 	}
 	__sync_synchronize();
 
@@ -453,6 +459,11 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 	if( slot < 0 || slot >= MAX_CLIENTS || steamid64 == 0 )
 		return;
 
+	// A new player took this slot: clear any terminal state left by the
+	// previous occupant, whose fabricated ID may have been marked GONE.
+	if( avd_slot_id[slot] != steamid64 && avd_slot_result[slot] == AVD_RESULT_GONE )
+		avd_slot_result[slot] = AVD_RESULT_IDLE;
+
 	if( !avd_download_method )
 	{
 		Slayer_Log_Printf( "avatar Request slot %d: SKIP (JNI downloadAvatar not initialized)", slot );
@@ -467,6 +478,12 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 			slot, avd_slot_result[slot] );
 		return;
 	}
+
+	// No Steam profile behind this ID (404 earlier). Fabricated IDs on a
+	// Steam-emulator server never gain a profile, so this is permanent for the
+	// session — asking again just burns a request and a worker slot.
+	if( avd_slot_result[slot] == AVD_RESULT_GONE )
+		return;
 
 	// Recently failed - wait for retry delay
 	if( avd_slot_result[slot] == AVD_RESULT_FAIL &&
@@ -570,6 +587,14 @@ qboolean Slayer_AvatarDownload_Frame( void )
 			__android_log_print( ANDROID_LOG_ERROR, "Xash",
 				"AvatarDL: download failed for slot %d", i );
 			Con_DPrintf( "AvatarDL: download failed for slot %d\n", i );
+		}
+		else if( avd_slot_result[i] == AVD_RESULT_GONE )
+		{
+			// Terminal: leave the slot in GONE so Request() keeps skipping it,
+			// but release the worker slot the download was holding.
+			if( avd_active_count > 0 )
+				avd_active_count--;
+			Slayer_Log_Printf( "avatar worker: slot %d has no Steam profile (404) — will not retry", i );
 		}
 	}
 

@@ -38,7 +38,8 @@ static CVAR_DEFINE_AUTO( slayer_steam_apikey, "", FCVAR_ARCHIVE | FCVAR_PROTECTE
 // Batch request state
 static qboolean sapi_initialized = false;
 static qboolean sapi_batch_in_progress = false;
-static uint64_t sapi_batch_ids[SAPI_MAX_PLAYERS];
+static qboolean sapi_batch_disabled = false;   // set on a rejected key; cleared when the key changes
+static char     sapi_last_apikey[128] = "";     // key last sent, to detect an edit after a rejectionstatic uint64_t sapi_batch_ids[SAPI_MAX_PLAYERS];
 static int      sapi_batch_slots[SAPI_MAX_PLAYERS]; // original player slot for each ID
 static int      sapi_batch_count = 0;
 
@@ -57,6 +58,7 @@ static int      sapi_batch_count = 0;
 #define SAPI_RESULT_IN_PROGRESS 1
 #define SAPI_RESULT_SUCCESS     2
 #define SAPI_RESULT_FAIL        3
+#define SAPI_RESULT_BADKEY      4      // API key rejected (401/403): stop using Web API
 
 static JavaVM           *sapi_jvm;
 static jclass            sapi_helper_class;    // global ref to SteamAPIHelper
@@ -133,7 +135,12 @@ static void *SAPI_WorkerThread( void *arg )
 		"SteamAPI: worker done, result=%d", result );
 
 	__sync_synchronize();
-	sapi_result = ( result >= 0 ) ? SAPI_RESULT_SUCCESS : SAPI_RESULT_FAIL;
+	// result -2 = the key is invalid (401/403); anything else negative is a
+	// transient failure. Only the former is permanent.
+	if( result == -2 )
+		sapi_result = SAPI_RESULT_BADKEY;
+	else
+		sapi_result = ( result >= 0 ) ? SAPI_RESULT_SUCCESS : SAPI_RESULT_FAIL;
 	__sync_synchronize();
 
 	free( work );
@@ -235,6 +242,21 @@ void Slayer_SteamAPI_RequestBatch( const uint64_t *steamids, int count )
 	if( sapi_batch_in_progress )
 		return;
 
+	// The key was rejected earlier and has not changed since. Retrying it just
+	// earns another 403; the XML fallback covers avatars in the meantime.
+	if( sapi_batch_disabled )
+	{
+		if( Q_strcmp( slayer_steam_apikey.string, sapi_last_apikey ) != 0 )
+		{
+			sapi_batch_disabled = false;   // key edited: give it another chance
+			Slayer_Log_Printf( "batch: API key changed, re-enabling Web API" );
+		}
+		else
+		{
+			return;
+		}
+	}
+
 	if( slayer_steam_apikey.string[0] == '\0' )
 	{
 		Slayer_Log_Printf( "SteamAPI batch: %d ID(s) pending but slayer_steam_apikey is EMPTY "
@@ -244,6 +266,10 @@ void Slayer_SteamAPI_RequestBatch( const uint64_t *steamids, int count )
 
 	if( !steamids || count <= 0 )
 		return;
+
+	// Remember the key we are about to try, so a later rejection can be told
+	// apart from a subsequent edit of the key.
+	Q_strncpy( sapi_last_apikey, slayer_steam_apikey.string, sizeof( sapi_last_apikey ) );
 
 	Slayer_Log_Printf( "SteamAPI batch: requesting %d avatar(s) via Web API", count );
 
@@ -341,6 +367,17 @@ qboolean Slayer_SteamAPI_Frame( void )
 		sapi_batch_count = 0;
 		sapi_result = SAPI_RESULT_IDLE;
 		return true;
+	}
+
+	if( sapi_result == SAPI_RESULT_BADKEY )
+	{
+		Con_Printf( S_WARN "SteamAPI: API key rejected — Web API disabled until the key is changed\n" );
+		Slayer_Log_Printf( "batch: API key rejected (401/403) — Web API disabled, falling back to XML" );
+		sapi_batch_disabled = true;
+		sapi_batch_in_progress = false;
+		sapi_batch_count = 0;
+		sapi_result = SAPI_RESULT_IDLE;
+		return false;
 	}
 
 	if( sapi_result == SAPI_RESULT_FAIL )
