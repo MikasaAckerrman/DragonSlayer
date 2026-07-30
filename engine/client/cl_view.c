@@ -552,12 +552,17 @@ void V_PostRender( void )
 
 	if( cls.state == ca_active && cls.signon == SIGNONS && cls.scrshot_action != scrshot_mapshot )
 	{
+		int block_level = Slayer_Scoreboard_StockBlockLevel();
+
 		SCR_TileClear();
-		CL_DrawHUD( CL_ACTIVE );
+		// Level 2: also skip the client DLL HUD redraw so the stock scoreboard
+		// (drawn through the game DLL, not VGUI) cannot appear on top of ours.
+		if( block_level < 2 )
+			CL_DrawHUD( CL_ACTIVE );
 		// Skip VGUI while our scoreboard is up: VGUI batches its primitives and
 		// flushes them after our draw, so the game's own board landed on top of
 		// ours no matter how late we drew. See Slayer_Scoreboard_StockBlockLevel.
-		if( Slayer_Scoreboard_StockBlockLevel() < 1 )
+		if( block_level < 1 )
 			VGui_Paint();
 	}
 
