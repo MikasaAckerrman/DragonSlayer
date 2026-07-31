@@ -24,6 +24,7 @@ GNU General Public License for more details.
 #include "input.h"
 #include "cl_view_slayer.h"
 #include "cl_grenade_tumble_slayer.h"
+#include "cl_tracer_slayer.h"
 
 // #define STUDIO_INTERPOLATION_FIX
 
@@ -1044,6 +1045,11 @@ static void CL_LinkPlayers( frame_t *frame )
 	if( ent && FBitSet( ent->curstate.effects, EF_MUZZLEFLASH ))
 		SetBits( clgame.viewent.curstate.effects, EF_MUZZLEFLASH );
 
+	// Slayer3D: spawn a first-person tracer on the rising edge of the local
+	// muzzleflash (CS 1.6 draws no tracers of its own). Uses the viewent, which
+	// just inherited the flag above, so it fires exactly on the shot frame.
+	Slayer_Tracer_CheckMuzzleflash( &clgame.viewent, 0, true );
+
 	// check all the clients but add only visible
 	for( i = 0, state = frame->playerstate; i < MAX_CLIENTS; i++, state++ )
 	{
@@ -1101,6 +1107,13 @@ static void CL_LinkPlayers( frame_t *frame )
 		VectorCopy( ent->origin, ent->attachment[1] );
 		VectorCopy( ent->origin, ent->attachment[2] );
 		VectorCopy( ent->origin, ent->attachment[3] );
+
+		// Slayer3D: remote players get a tracer on the rising edge of their
+		// muzzleflash. The local player is handled via the viewent above, so
+		// skip it here to avoid a double tracer. Checked before the renderer
+		// consumes (clears) the flag in R_StudioClientEvents.
+		if( i != cl.playernum )
+			Slayer_Tracer_CheckMuzzleflash( ent, i + 1, false );
 
 		CL_AddVisibleEntity( ent, ET_PLAYER );
 	}

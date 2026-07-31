@@ -3445,7 +3445,11 @@ void R_DrawViewModel( void )
 		break;
 	case mod_studio:
 		R_StudioSetupTimings();
-		R_StudioDrawModelInternal( RI.currententity, STUDIO_RENDER );
+		// Slayer3D: dispatch studio events for the viewmodel too (vanilla only
+		// asks for STUDIO_RENDER here). This fills attachment[0] with the real
+		// gun-tip muzzle so first-person tracers can start from the barrel, and
+		// forwards muzzle events through pfnStudioEvent like third-person does.
+		R_StudioDrawModelInternal( RI.currententity, STUDIO_RENDER|STUDIO_EVENTS );
 		break;
 	}
 

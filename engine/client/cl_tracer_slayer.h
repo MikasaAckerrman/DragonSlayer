@@ -21,16 +21,21 @@ GNU General Public License for more details.
 // Register cvars. Call once at client init.
 void Slayer_Tracer_Init( void );
 
-// Reset per-map state (heat, timers). Call on disconnect / map change.
+// Reset per-map state (heat, timers, beam model cache). Call on disconnect /
+// map change.
 void Slayer_Tracer_Reset( void );
 
-// Intercept point for every bullet tracer, from R_TracerEffect. Returns true
-// when Slayer3D handled the tracer (styled it), false to let the engine draw
-// the vanilla tracer unchanged. start = muzzle, end = impact.
-//
-// weapon_scale is applied to the tracer thickness so heavier guns read bigger;
-// pass 1.0 when the class is unknown.
-qboolean Slayer_Tracer_OnFire( const vec3_t start, const vec3_t end );
+// Detect a shot on a player entity via the rising edge of EF_MUZZLEFLASH and
+// spawn a tracer beam from its muzzle to the impact point. Call once per frame
+// per player from CL_LinkPlayers. slot 0 = local viewent, 1..MAX_CLIENTS =
+// remote player index. is_local picks the aim source (view vs entity angles).
+void Slayer_Tracer_CheckMuzzleflash( struct cl_entity_s *ent, int slot, qboolean is_local );
+
+// Independent cross-check: note a server-sent TE_TRACER temp-entity. This is a
+// separate path from EF_MUZZLEFLASH; counted in diagnostics so the device log
+// reveals whether the server announces shots even if muzzleflash misses remote
+// players. Call from the TE_TRACER handler in cl_tent.c. Counting only.
+void Slayer_Tracer_NoteServerTracer( const vec3_t start, const vec3_t end );
 
 // Advance the heat state machine. Call once per rendered frame.
 void Slayer_Tracer_Frame( void );

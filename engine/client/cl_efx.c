@@ -1897,11 +1897,6 @@ void GAME_EXPORT R_TracerEffect( const vec3_t start, const vec3_t end )
 	float	len, speed;
 	float	offset;
 
-	// Slayer3D: register the shot for barrel-heat colouring. The colour itself
-	// is pushed to the engine's custom tracer slot each frame; we still let the
-	// engine build the tracer below so its additive, batched draw path is used.
-	Slayer_Tracer_OnFire( start, end );
-
 	speed = Q_max( tracerspeed.value, 3.0f );
 
 	VectorSubtract( end, start, dir );

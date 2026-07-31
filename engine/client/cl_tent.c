@@ -19,6 +19,7 @@ GNU General Public License for more details.
 #include "entity_types.h"
 #include "triangleapi.h"
 #include "cl_tent.h"
+#include "cl_tracer_slayer.h"
 #include "pm_local.h"
 #include "studio.h"
 #include "wadfile.h"	// acess decal size
@@ -1987,6 +1988,9 @@ void CL_ParseTempEntity( sizebuf_t *msg, connprotocol_t proto )
 		pos2[0] = MSG_ReadCoord( pbuf );
 		pos2[1] = MSG_ReadCoord( pbuf );
 		pos2[2] = MSG_ReadCoord( pbuf );
+		// Slayer3D: cross-check counter -- proves whether the server sends
+		// tracers at all (independent of the EF_MUZZLEFLASH path).
+		Slayer_Tracer_NoteServerTracer( pos, pos2 );
 		R_TracerEffect( pos, pos2 );
 		break;
 	case TE_SPARKS:
