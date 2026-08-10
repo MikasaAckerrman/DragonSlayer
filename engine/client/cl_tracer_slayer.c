@@ -208,6 +208,20 @@ static CVAR_DEFINE_AUTO( slayer_tracer_remote, "1.45", FCVAR_ARCHIVE,
 static CVAR_DEFINE_AUTO( slayer_tracer_life_mul, "1.3", FCVAR_ARCHIVE,
 	"Slayer3D: lifetime multiplier over (flight + tail catch-up) time" );
 
+// Visibility ramp. The floor is deliberately HIGH: CS2's own numbers
+// (start alpha 0, fade-in over the first 20% of life) put first visibility
+// 810 units downrange, which on 1.6-sized maps reads as the streak appearing
+// out of thin air. 0.55 means it is visible from the very first frame and just
+// firms up over the next few percent of its life.
+static CVAR_DEFINE_AUTO( slayer_tracer_fade_in, "0.06", FCVAR_ARCHIVE,
+	"Slayer3D: fraction of lifetime spent ramping to full brightness" );
+
+static CVAR_DEFINE_AUTO( slayer_tracer_fade_floor, "0.55", FCVAR_ARCHIVE,
+	"Slayer3D: brightness at spawn, 0..1 (low values = tracer pops in mid-air)" );
+
+static CVAR_DEFINE_AUTO( slayer_tracer_fade_out, "0.88", FCVAR_ARCHIVE,
+	"Slayer3D: fraction of lifetime after which the tracer fades out" );
+
 static CVAR_DEFINE_AUTO( slayer_tracer_min_px, "1.1", FCVAR_ARCHIVE,
 	"Slayer3D: minimum on-screen width in pixels (dimmed to compensate)" );
 
@@ -335,6 +349,9 @@ static void Slayer_Tracer_ReadStyle( slayer_tracer_style_t *st )
 	st->brightness   = slayer_tracer_bright.value;
 	st->remote_boost = slayer_tracer_remote.value;
 	st->life_mul     = slayer_tracer_life_mul.value;
+	st->fade_in_end   = slayer_tracer_fade_in.value;
+	st->fade_in_floor = slayer_tracer_fade_floor.value;
+	st->fade_out_start = slayer_tracer_fade_out.value;
 	st->min_px       = slayer_tracer_min_px.value;
 	st->max_px       = slayer_tracer_max_px.value;
 
@@ -347,6 +364,12 @@ static void Slayer_Tracer_ReadStyle( slayer_tracer_style_t *st )
 	if( st->life_mul < 0.1f ) st->life_mul = 0.1f;
 	if( st->min_px < 0.1f ) st->min_px = 0.1f;
 	if( st->max_px < st->min_px ) st->max_px = st->min_px;
+	if( st->fade_in_end < 0.0f ) st->fade_in_end = 0.0f;
+	if( st->fade_in_end > 0.9f ) st->fade_in_end = 0.9f;
+	if( st->fade_in_floor < 0.0f ) st->fade_in_floor = 0.0f;
+	if( st->fade_in_floor > 1.0f ) st->fade_in_floor = 1.0f;
+	if( st->fade_out_start < 0.1f ) st->fade_out_start = 0.1f;
+	if( st->fade_out_start > 1.0f ) st->fade_out_start = 1.0f;
 }
 
 // Spawn one tracer into the pool. `is_remote` boosts brightness.
@@ -528,6 +551,9 @@ void Slayer_Tracer_Init( void )
 	Cvar_RegisterVariable( &slayer_tracer_flicker_rate );
 	Cvar_RegisterVariable( &slayer_tracer_remote );
 	Cvar_RegisterVariable( &slayer_tracer_life_mul );
+	Cvar_RegisterVariable( &slayer_tracer_fade_in );
+	Cvar_RegisterVariable( &slayer_tracer_fade_floor );
+	Cvar_RegisterVariable( &slayer_tracer_fade_out );
 	Cvar_RegisterVariable( &slayer_tracer_min_px );
 	Cvar_RegisterVariable( &slayer_tracer_max_px );
 	Cvar_RegisterVariable( &slayer_tracer_tp_muzzle );

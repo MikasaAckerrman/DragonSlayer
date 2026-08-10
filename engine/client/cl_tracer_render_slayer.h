@@ -59,6 +59,13 @@ typedef struct
 	float brightness;
 	float remote_boost;
 	float life_mul;
+	// Visibility ramp. fade_in_floor is the brightness at spawn: it is NOT 0,
+	// because CS2's own "invisible for the first 20% of life" put first
+	// visibility 810 units downrange, which on 1.6-sized maps reads as the
+	// streak appearing out of thin air.
+	float fade_in_end;     // fraction of life spent reaching full brightness
+	float fade_in_floor;   // brightness at spawn (0..1)
+	float fade_out_start;  // fraction of life where fade-out begins
 	float min_px;
 	float max_px;
 } slayer_tracer_style_t;
