@@ -22,6 +22,7 @@ GNU General Public License for more details.
 #include "input.h" // touch
 #include "platform/platform.h" // GL_UpdateSwapInterval
 #include "cl_view_slayer.h" // Slayer3D third-person camera
+#include "cl_radar_slayer.h" // Slayer3D own radar
 #include "cl_scoreboard_slayer.h" // Slayer3D custom scoreboard
 #include "cl_hud_slayer.h" // Slayer3D crosshair HUD (damage indicator)
 #include "cl_slayer_toast.h" // Slayer3D Steam-style connect notification
@@ -590,6 +591,9 @@ void V_PostRender( void )
 		ref.dllFuncs.R_ShowTextures();
 		R_ShowTree();
 		Slayer_HUD_Draw();
+		// Radar before the scoreboard so an open board covers it, and after the
+		// game HUD so it sits on top of whatever the client library drew.
+		Slayer_Radar_Draw();
 		Slayer_Scoreboard_Draw();
 		Con_DrawConsole();
 		UI_UpdateMenu( host.realtime );

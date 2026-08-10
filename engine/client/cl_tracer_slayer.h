@@ -40,6 +40,11 @@ void Slayer_Tracer_NoteServerTracer( const vec3_t start, const vec3_t end );
 // Advance the heat state machine. Call once per rendered frame.
 void Slayer_Tracer_Frame( void );
 
+// Age and draw every live tracer of the OWN renderer (ribbon geometry).
+// Call from CL_DrawEFX in the translucent pass, after the engine beams, so the
+// view matrix is already set up and additive blending lands on top of the world.
+void Slayer_TracerPool_Draw( void );
+
 // Whether Slayer3D should suppress the vanilla bullet-impact sparks so ours
 // can replace them. Checked from R_BulletImpactParticles / R_SparkStreaks.
 qboolean Slayer_Tracer_SuppressVanillaSparks( void );

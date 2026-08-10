@@ -89,6 +89,12 @@ void Slayer_OnDeathMsg( const byte *pbuf, int iSize );
 //   iSize - payload length in bytes
 void Slayer_OnTeamInfo( const byte *pbuf, int iSize );
 
+// Team name for a 1-based client slot, as reported by the server's "TeamInfo"
+// usermsg. Returns an empty string (never NULL) when the team is unknown.
+// Exposed so the radar and the scoreboard can group players by side without
+// each keeping its own copy of the parse.
+const char *Slayer_PlayerTeam( int slot );
+
 // Reset the Slayer3D per-match state (team table, etc).
 // Called when the engine clears client state (disconnect / map change).
 void Slayer_ResetMatchState( void );

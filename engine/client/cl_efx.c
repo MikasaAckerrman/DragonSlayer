@@ -2175,6 +2175,11 @@ void CL_DrawEFX( float time, qboolean fTrans )
 		R_FreeDeadParticles( &cl_active_tracers );
 		if( cl_draw_tracers.value )
 			ref.dllFuncs.CL_DrawTracers( time, cl_active_tracers );
+
+		// Slayer3D: our own tracer geometry. Drawn in the translucent pass so
+		// the view matrix is live and additive blending sits on top of the
+		// world; after the engine's own particles so it composites last.
+		Slayer_TracerPool_Draw();
 	}
 }
 

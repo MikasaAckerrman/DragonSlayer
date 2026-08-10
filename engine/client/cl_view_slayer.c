@@ -16,6 +16,8 @@ GNU General Public License for more details.
 #include "common.h"
 #include "client.h"
 #include "cl_view_slayer.h"
+#include "cl_teamcolors_slayer.h"
+#include "cl_radar_slayer.h"
 #include "cl_scoreboard_slayer.h"
 #include "cl_hud_slayer.h"
 #include "cl_tracer_slayer.h"
@@ -244,6 +246,13 @@ void V_InitSlayerCvars( void )
 	// Client-side grenade tumble
 	Slayer_GrenadeTumble_Init();
 
+	// Shared per-player colour identity. MUST come before the radar and the
+	// scoreboard: both ask it for colours, and it owns the slot -> colour map.
+	Slayer_TeamColors_Init();
+
+	// Own radar (replaces the vanilla one)
+	Slayer_Radar_Init();
+
 	Con_Printf( "Slayer3D: cvars initialized\n" );
 }
 
@@ -390,6 +399,17 @@ void V_ApplySlayerThirdPerson( ref_viewpass_t *rvp )
 #define SLAYER_TEAM_LEN  16
 static char slayer_player_team[MAX_CLIENTS + 1][SLAYER_TEAM_LEN];
 
+// Single accessor for the team table. Both the radar and the scoreboard need
+// the side a player is on; giving them this instead of a second parse keeps one
+// source of truth (and one place to fix when a mod names its teams oddly).
+const char *Slayer_PlayerTeam( int slot )
+{
+	if( slot < 1 || slot > MAX_CLIENTS )
+		return "";
+
+	return slayer_player_team[slot];
+}
+
 void Slayer_ResetMatchState( void )
 {
 	memset( slayer_player_team, 0, sizeof( slayer_player_team ));
@@ -419,6 +439,10 @@ void Slayer_ResetMatchState( void )
 
 	// Reset loading screen overlay state
 	Slayer_Loading_Reset();
+
+	// Drop the slot -> colour mapping and the radar's map/sighting state
+	Slayer_TeamColors_Reset();
+	Slayer_Radar_Reset();
 }
 
 // ===========================================================================

@@ -25,6 +25,7 @@ GNU General Public License for more details.
 #include "cl_steam_login.h"
 #include "cl_slayer_log.h"
 #include "cl_slayer_toast.h"
+#include "cl_teamcolors_slayer.h"
 #include <math.h>
 
 #if XASH_ANDROID
@@ -43,11 +44,35 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_t_color, "255 63 63", FCVAR_ARCHIVE, 
 // Border alpha lowered from 200 -> 150 (lighter visual weight, less stair-stepping)
 static CVAR_DEFINE_AUTO( slayer_scoreboard_border_color, "235 231 197 95", FCVAR_ARCHIVE, "Slayer3D: scoreboard border RGBA (BaseText, low alpha)" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_opacity, "220", FCVAR_ARCHIVE, "Slayer3D: overall scoreboard opacity (0-255)" );
+
+// Corner radius as a fraction of board height. 0.022 keeps the anti-aliased
+// rounding but stops the panel from reading as a lozenge on a tall phone board
+// (the old hard-coded 0.06 with a 14 px floor did exactly that).
+static CVAR_DEFINE_AUTO( slayer_scoreboard_corner, "0.022", FCVAR_ARCHIVE,
+	"Slayer3D: scoreboard corner radius as a fraction of its height (0 = square)" );
+
+// Per-player colour swatch in the name column: a small filled dot in front of
+// the nickname, using the SAME colour as the radar dot. This is the answer to
+// "where do I put the colour" -- in front of the name, where the eye already
+// goes when it matches a radar dot to a player.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_colordot, "1", FCVAR_ARCHIVE,
+	"Slayer3D: draw the player's radar colour as a dot before the nickname (0 = off)" );
+
 static CVAR_DEFINE_AUTO( slayer_scoreboard_width, "0.84", FCVAR_ARCHIVE, "Slayer3D: scoreboard width as a fraction of screen width (0.50-0.99; PC reference is 0.843)" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_avatar, "3.0", FCVAR_ARCHIVE, "Slayer3D: avatar icon size as a multiple of the font glyph height" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_rowscale, "1.15", FCVAR_ARCHIVE, "Slayer3D: scoreboard cell height multiplier (1.0-2.0; PC reference works out to ~1.3)" );
 static CVAR_DEFINE_AUTO( slayer_avatar_recheck, "10", FCVAR_ARCHIVE, "Slayer3D: minutes between Steam avatar change re-checks (0 = never; the check is one small XML fetch)" );
-static CVAR_DEFINE_AUTO( slayer_scoreboard_block_stock, "2", FCVAR_ARCHIVE, "Slayer3D: hide the game's own scoreboard while ours is up (0 = off, 1 = block VGUI, 2 = also block the client HUD redraw)" );
+// How hard to suppress the game's own scoreboard while ours is up.
+//
+// Default is 1, NOT 2, and that is the fix for "opening the scoreboard hides
+// the whole HUD": level 2 skips clgame.dllFuncs.pfnRedraw, and that single call
+// draws the ENTIRE client HUD -- health, armour, ammo, money, timer, radar --
+// not just the stock board. So level 2 traded one problem for a bigger one.
+// Level 1 skips only VGui_Paint, and the CS 1.6 ScorePanel IS a VGUI panel, so
+// that is enough to hide it while every HUD element keeps drawing.
+// Level 2 stays available for a mod that draws its board straight from Redraw.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_block_stock, "1", FCVAR_ARCHIVE, "Slayer3D: hide the game's own scoreboard while ours is up (0 = off, 1 = block VGUI only [keeps the HUD], 2 = also block the client HUD redraw [hides the HUD])" );
+
 static CVAR_DEFINE_AUTO( slayer_scoreboard_ondeath, "1", FCVAR_ARCHIVE, "Slayer3D: show the scoreboard automatically while dead (0 = only when held)" );
 static CVAR_DEFINE_AUTO( slayer_avatar_autofetch, "1", FCVAR_ARCHIVE, "Slayer3D: fetch avatars as soon as we join a server, without waiting for the scoreboard to be opened (0 = off)" );
 static CVAR_DEFINE_AUTO( slayer_avatar_autofetch_interval, "5", FCVAR_ARCHIVE, "Slayer3D: seconds between auto-fetch attempts while some players are still unresolved" );
@@ -735,6 +760,9 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_scoreboard_t_color );
 	Cvar_RegisterVariable( &slayer_scoreboard_border_color );
 	Cvar_RegisterVariable( &slayer_scoreboard_opacity );
+	Cvar_RegisterVariable( &slayer_scoreboard_corner );
+	Cvar_RegisterVariable( &slayer_scoreboard_colordot );
+
 	Cvar_RegisterVariable( &slayer_scoreboard_ondeath );
 	Cvar_RegisterVariable( &slayer_scoreboard_width );
 	Cvar_RegisterVariable( &slayer_scoreboard_avatar );
@@ -1155,6 +1183,7 @@ void Slayer_Scoreboard_Draw( void )
 	int          col_money_x;       // "Деньги" column (right edge)
 	int          col_kit_x;         // "Компл." (defuse kit) fixed column, left-aligned
 	int          col_name_text_x;   // fixed name-column origin (after the reserved avatar gutter)
+	int          colordot_px;       // size of the per-player colour swatch (0 = disabled)
 	int          text_dy;           // vertical centering offset for row text (replaces hardcoded +2)
 	int          rule_h;            // team/section underline thickness (measured off the PC reference)
 	int          avatar_px;         // avatar icon edge, in px — one source of truth for gutter + draw
@@ -1534,10 +1563,18 @@ void Slayer_Scoreboard_Draw( void )
 	// Near-transparent panel with anti-aliased rounded corners (PC ScorePanel).
 	{
 		rgba_t panel_bg, panel_br;
-		int    radius = (int)( board_h * 0.06f );   // noticeably rounded, like the user asked
+		int    radius;
 
-		if( radius < 14 ) radius = 14;
-		if( radius > 60 ) radius = 60;
+		// Corner radius as a FRACTION of board height, via cvar. It used to be
+		// hard-coded at 0.06 with a 14..60 px clamp, which on a tall phone board
+		// produced corners so round the panel read as a lozenge rather than a
+		// panel. The PC ScorePanel is only slightly rounded, so the default is
+		// now 0.022 with a tighter clamp -- still anti-aliased (no quality lost),
+		// just not a circle.
+		radius = (int)( board_h * slayer_scoreboard_corner.value );
+
+		if( radius < 4 ) radius = 4;
+		if( radius > 22 ) radius = 22;
 		if( radius > board_w / 2 ) radius = board_w / 2;
 		if( radius > board_h / 2 ) radius = board_h / 2;
 
@@ -1582,7 +1619,17 @@ void Slayer_Scoreboard_Draw( void )
 			if( avatar_px < 8 ) avatar_px = 8;
 		}
 		av = avatar_px;
-		col_name_text_x = col_name_x + av + 4;
+		// Reserve a fixed strip for the colour dot between the avatar gutter and
+		// the nickname, so names line up whether or not a dot is drawn (same
+		// reasoning as the avatar gutter: nothing may shift when data arrives).
+		colordot_px = 0;
+		if( slayer_scoreboard_colordot.value != 0.0f )
+		{
+			colordot_px = font->charHeight / 2;
+			if( colordot_px < 5 ) colordot_px = 5;
+			if( colordot_px > 12 ) colordot_px = 12;
+		}
+		col_name_text_x = col_name_x + av + 4 + ( colordot_px ? colordot_px + 5 : 0 );
 
 		col_ping_x = board_x + (int)( board_w * 0.978f );   // rightmost = Задержка
 		CL_DrawStringLen( font, "Задержка", &hw, &hh, FONT_DRAW_UTF8 );
@@ -1821,6 +1868,32 @@ void Slayer_Scoreboard_Draw( void )
 				ref.dllFuncs.Color4ub( 255, 255, 255, row_alpha );
 				ref.dllFuncs.R_DrawStretchPic( col_name_x, avatar_y, avatar_size, avatar_size, 0, 0, 1, 1, slayer_avatar_tex[pidx] );
 				ref.dllFuncs.Color4ub( 255, 255, 255, 255 ); // restore, don't rely on the next drawer
+			}
+
+			// Per-player colour swatch: the SAME colour the radar uses for this
+			// player. Drawn as a small rounded square between the avatar and the
+			// nickname. Placed here rather than in a separate column because
+			// the eye already travels to the name when matching a radar dot to
+			// a player, and a dedicated column would cost horizontal space the
+			// phone layout does not have.
+			if( colordot_px > 0 && team != SLAYER_TEAM_SPECTATOR )
+			{
+				byte dot[3];
+				int  dx = col_name_x + avatar_size + 4;
+				int  dy = cur_y + ( row_h - colordot_px ) / 2;
+				int  inset = colordot_px / 4;
+
+				Slayer_TeamColors_Get( pidx, dot );
+
+				// Body plus clipped corners: a 1px inset on each corner reads as
+				// a rounded chip at this size and costs 5 rects instead of a
+				// per-pixel circle.
+				Slayer_DrawRect( dx, dy + inset, colordot_px, colordot_px - 2 * inset,
+					dot[0], dot[1], dot[2], row_alpha );
+				Slayer_DrawRect( dx + inset, dy, colordot_px - 2 * inset, inset,
+					dot[0], dot[1], dot[2], row_alpha );
+				Slayer_DrawRect( dx + inset, dy + colordot_px - inset,
+					colordot_px - 2 * inset, inset, dot[0], dot[1], dot[2], row_alpha );
 			}
 
 			CL_DrawString( col_name_text_x, cur_y + text_dy, name, name_color, font, FONT_DRAW_UTF8 );

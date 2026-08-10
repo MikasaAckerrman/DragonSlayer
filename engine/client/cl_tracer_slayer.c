@@ -43,6 +43,8 @@ GNU General Public License for more details.
 #include "r_efx.h"       // BEAM / struct beam_s, beamdef flags
 #include "cl_tent.h"     // R_BeamPoints, R_TracerEffect
 #include "cl_tracer_slayer.h"
+#include "cl_tracer_render_slayer.h"   // our own ribbon geometry
+#include "cl_view_slayer.h"            // V_IsSlayerThirdPerson
 #include "cl_slayer_log.h"
 
 // ===========================================================================
@@ -143,6 +145,83 @@ static CVAR_DEFINE_AUTO( slayer_tracer_logevents, "0", FCVAR_ARCHIVE,
 	"Slayer3D: log game DLL events to find the shot event (diagnostic, 0 = off)" );
 
 // ===========================================================================
+// Own renderer (ribbon) cvars
+// ===========================================================================
+//
+// slayer_tracer_render selects the geometry:
+//   1 = our own ribbon (default) -- two layers, colour ramp along the streak,
+//       soft ends, taper, head spark, screen-space width clamp.
+//   0 = the engine's R_BeamPoints, kept only as a fallback for comparison.
+// The vanilla beam is a single constant-width strip with one colour for the
+// whole line (TriColor4f is called once per beam in R_BeamDraw), which is what
+// reads as a cheap server plugin.
+static CVAR_DEFINE_AUTO( slayer_tracer_render, "1", FCVAR_ARCHIVE,
+	"Slayer3D: tracer geometry (1 = own ribbon, 0 = engine beam fallback)" );
+
+static CVAR_DEFINE_AUTO( slayer_tracer_speed, "22000", FCVAR_ARCHIVE,
+	"Slayer3D: tracer flight speed in units/sec" );
+
+// Length must stay above speed/min_fps, otherwise consecutive frames leave a
+// gap and the streak reads as a dashed line. 1100 covers 22000/30fps = 733.
+static CVAR_DEFINE_AUTO( slayer_tracer_length, "1100", FCVAR_ARCHIVE,
+	"Slayer3D: visible streak length in units" );
+
+static CVAR_DEFINE_AUTO( slayer_tracer_radius, "1.2", FCVAR_ARCHIVE,
+	"Slayer3D: core diameter in units (halo provides the apparent thickness)" );
+
+static CVAR_DEFINE_AUTO( slayer_tracer_segments, "14", FCVAR_ARCHIVE,
+	"Slayer3D: ribbon segments; more = smoother fade, 1 draw call regardless" );
+
+static CVAR_DEFINE_AUTO( slayer_tracer_soft_tail, "0.5", FCVAR_ARCHIVE,
+	"Slayer3D: fraction of the streak that fades out towards the tail" );
+
+static CVAR_DEFINE_AUTO( slayer_tracer_soft_head, "0.1", FCVAR_ARCHIVE,
+	"Slayer3D: fraction of the streak that fades out towards the head" );
+
+static CVAR_DEFINE_AUTO( slayer_tracer_taper, "0.65", FCVAR_ARCHIVE,
+	"Slayer3D: tail narrowing, 0 = rectangle, 0.65 = droplet" );
+
+static CVAR_DEFINE_AUTO( slayer_tracer_halo, "3.4", FCVAR_ARCHIVE,
+	"Slayer3D: halo width multiplier (stands in for bloom; no FBO in ref/gl)" );
+
+static CVAR_DEFINE_AUTO( slayer_tracer_halo_a, "0.2", FCVAR_ARCHIVE,
+	"Slayer3D: halo brightness" );
+
+static CVAR_DEFINE_AUTO( slayer_tracer_head, "2.2", FCVAR_ARCHIVE,
+	"Slayer3D: head spark size relative to the core half-width (0 = off)" );
+
+static CVAR_DEFINE_AUTO( slayer_tracer_head_gain, "1.7", FCVAR_ARCHIVE,
+	"Slayer3D: head spark brightness" );
+
+static CVAR_DEFINE_AUTO( slayer_tracer_flicker, "0.16", FCVAR_ARCHIVE,
+	"Slayer3D: brightness flicker amount, 0 = steady (looks drawn)" );
+
+static CVAR_DEFINE_AUTO( slayer_tracer_flicker_rate, "95", FCVAR_ARCHIVE,
+	"Slayer3D: flicker frequency" );
+
+// Remote shots matter more than your own: you already know you fired.
+static CVAR_DEFINE_AUTO( slayer_tracer_remote, "1.45", FCVAR_ARCHIVE,
+	"Slayer3D: brightness multiplier for OTHER players' tracers" );
+
+// 1.3 rather than 1.0: at 30 fps and point-blank range (200 units) the lifetime
+// was 1.77 frames, i.e. the tracer blinked once and could not be seen.
+static CVAR_DEFINE_AUTO( slayer_tracer_life_mul, "1.3", FCVAR_ARCHIVE,
+	"Slayer3D: lifetime multiplier over (flight + tail catch-up) time" );
+
+static CVAR_DEFINE_AUTO( slayer_tracer_min_px, "1.1", FCVAR_ARCHIVE,
+	"Slayer3D: minimum on-screen width in pixels (dimmed to compensate)" );
+
+static CVAR_DEFINE_AUTO( slayer_tracer_max_px, "9.0", FCVAR_ARCHIVE,
+	"Slayer3D: maximum on-screen width in pixels" );
+
+// Third-person: the streak must run muzzle -> bullet hole, NOT muzzle ->
+// crosshair. In third person the camera sits behind the player, so the view ray
+// and the weapon's aim line are different lines; using the view ray puts the
+// tracer visibly off the barrel.
+static CVAR_DEFINE_AUTO( slayer_tracer_tp_muzzle, "1", FCVAR_ARCHIVE,
+	"Slayer3D: in third person, trace from the player's own aim, not the camera" );
+
+// ===========================================================================
 // State
 // ===========================================================================
 
@@ -192,6 +271,172 @@ static qboolean s_seen_remote_probe = false;
 
 // Midpoint colour (orange) between cold and hot, so a 3-stop ramp reads right.
 static const byte SLAYER_TRACER_MID[3] = { 255, 150, 50 };
+
+// ===========================================================================
+// Own tracer pool
+// ===========================================================================
+//
+// Fixed size, allocated once. A tracer lives ~90-200 ms, so even sustained fire
+// from a full server never needs more than a few dozen slots; when the pool is
+// full the oldest slot is recycled, which is invisible at these lifetimes and
+// costs nothing. Zero allocations per frame is the point: this same array is
+// what keeps the renderer at two draw calls per tracer with no GC pressure.
+#define SLAYER_TRACER_POOL 48
+
+static slayer_tracer_t s_pool[SLAYER_TRACER_POOL];
+static int             s_pool_next = 0;
+static int             s_live_peak = 0;   // diagnostics: high-water mark
+
+// Rolling seed for the flicker phase, so two tracers spawned in the same frame
+// do not pulse in sync. Deterministic on purpose (no RNG state to sync).
+static float s_seed_walk = 0.0f;
+
+static slayer_tracer_t *Slayer_Tracer_Alloc( void )
+{
+	int i;
+
+	// prefer a free slot
+	for( i = 0; i < SLAYER_TRACER_POOL; i++ )
+	{
+		int idx = ( s_pool_next + i ) % SLAYER_TRACER_POOL;
+
+		if( !s_pool[idx].active )
+		{
+			s_pool_next = ( idx + 1 ) % SLAYER_TRACER_POOL;
+			return &s_pool[idx];
+		}
+	}
+
+	// all busy: recycle round-robin
+	{
+		slayer_tracer_t *tr = &s_pool[s_pool_next];
+
+		s_pool_next = ( s_pool_next + 1 ) % SLAYER_TRACER_POOL;
+		return tr;
+	}
+}
+
+// Read the style out of the cvars once per frame instead of per tracer.
+static void Slayer_Tracer_ReadStyle( slayer_tracer_style_t *st )
+{
+	st->speed        = slayer_tracer_speed.value;
+	st->length       = slayer_tracer_length.value;
+	st->radius       = slayer_tracer_radius.value;
+	st->segments     = (int)slayer_tracer_segments.value;
+	st->soft_tail    = slayer_tracer_soft_tail.value;
+	st->soft_head    = slayer_tracer_soft_head.value;
+	st->taper        = slayer_tracer_taper.value;
+	st->halo_scale   = slayer_tracer_halo.value;
+	st->halo_alpha   = slayer_tracer_halo_a.value;
+	st->head_size    = slayer_tracer_head.value;
+	st->head_gain    = slayer_tracer_head_gain.value;
+	st->flicker      = slayer_tracer_flicker.value;
+	st->flicker_rate = slayer_tracer_flicker_rate.value;
+	st->brightness   = slayer_tracer_bright.value;
+	st->remote_boost = slayer_tracer_remote.value;
+	st->life_mul     = slayer_tracer_life_mul.value;
+	st->min_px       = slayer_tracer_min_px.value;
+	st->max_px       = slayer_tracer_max_px.value;
+
+	// Guards: a zero/garbage cvar must not divide by zero or spin the loop.
+	if( st->speed < 100.0f ) st->speed = 100.0f;
+	if( st->length < 32.0f ) st->length = 32.0f;
+	if( st->radius < 0.05f ) st->radius = 0.05f;
+	if( st->segments < 2 )  st->segments = 2;
+	if( st->segments > 64 ) st->segments = 64;
+	if( st->life_mul < 0.1f ) st->life_mul = 0.1f;
+	if( st->min_px < 0.1f ) st->min_px = 0.1f;
+	if( st->max_px < st->min_px ) st->max_px = st->min_px;
+}
+
+// Spawn one tracer into the pool. `is_remote` boosts brightness.
+static void Slayer_Tracer_SpawnOwn( const vec3_t start, const vec3_t end, qboolean is_remote )
+{
+	slayer_tracer_style_t st;
+	slayer_tracer_t *tr;
+	vec3_t delta;
+	float  dist, flight;
+
+	Slayer_Tracer_ReadStyle( &st );
+
+	VectorSubtract( end, start, delta );
+	dist = VectorLength( delta );
+	if( dist < 1.0f )
+		return;
+
+	tr = Slayer_Tracer_Alloc();
+
+	VectorCopy( start, tr->start );
+	VectorScale( delta, 1.0f / dist, tr->dir );
+	tr->dist   = dist;
+	tr->length = st.length;
+	tr->radius = st.radius;
+	tr->age    = 0.0f;
+	tr->gain   = is_remote ? st.remote_boost : 1.0f;
+
+	// life = flight time + time for the tail to catch the stopped head
+	flight = dist / st.speed;
+	tr->life = ( flight + st.length / st.speed ) * st.life_mul;
+	if( tr->life < 1e-4f ) tr->life = 1e-4f;
+
+	s_seed_walk += 7.31f;
+	if( s_seed_walk > 1000.0f ) s_seed_walk -= 1000.0f;
+	tr->seed = s_seed_walk;
+
+	tr->active = true;
+}
+
+// Advance ages and draw every live tracer. Called from CL_DrawEFX so it lands
+// in the translucent pass with the correct view already set up.
+void Slayer_TracerPool_Draw( void )
+{
+	slayer_tracer_style_t st;
+	float dt, fov_y;
+	int   i, live = 0;
+
+	if( slayer_tracer.value == 0.0f || slayer_tracer_render.value == 0.0f )
+		return;
+
+	dt = (float)( cl.time - cl.oldtime );
+	if( dt < 0.0f ) dt = 0.0f;
+	if( dt > 0.25f ) dt = 0.25f;   // a hitch must not teleport tracers
+
+	Slayer_Tracer_ReadStyle( &st );
+
+	// refState.viewangles/vieworg are written by GL_RenderFrame right before
+	// the scene is drawn, so in third person they already hold the CAMERA
+	// position -- which is what the billboard/width axes need.
+	fov_y = 90.0f;
+	if( refState.height > 0 && refState.width > 0 )
+	{
+		// The engine stores fov_x in the viewpass; derive fov_y from the
+		// aspect the same way the renderer does.
+		float aspect = (float)refState.height / (float)refState.width;
+
+		fov_y = 2.0f * RAD2DEG( atan( tan( DEG2RAD( 90.0f ) * 0.5f ) * aspect ));
+	}
+
+	for( i = 0; i < SLAYER_TRACER_POOL; i++ )
+	{
+		slayer_tracer_t *tr = &s_pool[i];
+
+		if( !tr->active )
+			continue;
+
+		tr->age += dt;
+		if( tr->age >= tr->life )
+		{
+			tr->active = false;
+			continue;
+		}
+
+		live++;
+		Slayer_TracerRender_Draw( tr, &st, refState.vieworg, fov_y, refState.height );
+	}
+
+	if( live > s_live_peak )
+		s_live_peak = live;
+}
 
 // ===========================================================================
 // Helpers
@@ -266,6 +511,27 @@ void Slayer_Tracer_Init( void )
 	Cvar_RegisterVariable( &slayer_tracer_debug );
 	Cvar_RegisterVariable( &slayer_tracer_logevents );
 
+	// own renderer
+	Cvar_RegisterVariable( &slayer_tracer_render );
+	Cvar_RegisterVariable( &slayer_tracer_speed );
+	Cvar_RegisterVariable( &slayer_tracer_length );
+	Cvar_RegisterVariable( &slayer_tracer_radius );
+	Cvar_RegisterVariable( &slayer_tracer_segments );
+	Cvar_RegisterVariable( &slayer_tracer_soft_tail );
+	Cvar_RegisterVariable( &slayer_tracer_soft_head );
+	Cvar_RegisterVariable( &slayer_tracer_taper );
+	Cvar_RegisterVariable( &slayer_tracer_halo );
+	Cvar_RegisterVariable( &slayer_tracer_halo_a );
+	Cvar_RegisterVariable( &slayer_tracer_head );
+	Cvar_RegisterVariable( &slayer_tracer_head_gain );
+	Cvar_RegisterVariable( &slayer_tracer_flicker );
+	Cvar_RegisterVariable( &slayer_tracer_flicker_rate );
+	Cvar_RegisterVariable( &slayer_tracer_remote );
+	Cvar_RegisterVariable( &slayer_tracer_life_mul );
+	Cvar_RegisterVariable( &slayer_tracer_min_px );
+	Cvar_RegisterVariable( &slayer_tracer_max_px );
+	Cvar_RegisterVariable( &slayer_tracer_tp_muzzle );
+
 	Slayer_Tracer_Reset();
 }
 
@@ -287,6 +553,17 @@ void Slayer_Tracer_Reset( void )
 	s_last_summary = 0.0;
 	s_last_trace_warn = 0.0;
 	s_seen_local_probe = s_seen_remote_probe = false;
+
+	// Own pool: clear it so tracers from the previous map cannot be drawn with
+	// stale world coordinates on the first frame of the new one.
+	memset( s_pool, 0, sizeof( s_pool ));
+	s_pool_next = 0;
+	s_live_peak = 0;
+	s_seed_walk = 0.0f;
+
+	// The texture table is rebuilt on map change, so the cached texnums are
+	// stale. Forget them (no GL calls) and let the next draw rebuild lazily.
+	Slayer_TracerRender_Invalidate();
 }
 
 // Resolve (and cache) the beam sprite model index. The beam renderer indexes
@@ -484,21 +761,70 @@ static void Slayer_Tracer_Fire( cl_entity_t *ent, qboolean is_local )
 
 	if( is_local )
 	{
-		// First person: aim is exactly the view. Start at the eye so the streak
-		// originates at screen centre and flies to the crosshair's target.
-		// The local viewmodel now also dispatches studio events (see
-		// R_DrawViewModel), so attachment[0] holds the real gun tip; prefer it
-		// for the START while keeping the view direction for aim.
-		AngleVectors( refState.viewangles, fwd, right, up );
+		// The aim source depends on the camera mode, and this is exactly where
+		// third person used to be wrong.
+		//
+		// FIRST PERSON: the view ray IS the shot line, so aiming along
+		// refState.viewangles from the eye is correct.
+		//
+		// THIRD PERSON (slayer_thirdperson 1): refState holds the CAMERA, which
+		// sits ~120 units behind the player. Tracing from there produced a
+		// streak running from the camera towards the camera's crosshair instead
+		// of muzzle -> bullet hole: visibly detached from the weapon, and on a
+		// different line entirely once the camera orbits (slayer_cam_free).
+		// The player's real aim is cl.viewangles (V_ApplySlayerThirdPerson
+		// overrides only the render angles and leaves cl.viewangles alone --
+		// see the comment at the end of that function), and the eye is
+		// cl.simorg + cl.viewheight. So in third person we trace from the
+		// PLAYER, and only take the muzzle from the studio attachment.
+		qboolean third = ( V_IsSlayerThirdPerson() || CL_IsThirdPerson()) &&
+			slayer_tracer_tp_muzzle.value != 0.0f;
 
-		if( Slayer_Tracer_MuzzleFromAttachment( &clgame.viewent, muzzle ))
+		if( third )
 		{
-			VectorCopy( muzzle, start );
-			used_attach = true;
+			vec3_t eye;
+
+			AngleVectors( cl.viewangles, fwd, right, up );
+
+			VectorAdd( cl.simorg, cl.viewheight, eye );
+
+			// In third person R_RunViewmodelEvents returns early (it bails on
+			// PARM_THIRDPERSON), so clgame.viewent.attachment[0] is stale --
+			// never trust it here. The local PLAYER entity is drawn in third
+			// person, so its attachment[0] is the live gun tip.
+			if( Slayer_Tracer_MuzzleFromAttachment( CL_GetLocalPlayer(), muzzle ))
+			{
+				VectorCopy( muzzle, start );
+				used_attach = true;
+			}
+			else
+			{
+				// Fall back to eye + forward offset, same shape as the remote
+				// approximation, so the streak still leaves the model instead
+				// of the camera.
+				VectorCopy( eye, start );
+				VectorMA( start, slayer_tracer_fwd.value,   fwd,   start );
+				VectorMA( start, slayer_tracer_right.value, right, start );
+			}
 		}
 		else
 		{
-			VectorCopy( refState.vieworg, start );
+			// First person: aim is exactly the view. Start at the eye so the
+			// streak originates at screen centre and flies to the crosshair's
+			// target. The local viewmodel dispatches studio events (see
+			// R_DrawViewModel), so attachment[0] holds the real gun tip; prefer
+			// it for the START while keeping the view direction for aim.
+			AngleVectors( refState.viewangles, fwd, right, up );
+
+			if( Slayer_Tracer_MuzzleFromAttachment( &clgame.viewent, muzzle ))
+			{
+				VectorCopy( muzzle, start );
+				used_attach = true;
+			}
+			else
+			{
+				VectorCopy( refState.vieworg, start );
+			}
 		}
 	}
 	else
@@ -529,7 +855,12 @@ static void Slayer_Tracer_Fire( cl_entity_t *ent, qboolean is_local )
 	else              s_attach_reject++;
 
 	Slayer_Tracer_TraceEnd( start, fwd, end );
-	Slayer_Tracer_SpawnBeam( start, end, 1.0f );
+
+	// Own ribbon by default; the engine beam stays behind cvar 0 as a fallback.
+	if( slayer_tracer_render.value != 0.0f )
+		Slayer_Tracer_SpawnOwn( start, end, !is_local );
+	else
+		Slayer_Tracer_SpawnBeam( start, end, 1.0f );
 
 	if( is_local ) s_fired_local++;
 	else           s_fired_remote++;
@@ -660,16 +991,20 @@ void Slayer_Tracer_Frame( void )
 	{
 		Slayer_Log_Printf(
 			"tracer: 1s summary fired[L=%d R=%d] rawMF[L=%d R=%d] beams[ok=%d noModel=%d null=%d] "
-			"attach[used=%d approx=%d] TE_TRACER=%d heat=%.2f model=%d",
+			"attach[used=%d approx=%d] TE_TRACER=%d heat=%.2f model=%d "
+			"own[render=%d peak=%d/%d tp=%d]",
 			s_fired_local, s_fired_remote, s_mf_raw_local, s_mf_raw_remote,
 			s_beam_ok, s_beam_fail_model, s_beam_fail_null,
 			s_attach_used, s_attach_reject, s_te_tracer,
-			s_heat, s_beam_model );
+			s_heat, s_beam_model,
+			(int)slayer_tracer_render.value, s_live_peak, SLAYER_TRACER_POOL,
+			( V_IsSlayerThirdPerson() || CL_IsThirdPerson()) ? 1 : 0 );
 
 		s_fired_local = s_fired_remote = s_beam_ok = 0;
 		s_beam_fail_model = s_beam_fail_null = 0;
 		s_mf_raw_local = s_mf_raw_remote = s_te_tracer = 0;
 		s_attach_used = s_attach_reject = 0;
+		s_live_peak = 0;
 		s_last_summary = now;
 	}
 }
