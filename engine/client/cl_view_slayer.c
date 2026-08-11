@@ -25,6 +25,7 @@ GNU General Public License for more details.
 #include "cl_sgs_slayer.h"
 #include "cl_loading_slayer.h"
 #include "cl_grenade_tumble_slayer.h"
+#include "cl_item_phys_slayer.h"
 #include "cl_slayer_log.h"
 
 // ===========================================================================
@@ -247,6 +248,10 @@ void V_InitSlayerCvars( void )
 	// Client-side grenade tumble
 	Slayer_GrenadeTumble_Init();
 
+	// Physical pose for dropped weapons / shields / props. Shares the spin core
+	// with the grenade module above.
+	Slayer_ItemPhys_Init();
+
 	// Shared per-player colour identity. MUST come before the radar and the
 	// scoreboard: both ask it for colours, and it owns the slot -> colour map.
 	Slayer_TeamColors_Init();
@@ -449,6 +454,10 @@ void Slayer_ResetMatchState( void )
 	// Drop the slot -> colour mapping and the radar's map/sighting state
 	Slayer_TeamColors_Reset();
 	Slayer_Radar_Reset();
+
+	// Drop per-entity item poses: entity indices are reassigned on the next map,
+	// so a stale slot would hand a fresh item the previous one's orientation.
+	Slayer_ItemPhys_Reset();
 }
 
 // ===========================================================================

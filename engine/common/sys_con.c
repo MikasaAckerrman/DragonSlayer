@@ -312,13 +312,10 @@ void Sys_PrintLog( const char *pMsg )
 	// spew to stdout
 	Sys_PrintStdout( logtime, logtime_len, pMsg );
 
-	// Slayer3D: account this line so `slayer_conspy_report` can name the source
-	// of console spam. Counting, not dumping: most lines come from the client
-	// DLL, and a template histogram points at the offender where a 40k-line log
-	// file does not. Costs one float compare while the cvar is off.
-#if !XASH_DEDICATED
-	Slayer_ConSpy_Note( pMsg );
-#endif
+	// NOTE: the Slayer3D spam accounting used to be here. It moved to
+	// Slayer_ConSpy_Filter, called from Sys_Print, because a line that is muted
+	// must still be counted -- and counting in both places would double every
+	// line that is not muted.
 
 	len = Q_strlen( pMsg );
 

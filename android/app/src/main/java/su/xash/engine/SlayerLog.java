@@ -88,6 +88,8 @@ public final class SlayerLog
 	 */
 	public static void log( String message )
 	{
+		message = redact( message );
+
 		Log.d( TAG, message );
 
 		synchronized( LOCK )
@@ -136,6 +138,91 @@ public final class SlayerLog
 	public static void log( String label, String detail )
 	{
 		log( label + ": " + detail );
+	}
+
+	/**
+	 * Removes secrets from a line before it reaches the log file or logcat.
+	 *
+	 * A Steam Web API key travels in the query string, so any code that logs a
+	 * failing URL leaks it -- which is what happened: a diagnostic log the user
+	 * sent for an unrelated problem carried the key in plain text, in every
+	 * GetPlayerSummaries line. Redacting at this single choke point is what
+	 * makes it safe; asking each call site to remember would not survive the
+	 * next one that is added.
+	 *
+	 * The key is kept identifiable by its last four characters so two different
+	 * keys can still be told apart in a log, which is the only reason the value
+	 * was ever wanted there.
+	 */
+	static String redact( String message )
+	{
+		if( message == null )
+			return null;
+
+		int at = indexOfIgnoreCase( message, "key=" );
+		if( at < 0 )
+			return message;
+
+		StringBuilder out = new StringBuilder( message.length() );
+		int pos = 0;
+
+		while( at >= 0 )
+		{
+			int valueStart = at + 4;   // past "key="
+			int valueEnd = valueStart;
+
+			// A query value ends at the next separator, not at the end of the
+			// string: "?key=SECRET&steamids=..." must keep the ids readable.
+			while( valueEnd < message.length() )
+			{
+				char c = message.charAt( valueEnd );
+
+				if( c == '&' || c == ' ' || c == '"' || c == '\'' || c == '\n' )
+					break;
+				valueEnd++;
+			}
+
+			out.append( message, pos, valueStart );
+
+			int len = valueEnd - valueStart;
+			if( len == 0 )
+			{
+				// "key=" with nothing after it: nothing to hide.
+			}
+			else if( len <= 4 )
+			{
+				out.append( "<redacted>" );
+			}
+			else
+			{
+				out.append( "<redacted:" )
+				   .append( message, valueEnd - 4, valueEnd )
+				   .append( '>' );
+			}
+
+			pos = valueEnd;
+			at = indexOfIgnoreCase( message, "key=", pos );
+		}
+
+		out.append( message, pos, message.length() );
+		return out.toString();
+	}
+
+	private static int indexOfIgnoreCase( String haystack, String needle )
+	{
+		return indexOfIgnoreCase( haystack, needle, 0 );
+	}
+
+	private static int indexOfIgnoreCase( String haystack, String needle, int from )
+	{
+		final int last = haystack.length() - needle.length();
+
+		for( int i = Math.max( 0, from ); i <= last; i++ )
+		{
+			if( haystack.regionMatches( true, i, needle, 0, needle.length() ) )
+				return i;
+		}
+		return -1;
 	}
 
 	/** Caller must hold LOCK. */

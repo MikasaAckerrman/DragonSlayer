@@ -32,4 +32,18 @@ void Slayer_ConSpy_Init( void );
 // would produce megabytes to read by hand; this produces a table.
 void Slayer_ConSpy_Note( const char *msg );
 
+// Returns false when the line must NOT reach the console. Called from Sys_Print
+// for every message; also does the accounting, so callers need only this one.
+//
+// Muting exists because the noisiest lines have no call site we own: the game
+// DLL prints its own developer output, and the `status` table is printed by the
+// server in response to a command the scoreboard issues automatically. Both are
+// counted even when hidden, and the report prints how many were hidden.
+qboolean Slayer_ConSpy_Filter( const char *msg );
+
+// Swallow status-reply lines for the next `seconds`. Called by the scoreboard
+// around its OWN automated `status` requests; a status the player typed is left
+// alone, which is why this is a window rather than a pattern.
+void Slayer_ConSpy_QuietStatus( double seconds );
+
 #endif // CL_SLAYER_CONSPY_H

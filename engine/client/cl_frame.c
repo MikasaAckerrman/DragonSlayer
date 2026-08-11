@@ -24,6 +24,7 @@ GNU General Public License for more details.
 #include "input.h"
 #include "cl_view_slayer.h"
 #include "cl_grenade_tumble_slayer.h"
+#include "cl_item_phys_slayer.h"
 #include "cl_tracer_slayer.h"
 
 // #define STUDIO_INTERPOLATION_FIX
@@ -985,6 +986,12 @@ qboolean CL_AddVisibleEntity( cl_entity_t *ent, int entityType )
 
 	// Slayer3D: 3-axis grenade tumble (proportional to linear speed)
 	Slayer_GrenadeTumble_Apply( ent );
+
+	// Slayer3D: physical pose for dropped weapons/shields/props. Runs AFTER the
+	// grenade pass on purpose: the grenade module owns grenade models and returns
+	// first for anything else, so the two never touch the same entity and the
+	// spin is never integrated twice in one frame.
+	Slayer_ItemPhys_Apply( ent );
 
 	if( !ref.dllFuncs.R_AddEntity( ent, entityType ))
 		return false;

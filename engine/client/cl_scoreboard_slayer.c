@@ -25,6 +25,7 @@ GNU General Public License for more details.
 #include "cl_steam_login.h"
 #include "cl_slayer_log.h"
 #include "cl_slayer_toast.h"
+#include "cl_slayer_conspy.h"           // Slayer_ConSpy_QuietStatus
 #include "cl_teamcolors_slayer.h"
 #include "ref_common.h"                 // R_GetTextureParms (stretched glyphs)
 #include <math.h>
@@ -117,6 +118,14 @@ static CVAR_DEFINE_AUTO( slayer_avatar_autofetch, "1", FCVAR_ARCHIVE, "Slayer3D:
 static CVAR_DEFINE_AUTO( slayer_avatar_autofetch_interval, "5", FCVAR_ARCHIVE, "Slayer3D: seconds between auto-fetch attempts while some players are still unresolved" );
 static CVAR_DEFINE_AUTO( slayer_avatar_uploads_per_frame, "1", FCVAR_ARCHIVE, "Slayer3D: how many avatar textures may be uploaded to the GPU in one frame (1 = smoothest)" );
 
+// How loud the avatar machinery is on the console. Default 0: a status request
+// prints the whole player table, and the auto-fetch used to ask every 5s
+// forever, so this alone was over half of everything on the console (measured
+// with slayer_conspy: 264 of 467 lines in 132s). The log file still gets
+// everything -- it costs nothing there and is where diagnostics belong.
+static CVAR_DEFINE_AUTO( slayer_avatar_verbose, "0", FCVAR_ARCHIVE,
+	"Slayer3D: print avatar/status diagnostics to the console (0 = log file only)" );
+
 // ===========================================================================
 // Types
 // ===========================================================================
@@ -158,6 +167,13 @@ static int             slayer_steam_reject_count;     // debounce: non-STEAM lin
 // an unattended fetch that starts as soon as we are on a server.
 static double          slayer_autofetch_next_time;    // host.realtime of the next auto-fetch attempt
 static qboolean        slayer_autofetch_done;         // true once every connected player has a SteamID
+static int             slayer_autofetch_tries;        // consecutive status requests with someone still unresolved
+static qboolean        slayer_autofetch_gave_up;      // logged the give-up once
+
+// Stop after this many fruitless attempts. With the doubling below that spans
+// roughly 5+10+20+40+80+120... seconds, i.e. minutes of a map, which is long
+// enough for a slow reply and short enough not to be noise for a whole match.
+#define SLAYER_AUTOFETCH_MAX_TRIES  6
 
 // Texture upload budget. GL_LoadTexture decodes the PNG and uploads it on the
 // calling thread, so doing a whole server's worth in one frame is a visible
@@ -423,11 +439,14 @@ void Slayer_ParseStatusLine( const char *line )
 
 	Slayer_Log_Printf( "status: slot %d -> SteamID %" PRIu64 " (name '%s')",
 		slot, steamid64, ( i < MAX_CLIENTS ) ? cl.players[i].name : "?" );
-	Con_Printf( "Slayer: parsed steamid %"PRIu64" for slot %d\n", steamid64, slot );
+	if( slayer_avatar_verbose.value != 0.0f )
+	{
+		Con_Printf( "Slayer: parsed steamid %"PRIu64" for slot %d\n", steamid64, slot );
 #if XASH_ANDROID
-	__android_log_print( ANDROID_LOG_INFO, "Xash",
-		"Slayer: parsed steamid %"PRIu64" for slot %d", steamid64, slot );
+		__android_log_print( ANDROID_LOG_INFO, "Xash",
+			"Slayer: parsed steamid %"PRIu64" for slot %d", steamid64, slot );
 #endif
+	}
 
 	// Queue the texture upload instead of doing it here. A status reply arrives
 	// as one burst covering every player on the server, and uploading 32 PNGs
@@ -504,13 +523,18 @@ static void Slayer_LoadAvatarTexture( int slot )
 	}
 
 	slayer_avatar_tex[slot] = texid;
-	Con_Printf( "Slayer: avatar loaded for steamid=%" PRIu64 " texid=%d path=%s\n",
+	Slayer_Log_Printf( "avatar: loaded steamid=%" PRIu64 " texid=%d path=%s",
 		slayer_steamid64[slot], texid, path );
+	if( slayer_avatar_verbose.value != 0.0f )
+	{
+		Con_Printf( "Slayer: avatar loaded for steamid=%" PRIu64 " texid=%d path=%s\n",
+			slayer_steamid64[slot], texid, path );
 #if XASH_ANDROID
-	__android_log_print( ANDROID_LOG_INFO, "Xash",
-		"Slayer: avatar loaded for steamid=%" PRIu64 " texid=%d path=%s",
-		slayer_steamid64[slot], texid, path );
+		__android_log_print( ANDROID_LOG_INFO, "Xash",
+			"Slayer: avatar loaded for steamid=%" PRIu64 " texid=%d path=%s",
+			slayer_steamid64[slot], texid, path );
 #endif
+	}
 }
 
 // ===========================================================================
@@ -611,14 +635,27 @@ static qboolean Slayer_RequestStatus( double resend_after )
 	slayer_status_deadline = host.realtime + SLAYER_STATUS_PARSE_WINDOW;
 	slayer_steam_reject_count = 0; // reset debounce per request
 
+	// Swallow the reply's own console output. The table is printed by the server
+	// command, not by us, so there is no print to remove -- only the window in
+	// which one can be recognised. Kept short (a reply arrives in about a
+	// second) so a `status` the player types right after is still shown.
+	Slayer_ConSpy_QuietStatus( 3.0 );
+
 	Slayer_Log_Printf( "status request queued (resend in %.0fs, parse window %.0fs)",
 		resend_after, SLAYER_STATUS_PARSE_WINDOW );
+
+	// Console only when asked: `status` itself echoes the entire player table,
+	// so announcing every request on top of that is what made the console
+	// unreadable. The file log above is unconditional.
+	if( slayer_avatar_verbose.value != 0.0f )
+	{
 #if XASH_ANDROID
-	__android_log_print( ANDROID_LOG_INFO, "Xash",
-		"Slayer SB: status request queued, parse window %.0fs", SLAYER_STATUS_PARSE_WINDOW );
+		__android_log_print( ANDROID_LOG_INFO, "Xash",
+			"Slayer SB: status request queued, parse window %.0fs", SLAYER_STATUS_PARSE_WINDOW );
 #endif
-	Con_DPrintf( "Slayer SB: status request queued, parse window %.0fs\n",
-		SLAYER_STATUS_PARSE_WINDOW );
+		Con_DPrintf( "Slayer SB: status request queued, parse window %.0fs\n",
+			SLAYER_STATUS_PARSE_WINDOW );
+	}
 
 	return true;
 }
@@ -637,9 +674,56 @@ happens during the walk to the first fight, and stops as soon as every
 connected player is accounted for.
 ====================
 */
+/*
+====================
+Slayer_PlayerIsBot
+
+A bot has no Steam account, so asking the server for its SteamID forever is the
+bug behind the console spam: the auto-fetch stops when every connected player is
+resolved, and on a server with bots that condition could never be met. The log
+showed `1/8 player(s) resolved` 690 times in one session.
+
+Two signals, both required, mirroring what the CS client itself does
+(cs16-client, scoreboard.cpp: PlayerInfo_ValueForKey + ping <= 5):
+
+  * `*bot` in userinfo -- set by the server for bots. Authoritative when present,
+    but yapb and some other bot managers do not set it on every build;
+  * a ping of zero. Real players over the internet never sustain that, and it is
+    what the vanilla scoreboard prints "BOT" on.
+
+Requiring both is deliberate: a LAN player can show a ping of 0 for a frame, and
+being wrongly classified as a bot would silently cost that player their avatar.
+Being wrong the other way only costs a few extra status requests.
+====================
+*/
+static qboolean Slayer_PlayerIsBot( int slot )
+{
+	const char *value;
+
+	if( slot < 0 || slot >= MAX_CLIENTS )
+		return false;
+	if( !cl.players[slot].name[0] )
+		return false;
+
+	if( cl.players[slot].ping > 5 )
+		return false;
+
+	value = Info_ValueForKey( cl.players[slot].userinfo, "*bot" );
+	if( value && value[0] && Q_atoi( value ) > 0 )
+		return true;
+
+	// Loopback: a listenserver's own player has no ping either, and that is us,
+	// not a bot. Everyone else with a zero ping on a server we did not start is
+	// treated as one -- this is the yapb case, which sets no *bot key.
+	if( slot == cl.playernum )
+		return false;
+
+	return true;
+}
+
 static void Slayer_Scoreboard_AutoFetch( void )
 {
-	int    i, connected = 0, resolved = 0;
+	int    i, connected = 0, resolved = 0, bots = 0;
 	double interval;
 
 	if( slayer_avatar_autofetch.value == 0.0f )
@@ -653,6 +737,14 @@ static void Slayer_Scoreboard_AutoFetch( void )
 		if( cl.players[i].name[0] == '\0' )
 			continue;
 
+		// Bots are counted out of the target entirely: they cannot ever be
+		// resolved, so including them means the work never ends.
+		if( Slayer_PlayerIsBot( i ))
+		{
+			bots++;
+			continue;
+		}
+
 		connected++;
 		if( slayer_steamid64[i] != 0 )
 			resolved++;
@@ -660,12 +752,13 @@ static void Slayer_Scoreboard_AutoFetch( void )
 
 	// Everyone accounted for: stop asking. Recomputed every frame rather than
 	// latched, so a player joining later puts us back to work on their own.
-	if( connected > 0 && resolved >= connected )
+	if( connected == 0 || resolved >= connected )
 	{
 		if( !slayer_autofetch_done )
 		{
 			slayer_autofetch_done = true;
-			Slayer_Log_Printf( "autofetch: all %d player(s) resolved, standing down", resolved );
+			Slayer_Log_Printf( "autofetch: %d player(s) resolved, %d bot(s) skipped, standing down",
+				resolved, bots );
 		}
 		return;
 	}
@@ -673,6 +766,10 @@ static void Slayer_Scoreboard_AutoFetch( void )
 	if( slayer_autofetch_done )
 	{
 		slayer_autofetch_done = false;
+		// A new unresolved player is a real reason to try again: reset the
+		// give-up state so the backoff starts from scratch for them.
+		slayer_autofetch_tries = 0;
+		slayer_autofetch_gave_up = false;
 		Slayer_Log_Printf( "autofetch: %d unresolved player(s) appeared, resuming",
 			connected - resolved );
 	}
@@ -686,10 +783,39 @@ static void Slayer_Scoreboard_AutoFetch( void )
 	if( interval > 60.0 )
 		interval = 60.0;
 
+	// Back off, and eventually give up. Skipping bots fixes the common case, but
+	// a player can stay unresolved for reasons we cannot fix from here: a server
+	// that answers `status` without SteamIDs, a proxy that rewrites it, or a
+	// protected server that refuses the command. Retrying at a fixed 5s for the
+	// whole map is then pure noise on both the console and the network. Each
+	// attempt doubles the wait, and after SLAYER_AUTOFETCH_MAX_TRIES we stop
+	// until the roster changes (which clears the counter below).
+	if( slayer_autofetch_tries >= SLAYER_AUTOFETCH_MAX_TRIES )
+	{
+		if( !slayer_autofetch_gave_up )
+		{
+			slayer_autofetch_gave_up = true;
+			Slayer_Log_Printf( "autofetch: giving up after %d tries, %d/%d resolved (server does not report SteamIDs?)",
+				slayer_autofetch_tries, resolved, connected );
+		}
+		return;
+	}
+
+	{
+		int shift = slayer_autofetch_tries;
+
+		if( shift > 4 )
+			shift = 4;               // cap the doubling at 16x
+		interval = interval * (double)( 1 << shift );
+		if( interval > 120.0 )
+			interval = 120.0;
+	}
+
+	slayer_autofetch_tries++;
 	slayer_autofetch_next_time = host.realtime + interval;
 
-	Slayer_Log_Printf( "autofetch: %d/%d player(s) resolved, requesting status",
-		resolved, connected );
+	Slayer_Log_Printf( "autofetch: %d/%d player(s) resolved, requesting status (try %d, next in %.0fs)",
+		resolved, connected, slayer_autofetch_tries, interval );
 
 	Slayer_RequestStatus( interval );
 
@@ -818,6 +944,7 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_avatar_autofetch );
 	Cvar_RegisterVariable( &slayer_avatar_autofetch_interval );
 	Cvar_RegisterVariable( &slayer_avatar_uploads_per_frame );
+	Cvar_RegisterVariable( &slayer_avatar_verbose );
 	Cvar_RegisterVariable( &slayer_scoreboard_block_stock );
 	Cvar_RegisterVariable( &slayer_scoreboard_block_hud );
 	Cvar_RegisterVariable( &slayer_scoreboard_block_migrated );
@@ -891,6 +1018,8 @@ void Slayer_Scoreboard_Reset( void )
 	slayer_steam_reject_count = 0;
 	slayer_autofetch_next_time = 0.0;   // fetch as soon as the next map is live
 	slayer_autofetch_done = false;
+	slayer_autofetch_tries = 0;         // a new map gets a full budget of tries
+	slayer_autofetch_gave_up = false;
 
 	Slayer_AvatarDownload_Reset();
 	Slayer_SteamAPI_Reset();

@@ -73,6 +73,7 @@ GNU General Public License for more details.
 #include "studio.h"
 #include "xash3d_mathlib.h"
 #include "cl_grenade_tumble_slayer.h"
+#include "cl_spin_phys_slayer.h"
 #include "cl_slayer_log.h"
 
 // Last pivot-compensation values, captured for the throttled diagnostic below.
@@ -107,18 +108,24 @@ static CVAR_DEFINE_AUTO( slayer_grenade_diag,
 	"0", FCVAR_ARCHIVE,
 	"Slayer3D: grenade tumble diagnostics to slayer_diag.log (0=off, 1=on, 2=on+rejected models)" );
 
+// Spin per unit of throw speed. Default comes from the shared core; this exists
+// so the feel can be tuned live without a rebuild. 0 = use the core's default.
+static CVAR_DEFINE_AUTO( slayer_grenade_spin,
+	"0", FCVAR_ARCHIVE,
+	"Slayer3D: grenade spin per unit of throw speed (0 = default ~1.3 turns/sec at a hard throw)" );
+
+// How much of a collision's friction becomes spin. Negative = core default.
+static CVAR_DEFINE_AUTO( slayer_grenade_grip,
+	"-1", FCVAR_ARCHIVE,
+	"Slayer3D: how strongly a bounce changes grenade spin (0..1, -1 = default)" );
+
 // =============================================================================
 // Tunables
 // =============================================================================
 
 #define GT_MAX_SLOTS  32      // ~rarely more than a handful of grenades in flight
 #define GT_LIFETIME   5.0f    // sec: slot reclaimed if not refreshed
-#define GT_BASE_RATE  360.0f  // deg/sec at GT_MAX_SPEED — one turn per second at a
-                              // hard throw. Was 1080 (three turns/sec), which read
-                              // as a blur rather than a tumble; the device log
-                              // confirmed a full 540 deg between 0.5 s samples.
 #define GT_MAX_SPEED  600.0f  // hammer units / sec — typical strong throw
-#define GT_REST_SPEED 20.0f   // below this speed rotation halts entirely
 
 // =============================================================================
 // Per-entity tumble state
@@ -129,28 +136,20 @@ typedef struct
 	int       index;        // engine entity index, 0 = empty slot
 	float     last_time;    // cl.time of last update (also slot expiry)
 	vec3_t    last_origin;  // for linear velocity estimation
-	// ACCUMULATED ORIENTATION as a quaternion.
+	vec3_t    vel;          // low-passed velocity handed to the spin core
+
+	// ORIENTATION AND ANGULAR VELOCITY now live in the shared spin core
+	// (cl_spin_phys_slayer.c), which is also what dropped weapons and shields
+	// use. Two reasons this is not local code any more:
 	//
-	// This replaces the old (axis, total_angle) pair, and that pair was the
-	// actual bug. The pose was rebuilt every frame as "rotate accum_theta about
-	// the CURRENT axis", while the axis itself was re-derived from the flight
-	// direction and eased every frame. But rotating 300 degrees about axis A and
-	// 300 degrees about a slightly different axis B are completely different
-	// orientations, so every tiny axis nudge teleported the whole accumulated
-	// rotation into another plane. With the velocity differentiated from
-	// interpolated positions (noisy by nature) that happened every single frame:
-	// the grenade jittered and flipped instead of tumbling.
-	//
-	// Integrating incrementally fixes it by construction: the axis only ever
-	// affects THIS frame's small delta rotation, and the history is already
-	// baked into the quaternion. A bounce simply changes the next increments.
-	vec4_t    orient;
-	vec3_t    avel_dir;     // unit vector — current tumble axis, eased toward the
-	                        // one derived from the flight direction each frame
-	float     spin_bias;    // how much spin about the flight line to mix in,
-	                        // fixed per grenade so they do not all tumble alike
-	float     smooth_speed; // low-passed linear speed, drives the tumble rate
-	qboolean  resting;      // hysteresis latch: settled on the ground
+	//  * the previous model computed `rate = f(speed)` with the axis re-derived
+	//    from the current velocity, and that cannot express a wall changing the
+	//    spin, a grenade that keeps turning after it slows, or friction bleeding
+	//    the spin off while it rolls. Angular velocity has to be STATE;
+	//  * every consumer needs the same invariants (quaternion renormalized every
+	//    frame, spin clamped, rest latched with hysteresis). Duplicating those
+	//    is how they drift apart.
+	slayer_spin_t spin;
 	qboolean  inited;
 } grenade_tumble_t;
 
@@ -183,6 +182,63 @@ static qboolean Slayer_GT_IsGrenadeModel( const char *name )
 	return false;
 }
 
+// =============================================================================
+// Parameters and contact tracing
+// =============================================================================
+
+// Tuning handed to the shared core. Read from cvars each call rather than cached
+// so a change takes effect on the next grenade without a map reload.
+static void Slayer_GrenadeTumble_Params( slayer_spin_params_t *p )
+{
+	Slayer_Spin_DefaultParams( p );
+
+	if( slayer_grenade_spin.value > 0.0f )
+		p->throw_spin = slayer_grenade_spin.value;
+	if( slayer_grenade_grip.value >= 0.0f )
+		p->impact_grip = slayer_grenade_grip.value;
+}
+
+// What is the grenade touching?
+//
+// Traced here rather than inside the core because tracing is engine work and the
+// core must stay host-testable. One short downward trace per grenade per frame:
+// grenades in flight are a handful at most, and the alternative -- guessing
+// contact from the velocity -- cannot tell "rolling on the floor" from "flying
+// horizontally", which is exactly the distinction that makes rolling look right.
+static void Slayer_GT_TraceContact( struct cl_entity_s *ent,
+	const slayer_spin_params_t *p, slayer_spin_contact_t *out )
+{
+	vec3_t    start, end;
+	pmtrace_t tr;
+
+	memset( out, 0, sizeof( *out ));
+
+	VectorCopy( ent->origin, start );
+	VectorCopy( ent->origin, end );
+
+	// Probe a little more than the radius: at 60 fps a grenade rolling at
+	// 200 u/s moves ~3 units per frame, so a probe exactly one radius long
+	// would flicker between hit and miss on a slightly uneven floor.
+	end[2] -= p->radius * 1.6f;
+
+	tr = CL_TraceLine( start, end, PM_STUDIO_IGNORE );
+
+	if( tr.fraction < 1.0f )
+	{
+		out->on_ground = 1;
+		VectorCopy( tr.plane.normal, out->normal );
+
+		// The same surface is the impact surface for a bounce arriving this
+		// frame. A separate forward trace would be more accurate for a wall hit,
+		// but it costs a second trace per grenade per frame and the core falls
+		// back to the velocity change when no normal is supplied -- which is the
+		// case that matters for walls, since a wall hit does not put the grenade
+		// on the ground.
+		out->has_impact_normal = 1;
+		VectorCopy( tr.plane.normal, out->impact_normal );
+	}
+}
+
 static grenade_tumble_t *Slayer_GT_GetSlot( int index )
 {
 	int   i;
@@ -213,91 +269,23 @@ static grenade_tumble_t *Slayer_GT_GetSlot( int index )
 	return &gt_slots[oldest_slot];
 }
 
-// Build a quaternion from axis-angle (axis must be unit, theta in radians).
-// Layout matches AngleQuaternion in xash3d_mathlib.h: q = (axis*sin(θ/2), cos(θ/2)).
-static void Slayer_GT_QuatFromAxisAngle( const vec3_t axis, float theta, vec4_t q )
+// Convert the spin core's orientation into the engine's Euler angles.
+//
+// A thin wrapper over the SHARED conversion in cl_spin_phys_engine.c. It is
+// shared rather than local because the dropped-item module needs exactly the
+// same thing, including undoing the renderer's pitch negation, and two copies of
+// that compensation would drift apart -- it is subtle enough that getting it
+// wrong already cost one round of "grenades still tumble crookedly".
+static void Slayer_GT_PoseToAngles( const grenade_tumble_t *gt, vec3_t out_angles )
 {
-	float half = theta * 0.5f;
-	float s    = sinf( half );
-
-	q[0] = axis[0] * s;
-	q[1] = axis[1] * s;
-	q[2] = axis[2] * s;
-	q[3] = cosf( half );
-}
-
-// q = a * b (apply b first, then a). Hamilton product; the engine has no
-// quaternion multiply of its own, only slerp and the angle conversions.
-static void Slayer_GT_QuatMul( const vec4_t a, const vec4_t b, vec4_t out )
-{
-	out[0] = a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1];
-	out[1] = a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0];
-	out[2] = a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3];
-	out[3] = a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2];
-}
-
-// Renormalize. Required, not cosmetic: the orientation is built by multiplying
-// one small increment per frame, so float error compounds for as long as the
-// grenade lives (a smoke can bounce for many seconds) and an un-normalized
-// quaternion turns into a shear/scale in the rotation matrix.
-static void Slayer_GT_QuatNormalize( vec4_t q )
-{
-	float len = sqrtf( q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3] );
-
-	if( len < 1e-6f )
-	{
-		q[0] = q[1] = q[2] = 0.0f;
-		q[3] = 1.0f;
-		return;
-	}
-
-	len = 1.0f / len;
-	q[0] *= len; q[1] *= len; q[2] *= len; q[3] *= len;
-}
-
-// Advance the stored orientation by `theta` radians about `axis`, then convert
-// to the engine's Euler angles.
-static void Slayer_GT_Integrate( grenade_tumble_t *gt, const vec3_t axis, float theta,
-	vec3_t out_angles )
-{
-	vec4_t dq, result;
-
-	if( theta != 0.0f )
-	{
-		Slayer_GT_QuatFromAxisAngle( axis, theta, dq );
-		// Increment on the LEFT: the delta is expressed in world space (the
-		// tumble axis comes from the world-space velocity), not in the model's
-		// own frame.
-		Slayer_GT_QuatMul( dq, gt->orient, result );
-		Slayer_GT_QuatNormalize( result );
-		Vector4Copy( result, gt->orient );
-	}
-
-	// Convert to the engine's Euler angles, then UNDO the renderer's pitch flip.
-	//
-	// This is the remaining reason the tumble still looked wrong after the
-	// quaternion rewrite. R_StudioSetUpTransform does
-	//     angles[PITCH] = -angles[PITCH]
-	// before building the matrix (the inherited "stupid quake bug"), so the
-	// orientation actually rendered is a MIRRORED version of the one we computed.
-	// A mirrored rotation is not a rotation: the model appears to tumble the
-	// wrong way about one axis and to flip whenever pitch crosses zero, which is
-	// exactly the "spins crookedly" symptom. Measured against the renderer's own
-	// matrix code: worst element error 1.99 passing the angles through as-is,
-	// 0.00 when pitch is pre-negated here.
-	//
-	// Guarded by the same feature bit the renderer checks, so a mod that fixed
-	// the bug is not double-corrected. Slayer_GT_CompensatePivot already applied
-	// this reasoning to its own matrix; the angles themselves were missed.
-	QuaternionAngle( gt->orient, out_angles );
-
-	if( !FBitSet( host.features, ENGINE_COMPENSATE_QUAKE_BUG ))
-		out_angles[PITCH] = -out_angles[PITCH];
+	Slayer_Spin_PoseToAngles( &gt->spin, out_angles );
 }
 
 static void Slayer_GT_InitSlot( grenade_tumble_t *gt, struct cl_entity_s *ent, float now )
 {
-	vec3_t axis;
+	slayer_spin_params_t p;
+	vec4_t seed_orient;
+	vec3_t seed_angles;
 
 	gt->index  = ent->index;
 	gt->inited = true;
@@ -305,36 +293,17 @@ static void Slayer_GT_InitSlot( grenade_tumble_t *gt, struct cl_entity_s *ent, f
 	// Start from the pose the server gave the entity rather than from identity.
 	// Otherwise a grenade visibly SNAPS to a new orientation on the first frame
 	// we take it over, and again on every teleport/index-reuse reseed.
-	{
-		vec3_t seed_angles;
+	VectorCopy( ent->angles, seed_angles );
+	AngleQuaternion( seed_angles, seed_orient, false );
 
-		VectorCopy( ent->angles, seed_angles );
-		AngleQuaternion( seed_angles, gt->orient, false );
-		Slayer_GT_QuatNormalize( gt->orient );
-	}
+	// No velocity sample yet on a fresh slot -- the first moving frame supplies
+	// it. Seeding with zero would tell the core the grenade was dropped, and it
+	// would settle instead of tumbling; so the seed carries the last known
+	// velocity, which is zero only for a genuinely new slot.
+	Slayer_GrenadeTumble_Params( &p );
+	Slayer_Spin_Seed( &gt->spin, seed_orient, gt->vel, ent->index, &p );
 
-	gt->smooth_speed = 0.0f;
-	gt->resting = false;
-
-	// Seed axis. Only a starting point now: from the first moving frame onward
-	// the axis is derived from the flight direction and eased toward it, so a
-	// grenade tumbles end-over-end along its path rather than about whatever
-	// direction it happened to be given at spawn.
-	axis[0] = COM_RandomFloat( -1.0f, 1.0f );
-	axis[1] = COM_RandomFloat( -1.0f, 1.0f );
-	axis[2] = COM_RandomFloat( -1.0f, 1.0f );
-
-	if( VectorLength( axis ) < 0.01f )
-	{
-		axis[0] = 1.0f; axis[1] = 0.0f; axis[2] = 0.0f;
-	}
-	VectorNormalize( axis );
-	VectorCopy( axis, gt->avel_dir );
-
-	// How much spin about the flight line to mix into the tumble. Kept modest
-	// so the end-over-end motion stays dominant, and varied per grenade so a
-	// handful in the air do not move in lockstep.
-	gt->spin_bias = COM_RandomFloat( 0.10f, 0.35f );
+	VectorClear( gt->vel );
 
 	// IMPORTANT: read ent->origin (post-interp render position), NOT
 	// ent->curstate.origin (raw snapshot, only updates at server tickrate).
@@ -351,7 +320,7 @@ static void Slayer_GT_InitSlot( grenade_tumble_t *gt, struct cl_entity_s *ent, f
 // flip, or the grenade would jump between "just spawned" and "tumbling" frames.
 static void Slayer_GT_ApplyPose( grenade_tumble_t *gt, vec3_t out_angles )
 {
-	Slayer_GT_Integrate( gt, gt->avel_dir, 0.0f, out_angles );
+	Slayer_GT_PoseToAngles( gt, out_angles );
 }
 
 // Compensate for off-center model pivot.
@@ -544,6 +513,8 @@ void Slayer_GrenadeTumble_Init( void )
 	Cvar_RegisterVariable( &slayer_grenade_tumble );
 	Cvar_RegisterVariable( &slayer_grenade_pivot_fix );
 	Cvar_RegisterVariable( &slayer_grenade_diag );
+	Cvar_RegisterVariable( &slayer_grenade_spin );
+	Cvar_RegisterVariable( &slayer_grenade_grip );
 
 	Cmd_AddCommand( "slayer_quickthrow", Cmd_SlayerQuickThrow_f,
 		"Slayer3D: one-button grenade quick throw — slot4 by default; pass "
@@ -552,17 +523,20 @@ void Slayer_GrenadeTumble_Init( void )
 
 	for( i = 0; i < GT_MAX_SLOTS; i++ )
 	{
-		gt_slots[i].index        = 0;
-		gt_slots[i].inited       = false;
-		gt_slots[i].last_time    = 0.0f;
-		gt_slots[i].smooth_speed = 0.0f;
-		gt_slots[i].resting      = false;
+		slayer_spin_params_t p;
+
+		gt_slots[i].index     = 0;
+		gt_slots[i].inited    = false;
+		gt_slots[i].last_time = 0.0f;
 		VectorClear( gt_slots[i].last_origin );
-		VectorClear( gt_slots[i].avel_dir );
-		// Identity quaternion, not all-zero: a zero quaternion is not a
-		// rotation and would produce a degenerate matrix if ever converted.
-		gt_slots[i].orient[0] = gt_slots[i].orient[1] = gt_slots[i].orient[2] = 0.0f;
-		gt_slots[i].orient[3] = 1.0f;
+		VectorClear( gt_slots[i].vel );
+
+		// Seed rather than memset: the spin state must start with an IDENTITY
+		// quaternion, and an all-zero quaternion is not a rotation at all --
+		// converting one produces a degenerate matrix. Seeding is also the only
+		// place that knows what "empty" means for the core.
+		Slayer_GrenadeTumble_Params( &p );
+		Slayer_Spin_Seed( &gt_slots[i].spin, NULL, NULL, i, &p );
 	}
 }
 
@@ -573,7 +547,6 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	float             dt;
 	vec3_t            delta;
 	float             speed;
-	float             rate;
 
 	if( !slayer_grenade_tumble.value )
 		return;
@@ -639,121 +612,47 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 		return;
 	}
 
-	// --- Speed -> tumble rate -------------------------------------------------
+	// --- Velocity, then hand it to the shared spin core -----------------------
 	//
-	// The raw speed here is a difference of two INTERPOLATED positions, so it is
-	// noisy by construction: the same physical flight produces a value that
-	// jumps frame to frame, and around the rest threshold that made the rotation
-	// stutter on and off. Two fixes, both about stability rather than looks:
-	//
-	//   * low-pass the speed, so a single bad frame cannot change the rate much;
-	//   * latch "resting" with HYSTERESIS. Without it, a grenade lying on the
-	//     ground whose interpolation jitters by a unit or two kept crossing the
-	//     single threshold and twitched forever. It now needs to fall well below
-	//     the threshold to settle, and to clearly exceed it to start again.
+	// The raw per-frame velocity is a difference of two INTERPOLATED positions,
+	// so it is noisy by construction. It is low-passed here rather than inside
+	// the core because the noise is a property of how WE sample it (render
+	// positions, not server state) -- a dropped weapon fed from a different
+	// source should not inherit this filter.
 	{
-		float k = 10.0f * dt;   // ~100 ms time constant
-		float sample = speed;
+		vec3_t sample;
+		float  k = 10.0f * dt;   // ~100 ms time constant
+		float  s = speed;
 
-		// Clamp the SAMPLE before it enters the filter. A low-pass only limits
-		// how fast the output moves, not how far: the harness showed a single
+		// Clamp the SAMPLE before it enters the filter. A low-pass limits how
+		// fast the output moves, not how far: the harness showed a single
 		// 3000 u/s frame (ordinary interpolation garbage) dragging the filtered
-		// speed past the maximum in one step and doubling the tumble rate. The
+		// value past the maximum in one step and doubling the tumble rate. The
 		// physical throw speed is bounded, so an out-of-range sample is not data.
-		if( sample > GT_MAX_SPEED ) sample = GT_MAX_SPEED;
-		if( sample < 0.0f ) sample = 0.0f;
+		if( s > GT_MAX_SPEED && s > 0.0f )
+			VectorScale( delta, GT_MAX_SPEED / ( s * dt ), sample );
+		else
+			VectorScale( delta, 1.0f / dt, sample );
 
 		if( k > 1.0f ) k = 1.0f;
-		gt->smooth_speed += k * ( sample - gt->smooth_speed );
+		gt->vel[0] += k * ( sample[0] - gt->vel[0] );
+		gt->vel[1] += k * ( sample[1] - gt->vel[1] );
+		gt->vel[2] += k * ( sample[2] - gt->vel[2] );
 	}
 
-	if( gt->resting )
+	// Contact, traced once per frame. This is what lets the core tell rolling
+	// from flying and gives a real surface normal for a bounce, instead of
+	// guessing one from the velocity change.
 	{
-		// Needs a real push to wake up again (a bounce or a kick).
-		if( gt->smooth_speed > GT_REST_SPEED * 2.0f )
-			gt->resting = false;
-	}
-	else if( gt->smooth_speed < GT_REST_SPEED * 0.5f )
-	{
-		gt->resting = true;
-	}
+		slayer_spin_params_t  params;
+		slayer_spin_contact_t contact;
 
-	if( gt->resting )
-	{
-		rate = 0.0f;
-	}
-	else
-	{
-		float s = gt->smooth_speed;
-
-		if( s > GT_MAX_SPEED ) s = GT_MAX_SPEED;
-		rate = GT_BASE_RATE * ( s / GT_MAX_SPEED );
+		Slayer_GrenadeTumble_Params( &params );
+		Slayer_GT_TraceContact( ent, &params, &contact );
+		Slayer_Spin_Step( &gt->spin, gt->vel, dt, &contact, &params );
 	}
 
-	// --- Tumble axis, derived from the flight direction -----------------------
-	//
-	// A thrown object tumbles END-OVER-END across its direction of travel; it
-	// does not spin about a fixed axis chosen at random, which is what this used
-	// to do and why the motion never looked right no matter how the rate was
-	// tuned. So take the axis from the velocity itself:
-	//
-	//     axis = normalize( velocity x up )
-	//
-	// Because it is derived rather than stored, a bounce re-aims it for free —
-	// the grenade starts tumbling along its new path the moment the velocity
-	// turns, exactly as it does in CS:GO.
-	//
-	// Two refinements keep it from looking mechanical:
-	//   * a per-grenade fraction of the velocity direction is blended in, so
-	//     each one carries some spin about its own flight line instead of every
-	//     grenade tumbling in a perfectly flat plane;
-	//   * the axis is eased toward its target rather than snapped, because the
-	//     velocity is differentiated from interpolated positions and is noisy
-	//     frame to frame.
-	if( dt > 0.0f && !gt->resting )
-	{
-		static const vec3_t gt_up = { 0.0f, 0.0f, 1.0f };
-		vec3_t vel, want, flight;
-		float  len;
-
-		VectorScale( delta, 1.0f / dt, vel );
-
-		// Perpendicular to the flight path: the end-over-end tumble axis.
-		CrossProduct( vel, gt_up, want );
-		len = VectorLength( want );
-
-		// Degenerate while falling straight down (velocity parallel to up) —
-		// there is no meaningful "across the path" then, so keep the last axis.
-		if( len > 1.0f )
-		{
-			float t = 12.0f * dt;   // ease rate, ~1/12 s to converge
-
-			VectorScale( want, 1.0f / len, want );
-
-			// Blend in spin about the flight line itself, fixed per grenade, so
-			// they do not all tumble in one flat plane.
-			VectorCopy( vel, flight );
-			VectorNormalize( flight );
-			VectorMA( want, gt->spin_bias, flight, want );
-			VectorNormalize( want );
-
-			if( t > 1.0f ) t = 1.0f;
-
-			// axis += t * (want - axis)
-			gt->avel_dir[0] += t * ( want[0] - gt->avel_dir[0] );
-			gt->avel_dir[1] += t * ( want[1] - gt->avel_dir[1] );
-			gt->avel_dir[2] += t * ( want[2] - gt->avel_dir[2] );
-			VectorNormalize( gt->avel_dir );
-		}
-	}
-
-	// Integrate the delta into the stored orientation. Only the SMALL per-frame
-	// rotation uses the current axis, so an axis that drifts (and it always
-	// does, because the velocity is differentiated from interpolated positions)
-	// can no longer throw the accumulated pose into a different plane. There is
-	// nothing to wrap or renormalize by hand either: the quaternion is
-	// renormalized inside Slayer_GT_Integrate.
-	Slayer_GT_Integrate( gt, gt->avel_dir, DEG2RAD( rate * dt ), ent->angles );
+	Slayer_GT_PoseToAngles( gt, ent->angles );
 
 	VectorCopy( ent->origin, gt->last_origin );
 	gt->last_time = now;
@@ -768,15 +667,22 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	{
 		gt_diag_last_print_l2 = cl.time;
 
-		Con_Printf( "[SlayerGT] idx=%d speed=%.0f (smooth %.0f) rate=%.0f rest=%d\n",
-			ent->index, speed, gt->smooth_speed, rate, (int)gt->resting );
+		// omega and impacts, not "rate": with the spin core the interesting
+		// numbers are the angular velocity that is being carried and how many
+		// collisions have shaped it, since neither is a function of speed now.
+		Con_Printf( "[SlayerGT] idx=%d speed=%.0f omega=%.1f rad/s hits=%d rest=%d\n",
+			ent->index, speed, Slayer_Spin_Rate( &gt->spin ),
+			gt->spin.impacts, Slayer_Spin_IsResting( &gt->spin ));
 
-		Slayer_Log_Printf( "GT idx=%d model=%s speed=%.0f smooth=%.0f rate=%.0f rest=%d "
-			"axis=(%.2f %.2f %.2f) ang=(%.1f %.1f %.1f) rang=(%.1f %.1f %.1f) "
+		Slayer_Log_Printf( "GT idx=%d model=%s speed=%.0f vel=(%.0f %.0f %.0f) "
+			"omega=%.2f w=(%.2f %.2f %.2f) hits=%d rest=%d "
+			"ang=(%.1f %.1f %.1f) rang=(%.1f %.1f %.1f) "
 			"lcen=(%.1f %.1f %.1f) shift=(%.1f %.1f %.1f)",
 			ent->index, gt_diag_model[0] ? gt_diag_model : "?",
-			speed, gt->smooth_speed, rate, (int)gt->resting,
-			gt->avel_dir[0], gt->avel_dir[1], gt->avel_dir[2],
+			speed, gt->vel[0], gt->vel[1], gt->vel[2],
+			Slayer_Spin_Rate( &gt->spin ),
+			gt->spin.omega[0], gt->spin.omega[1], gt->spin.omega[2],
+			gt->spin.impacts, Slayer_Spin_IsResting( &gt->spin ),
 			ent->angles[0], ent->angles[1], ent->angles[2],
 			gt_diag_rangles[0], gt_diag_rangles[1], gt_diag_rangles[2],
 			gt_diag_lcenter[0], gt_diag_lcenter[1], gt_diag_lcenter[2],
