@@ -18,6 +18,7 @@ GNU General Public License for more details.
 #include "cl_view_slayer.h"
 #include "cl_teamcolors_slayer.h"
 #include "cl_radar_slayer.h"
+#include "cl_slayer_conspy.h"
 #include "cl_scoreboard_slayer.h"
 #include "cl_hud_slayer.h"
 #include "cl_tracer_slayer.h"
@@ -252,6 +253,11 @@ void V_InitSlayerCvars( void )
 
 	// Own radar (replaces the vanilla one)
 	Slayer_Radar_Init();
+
+	// Console spam accounting. Registered LAST on purpose: it hooks Sys_Print,
+	// so the fewer of our own init messages it counts, the cleaner the first
+	// report is.
+	Slayer_ConSpy_Init();
 
 	Con_Printf( "Slayer3D: cvars initialized\n" );
 }

@@ -18,13 +18,19 @@ GNU General Public License for more details.
 
 #include "xash3d_types.h"
 
+// Colour modes for the rasterized map. Kept as an enum in the header so both
+// the radar and the harness use the same numbers as the cvar.
+#define SLAYER_RADARMAP_PLAIN     0   // height shading only (the original look)
+#define SLAYER_RADARMAP_TEXTURE   1   // tinted by each surface's average texture colour
+#define SLAYER_RADARMAP_LIGHTMAP  2   // tinted by the lightmap, falling back to texture
+
 // Rasterize a top-down picture of the CURRENT map from cl.worldmodel and upload
 // it as a texture. Idempotent: the first successful call builds, later calls are
 // free. Returns false while the world is not loaded yet (safe to call again) and
 // also when the map genuinely cannot be rasterized (then it stops trying).
 // `size` is the texture edge in pixels and is clamped to a power of two in
-// [128, 1024].
-qboolean Slayer_RadarMap_Build( int size );
+// [128, 1024]. `colour` is one of SLAYER_RADARMAP_*; changing it rebuilds.
+qboolean Slayer_RadarMap_Build( int size, int colour );
 
 // Texture handle and the WORLD bounds that texture covers. Returns false when
 // nothing has been built. The bounds are the transform: they are what turns a

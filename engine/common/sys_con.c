@@ -14,6 +14,11 @@ GNU General Public License for more details.
 */
 
 #include "common.h"
+#if !XASH_DEDICATED
+// `client` is on the include path for the non-dedicated build (see engine/wscript),
+// so the plain name works and the dedicated build never sees it.
+#include "cl_slayer_conspy.h"   // Slayer3D: console spam accounting
+#endif
 #if XASH_ANDROID
 #include <android/log.h>
 #endif
@@ -306,6 +311,14 @@ void Sys_PrintLog( const char *pMsg )
 
 	// spew to stdout
 	Sys_PrintStdout( logtime, logtime_len, pMsg );
+
+	// Slayer3D: account this line so `slayer_conspy_report` can name the source
+	// of console spam. Counting, not dumping: most lines come from the client
+	// DLL, and a template histogram points at the offender where a 40k-line log
+	// file does not. Costs one float compare while the cvar is off.
+#if !XASH_DEDICATED
+	Slayer_ConSpy_Note( pMsg );
+#endif
 
 	len = Q_strlen( pMsg );
 

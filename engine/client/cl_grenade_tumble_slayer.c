@@ -273,7 +273,26 @@ static void Slayer_GT_Integrate( grenade_tumble_t *gt, const vec3_t axis, float 
 		Vector4Copy( result, gt->orient );
 	}
 
+	// Convert to the engine's Euler angles, then UNDO the renderer's pitch flip.
+	//
+	// This is the remaining reason the tumble still looked wrong after the
+	// quaternion rewrite. R_StudioSetUpTransform does
+	//     angles[PITCH] = -angles[PITCH]
+	// before building the matrix (the inherited "stupid quake bug"), so the
+	// orientation actually rendered is a MIRRORED version of the one we computed.
+	// A mirrored rotation is not a rotation: the model appears to tumble the
+	// wrong way about one axis and to flip whenever pitch crosses zero, which is
+	// exactly the "spins crookedly" symptom. Measured against the renderer's own
+	// matrix code: worst element error 1.99 passing the angles through as-is,
+	// 0.00 when pitch is pre-negated here.
+	//
+	// Guarded by the same feature bit the renderer checks, so a mod that fixed
+	// the bug is not double-corrected. Slayer_GT_CompensatePivot already applied
+	// this reasoning to its own matrix; the angles themselves were missed.
 	QuaternionAngle( gt->orient, out_angles );
+
+	if( !FBitSet( host.features, ENGINE_COMPENSATE_QUAKE_BUG ))
+		out_angles[PITCH] = -out_angles[PITCH];
 }
 
 static void Slayer_GT_InitSlot( grenade_tumble_t *gt, struct cl_entity_s *ent, float now )
@@ -324,6 +343,15 @@ static void Slayer_GT_InitSlot( grenade_tumble_t *gt, struct cl_entity_s *ent, f
 	// changes per-snapshot (~50ms) — most frames see delta=0.
 	VectorCopy( ent->origin, gt->last_origin );
 	gt->last_time = now;
+}
+
+// Write the current pose into the entity without advancing it. Used on the
+// frames where there is nothing to integrate (fresh slot, zero dt, teleport
+// reseed) -- those must go through the SAME conversion, including the pitch
+// flip, or the grenade would jump between "just spawned" and "tumbling" frames.
+static void Slayer_GT_ApplyPose( grenade_tumble_t *gt, vec3_t out_angles )
+{
+	Slayer_GT_Integrate( gt, gt->avel_dir, 0.0f, out_angles );
 }
 
 // Compensate for off-center model pivot.
@@ -576,7 +604,7 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 		Slayer_GT_InitSlot( gt, ent, now );
 		// still apply the (zero) accumulated angles so the renderer doesn't
 		// see a single-axis spin from the server's avelocity on this frame
-		QuaternionAngle( gt->orient, ent->angles );
+		Slayer_GT_ApplyPose( gt, ent->angles );
 		Slayer_GT_CompensatePivot( ent );
 		return;
 	}
@@ -585,7 +613,7 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	if( dt <= 0.0f )
 	{
 		// same-frame double call (e.g. multiple visible passes): just reapply
-		QuaternionAngle( gt->orient, ent->angles );
+		Slayer_GT_ApplyPose( gt, ent->angles );
 		Slayer_GT_CompensatePivot( ent );
 		return;
 	}
@@ -606,7 +634,7 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	if( speed > GT_MAX_SPEED * 2.0f )
 	{
 		Slayer_GT_InitSlot( gt, ent, now );
-		QuaternionAngle( gt->orient, ent->angles );
+		Slayer_GT_ApplyPose( gt, ent->angles );
 		Slayer_GT_CompensatePivot( ent );
 		return;
 	}

@@ -82,6 +82,12 @@ static CVAR_DEFINE_AUTO( slayer_radar_map, "1", FCVAR_ARCHIVE,
 static CVAR_DEFINE_AUTO( slayer_radar_map_res, "512", FCVAR_ARCHIVE,
 	"Slayer3D: resolution of the rasterized radar map texture (128..1024)" );
 
+// How the rasterized map is coloured. 0 keeps the original blueprint look, which
+// is why it stays available: on some maps the flat grey-blue actually reads the
+// layout better than the real colours do.
+static CVAR_DEFINE_AUTO( slayer_radar_map_color, "2", FCVAR_ARCHIVE,
+	"Slayer3D: radar map colouring (0 = height shading only, 1 = texture colours, 2 = lighting + textures)" );
+
 static CVAR_DEFINE_AUTO( slayer_radar_map_alpha, "215", FCVAR_ARCHIVE,
 	"Slayer3D: map picture opacity inside the radar, 0..255" );
 
@@ -447,9 +453,9 @@ static void Slayer_Radar_PrintSettings( void )
 		slayer_radar_x.value, slayer_radar_y.value,
 		slayer_radar_size.value, slayer_radar_scale.value,
 		(int)slayer_radar_rotate.value );
-	Con_Printf( "  map %d (1=from BSP, 2=external overview, 0=off)  res %d  alpha %d\n",
+	Con_Printf( "  map %d (1=from BSP, 2=external overview, 0=off)  res %d  alpha %d  color %d\n",
 		(int)slayer_radar_map.value, (int)slayer_radar_map_res.value,
-		(int)slayer_radar_map_alpha.value );
+		(int)slayer_radar_map_alpha.value, (int)slayer_radar_map_color.value );
 	Con_Printf( "  cone %d  len %.2f  alpha %d   dot %.2f   memory %.1fs   height %d\n",
 		(int)slayer_radar_cone.value, slayer_radar_cone_len.value,
 		(int)slayer_radar_cone_alpha.value, slayer_radar_dot.value,
@@ -592,6 +598,7 @@ static void Cmd_RadarReset_f( void )
 	Cvar_SetValue( "slayer_radar_rotate", 1.0f );
 	Cvar_SetValue( "slayer_radar_map", 1.0f );
 	Cvar_SetValue( "slayer_radar_map_res", 512.0f );
+	Cvar_SetValue( "slayer_radar_map_color", 2.0f );
 	Cvar_SetValue( "slayer_radar_map_alpha", 215.0f );
 	Cvar_SetValue( "slayer_radar_cone", 1.0f );
 	Cvar_SetValue( "slayer_radar_cone_len", 0.55f );
@@ -624,6 +631,7 @@ void Slayer_Radar_Init( void )
 	Cvar_RegisterVariable( &slayer_radar_rotate );
 	Cvar_RegisterVariable( &slayer_radar_map );
 	Cvar_RegisterVariable( &slayer_radar_map_res );
+	Cvar_RegisterVariable( &slayer_radar_map_color );
 	Cvar_RegisterVariable( &slayer_radar_map_alpha );
 	Cvar_RegisterVariable( &slayer_radar_border );
 	Cvar_RegisterVariable( &slayer_radar_bg );
@@ -843,7 +851,8 @@ void Slayer_Radar_Draw( void )
 		// picture of another map to be shown.
 		if( slayer_radar_map.value < 2.0f )
 		{
-			Slayer_RadarMap_Build( (int)slayer_radar_map_res.value );
+			Slayer_RadarMap_Build( (int)slayer_radar_map_res.value,
+				(int)slayer_radar_map_color.value );
 			Slayer_RadarMap_Get( &map_tex, map_mins, map_maxs );
 		}
 		else

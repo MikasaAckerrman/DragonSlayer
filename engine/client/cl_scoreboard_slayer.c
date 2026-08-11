@@ -89,14 +89,22 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_rowscale, "1.15", FCVAR_ARCHIVE, "Sla
 static CVAR_DEFINE_AUTO( slayer_avatar_recheck, "10", FCVAR_ARCHIVE, "Slayer3D: minutes between Steam avatar change re-checks (0 = never; the check is one small XML fetch)" );
 // How hard to suppress the game's own scoreboard while ours is up.
 //
-// Default is 1, NOT 2, and that is the fix for "opening the scoreboard hides
-// the whole HUD": level 2 skips clgame.dllFuncs.pfnRedraw, and that single call
-// draws the ENTIRE client HUD -- health, armour, ammo, money, timer, radar --
-// not just the stock board. So level 2 traded one problem for a bigger one.
-// Level 1 skips only VGui_Paint, and the CS 1.6 ScorePanel IS a VGUI panel, so
-// that is enough to hide it while every HUD element keeps drawing.
-// Level 2 stays available for a mod that draws its board straight from Redraw.
-static CVAR_DEFINE_AUTO( slayer_scoreboard_block_stock, "1", FCVAR_ARCHIVE, "Slayer3D: hide the game's own scoreboard while ours is up (0 = off, 1 = block VGUI only [keeps the HUD], 2 = also block the client HUD redraw [hides the HUD])" );
+// Level 2 skips clgame.dllFuncs.pfnRedraw, and that single call draws the ENTIRE
+// client HUD -- health, armour, ammo, money, timer, radar -- not just the stock
+// board. It is therefore NOT reachable through this cvar any more, no matter what
+// value an old config stores: see slayer_scoreboard_block_hud below.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_block_stock, "1", FCVAR_ARCHIVE, "Slayer3D: hide the game's own scoreboard while ours is up (0 = off, 1 = block VGUI [keeps the HUD])" );
+
+// The escape hatch for a mod that draws its board straight from pfnRedraw. OFF,
+// and deliberately a SEPARATE cvar rather than a higher value of the one above.
+//
+// WHY: migrating the archived value at init cannot work. Cvar registration runs
+// inside CL_Init (host.c:1226) but `exec config.cfg` happens later (host.c:1268),
+// so the config re-applies the stored 2 right after we lowered it to 1 -- which
+// is exactly why the HUD still vanished after the previous "fix". Capping the
+// effective level in code is order-independent and cannot be undone by a config.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_block_hud, "0", FCVAR_ARCHIVE,
+	"Slayer3D: also skip the client HUD redraw while our scoreboard is up (hides the whole HUD; only for mods that draw their board from Redraw)" );
 
 // Migration guard for builds before 2026-08-10. Those builds documented level
 // 2 as the reliable way to hide the stock board, so archived configs kept it.
@@ -811,6 +819,7 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_avatar_autofetch_interval );
 	Cvar_RegisterVariable( &slayer_avatar_uploads_per_frame );
 	Cvar_RegisterVariable( &slayer_scoreboard_block_stock );
+	Cvar_RegisterVariable( &slayer_scoreboard_block_hud );
 	Cvar_RegisterVariable( &slayer_scoreboard_block_migrated );
 
 	// `FCVAR_ARCHIVE` preserves the old value across APK updates. Users who had
@@ -1333,12 +1342,27 @@ int Slayer_Scoreboard_StockBlockLevel( void )
 	static int last_reported = -1;
 	int        cvar_level = (int)slayer_scoreboard_block_stock.value;
 	qboolean   visible = Slayer_Scoreboard_IsVisible();
+	qboolean   allow_hud_block = ( slayer_scoreboard_block_hud.value != 0.0f );
 	int        level;
 
 	if( cvar_level <= 0 || !visible )
+	{
 		level = 0;
+	}
 	else
-		level = ( cvar_level > 2 ) ? 2 : cvar_level;
+	{
+		// HARD CAP at 1 unless the separate opt-in cvar is set.
+		//
+		// This is the actual fix for "the HUD still disappears". Migrating the
+		// archived value at init does not work: cvars are registered inside
+		// CL_Init, but `exec config.cfg` runs afterwards, so the stored 2 is
+		// re-applied right after the migration lowered it. Capping here is
+		// order-independent — a config can set the cvar to anything and the HUD
+		// still survives unless slayer_scoreboard_block_hud says otherwise.
+		level = 1;
+		if( allow_hud_block && cvar_level >= 2 )
+			level = 2;
+	}
 
 	// This is asked several times per frame, so report only when the effective
 	// level changes. Without it there is no way to tell from a log whether the
@@ -1347,8 +1371,9 @@ int Slayer_Scoreboard_StockBlockLevel( void )
 	if( level != last_reported )
 	{
 		last_reported = level;
-		Slayer_Log_Printf( "stock-board block: level=%d (cvar=%d, ours visible=%d, dead-dismissed=%d)",
-			level, cvar_level, (int)visible, (int)slayer_death_dismissed );
+		Slayer_Log_Printf( "stock-board block: level=%d (cvar=%d, hud_block=%d, ours visible=%d, dead-dismissed=%d)",
+			level, cvar_level, (int)allow_hud_block, (int)visible,
+			(int)slayer_death_dismissed );
 	}
 
 	return level;
