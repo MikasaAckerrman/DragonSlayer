@@ -213,56 +213,6 @@ static grenade_tumble_t *Slayer_GT_GetSlot( int index )
 	return &gt_slots[oldest_slot];
 }
 
-static void Slayer_GT_InitSlot( grenade_tumble_t *gt, struct cl_entity_s *ent, float now )
-{
-	vec3_t axis;
-
-	gt->index  = ent->index;
-	gt->inited = true;
-
-	// Start from the pose the server gave the entity rather than from identity.
-	// Otherwise a grenade visibly SNAPS to a new orientation on the first frame
-	// we take it over, and again on every teleport/index-reuse reseed.
-	{
-		vec3_t seed_angles;
-
-		VectorCopy( ent->angles, seed_angles );
-		AngleQuaternion( seed_angles, gt->orient, false );
-		Slayer_GT_QuatNormalize( gt->orient );
-	}
-
-	gt->smooth_speed = 0.0f;
-	gt->resting = false;
-
-	// Seed axis. Only a starting point now: from the first moving frame onward
-	// the axis is derived from the flight direction and eased toward it, so a
-	// grenade tumbles end-over-end along its path rather than about whatever
-	// direction it happened to be given at spawn.
-	axis[0] = COM_RandomFloat( -1.0f, 1.0f );
-	axis[1] = COM_RandomFloat( -1.0f, 1.0f );
-	axis[2] = COM_RandomFloat( -1.0f, 1.0f );
-
-	if( VectorLength( axis ) < 0.01f )
-	{
-		axis[0] = 1.0f; axis[1] = 0.0f; axis[2] = 0.0f;
-	}
-	VectorNormalize( axis );
-	VectorCopy( axis, gt->avel_dir );
-
-	// How much spin about the flight line to mix into the tumble. Kept modest
-	// so the end-over-end motion stays dominant, and varied per grenade so a
-	// handful in the air do not move in lockstep.
-	gt->spin_bias = COM_RandomFloat( 0.10f, 0.35f );
-
-	// IMPORTANT: read ent->origin (post-interp render position), NOT
-	// ent->curstate.origin (raw snapshot, only updates at server tickrate).
-	// Using curstate.origin here would make speed estimation degenerate
-	// because dt is per-render-frame (~16ms) while curstate.origin only
-	// changes per-snapshot (~50ms) — most frames see delta=0.
-	VectorCopy( ent->origin, gt->last_origin );
-	gt->last_time = now;
-}
-
 // Build a quaternion from axis-angle (axis must be unit, theta in radians).
 // Layout matches AngleQuaternion in xash3d_mathlib.h: q = (axis*sin(θ/2), cos(θ/2)).
 static void Slayer_GT_QuatFromAxisAngle( const vec3_t axis, float theta, vec4_t q )
@@ -324,6 +274,56 @@ static void Slayer_GT_Integrate( grenade_tumble_t *gt, const vec3_t axis, float 
 	}
 
 	QuaternionAngle( gt->orient, out_angles );
+}
+
+static void Slayer_GT_InitSlot( grenade_tumble_t *gt, struct cl_entity_s *ent, float now )
+{
+	vec3_t axis;
+
+	gt->index  = ent->index;
+	gt->inited = true;
+
+	// Start from the pose the server gave the entity rather than from identity.
+	// Otherwise a grenade visibly SNAPS to a new orientation on the first frame
+	// we take it over, and again on every teleport/index-reuse reseed.
+	{
+		vec3_t seed_angles;
+
+		VectorCopy( ent->angles, seed_angles );
+		AngleQuaternion( seed_angles, gt->orient, false );
+		Slayer_GT_QuatNormalize( gt->orient );
+	}
+
+	gt->smooth_speed = 0.0f;
+	gt->resting = false;
+
+	// Seed axis. Only a starting point now: from the first moving frame onward
+	// the axis is derived from the flight direction and eased toward it, so a
+	// grenade tumbles end-over-end along its path rather than about whatever
+	// direction it happened to be given at spawn.
+	axis[0] = COM_RandomFloat( -1.0f, 1.0f );
+	axis[1] = COM_RandomFloat( -1.0f, 1.0f );
+	axis[2] = COM_RandomFloat( -1.0f, 1.0f );
+
+	if( VectorLength( axis ) < 0.01f )
+	{
+		axis[0] = 1.0f; axis[1] = 0.0f; axis[2] = 0.0f;
+	}
+	VectorNormalize( axis );
+	VectorCopy( axis, gt->avel_dir );
+
+	// How much spin about the flight line to mix into the tumble. Kept modest
+	// so the end-over-end motion stays dominant, and varied per grenade so a
+	// handful in the air do not move in lockstep.
+	gt->spin_bias = COM_RandomFloat( 0.10f, 0.35f );
+
+	// IMPORTANT: read ent->origin (post-interp render position), NOT
+	// ent->curstate.origin (raw snapshot, only updates at server tickrate).
+	// Using curstate.origin here would make speed estimation degenerate
+	// because dt is per-render-frame (~16ms) while curstate.origin only
+	// changes per-snapshot (~50ms) — most frames see delta=0.
+	VectorCopy( ent->origin, gt->last_origin );
+	gt->last_time = now;
 }
 
 // Compensate for off-center model pivot.
