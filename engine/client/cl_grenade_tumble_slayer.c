@@ -129,11 +129,28 @@ typedef struct
 	int       index;        // engine entity index, 0 = empty slot
 	float     last_time;    // cl.time of last update (also slot expiry)
 	vec3_t    last_origin;  // for linear velocity estimation
-	float     accum_theta;  // total accumulated rotation angle in RADIANS
+	// ACCUMULATED ORIENTATION as a quaternion.
+	//
+	// This replaces the old (axis, total_angle) pair, and that pair was the
+	// actual bug. The pose was rebuilt every frame as "rotate accum_theta about
+	// the CURRENT axis", while the axis itself was re-derived from the flight
+	// direction and eased every frame. But rotating 300 degrees about axis A and
+	// 300 degrees about a slightly different axis B are completely different
+	// orientations, so every tiny axis nudge teleported the whole accumulated
+	// rotation into another plane. With the velocity differentiated from
+	// interpolated positions (noisy by nature) that happened every single frame:
+	// the grenade jittered and flipped instead of tumbling.
+	//
+	// Integrating incrementally fixes it by construction: the axis only ever
+	// affects THIS frame's small delta rotation, and the history is already
+	// baked into the quaternion. A bounce simply changes the next increments.
+	vec4_t    orient;
 	vec3_t    avel_dir;     // unit vector — current tumble axis, eased toward the
 	                        // one derived from the flight direction each frame
 	float     spin_bias;    // how much spin about the flight line to mix in,
 	                        // fixed per grenade so they do not all tumble alike
+	float     smooth_speed; // low-passed linear speed, drives the tumble rate
+	qboolean  resting;      // hysteresis latch: settled on the ground
 	qboolean  inited;
 } grenade_tumble_t;
 
@@ -200,9 +217,22 @@ static void Slayer_GT_InitSlot( grenade_tumble_t *gt, struct cl_entity_s *ent, f
 {
 	vec3_t axis;
 
-	gt->index       = ent->index;
-	gt->inited      = true;
-	gt->accum_theta = 0.0f;
+	gt->index  = ent->index;
+	gt->inited = true;
+
+	// Start from the pose the server gave the entity rather than from identity.
+	// Otherwise a grenade visibly SNAPS to a new orientation on the first frame
+	// we take it over, and again on every teleport/index-reuse reseed.
+	{
+		vec3_t seed_angles;
+
+		VectorCopy( ent->angles, seed_angles );
+		AngleQuaternion( seed_angles, gt->orient, false );
+		Slayer_GT_QuatNormalize( gt->orient );
+	}
+
+	gt->smooth_speed = 0.0f;
+	gt->resting = false;
 
 	// Seed axis. Only a starting point now: from the first moving frame onward
 	// the axis is derived from the flight direction and eased toward it, so a
@@ -233,21 +263,67 @@ static void Slayer_GT_InitSlot( grenade_tumble_t *gt, struct cl_entity_s *ent, f
 	gt->last_time = now;
 }
 
-// Build a quaternion from axis-angle (axis must be unit, theta in radians)
-// and convert it to the engine's Euler angles. Layout matches AngleQuaternion
-// in xash3d_mathlib.h: q = (axis*sin(θ/2), cos(θ/2)).
-static void Slayer_GT_AxisAngleToEngineEuler( const vec3_t axis, float theta, vec3_t out_angles )
+// Build a quaternion from axis-angle (axis must be unit, theta in radians).
+// Layout matches AngleQuaternion in xash3d_mathlib.h: q = (axis*sin(θ/2), cos(θ/2)).
+static void Slayer_GT_QuatFromAxisAngle( const vec3_t axis, float theta, vec4_t q )
 {
-	vec4_t q;
-	float  half = theta * 0.5f;
-	float  s    = sinf( half );
+	float half = theta * 0.5f;
+	float s    = sinf( half );
 
 	q[0] = axis[0] * s;
 	q[1] = axis[1] * s;
 	q[2] = axis[2] * s;
 	q[3] = cosf( half );
+}
 
-	QuaternionAngle( q, out_angles );
+// q = a * b (apply b first, then a). Hamilton product; the engine has no
+// quaternion multiply of its own, only slerp and the angle conversions.
+static void Slayer_GT_QuatMul( const vec4_t a, const vec4_t b, vec4_t out )
+{
+	out[0] = a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1];
+	out[1] = a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0];
+	out[2] = a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3];
+	out[3] = a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2];
+}
+
+// Renormalize. Required, not cosmetic: the orientation is built by multiplying
+// one small increment per frame, so float error compounds for as long as the
+// grenade lives (a smoke can bounce for many seconds) and an un-normalized
+// quaternion turns into a shear/scale in the rotation matrix.
+static void Slayer_GT_QuatNormalize( vec4_t q )
+{
+	float len = sqrtf( q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3] );
+
+	if( len < 1e-6f )
+	{
+		q[0] = q[1] = q[2] = 0.0f;
+		q[3] = 1.0f;
+		return;
+	}
+
+	len = 1.0f / len;
+	q[0] *= len; q[1] *= len; q[2] *= len; q[3] *= len;
+}
+
+// Advance the stored orientation by `theta` radians about `axis`, then convert
+// to the engine's Euler angles.
+static void Slayer_GT_Integrate( grenade_tumble_t *gt, const vec3_t axis, float theta,
+	vec3_t out_angles )
+{
+	vec4_t dq, result;
+
+	if( theta != 0.0f )
+	{
+		Slayer_GT_QuatFromAxisAngle( axis, theta, dq );
+		// Increment on the LEFT: the delta is expressed in world space (the
+		// tumble axis comes from the world-space velocity), not in the model's
+		// own frame.
+		Slayer_GT_QuatMul( dq, gt->orient, result );
+		Slayer_GT_QuatNormalize( result );
+		Vector4Copy( result, gt->orient );
+	}
+
+	QuaternionAngle( gt->orient, out_angles );
 }
 
 // Compensate for off-center model pivot.
@@ -448,12 +524,17 @@ void Slayer_GrenadeTumble_Init( void )
 
 	for( i = 0; i < GT_MAX_SLOTS; i++ )
 	{
-		gt_slots[i].index       = 0;
-		gt_slots[i].inited      = false;
-		gt_slots[i].last_time   = 0.0f;
-		gt_slots[i].accum_theta = 0.0f;
+		gt_slots[i].index        = 0;
+		gt_slots[i].inited       = false;
+		gt_slots[i].last_time    = 0.0f;
+		gt_slots[i].smooth_speed = 0.0f;
+		gt_slots[i].resting      = false;
 		VectorClear( gt_slots[i].last_origin );
 		VectorClear( gt_slots[i].avel_dir );
+		// Identity quaternion, not all-zero: a zero quaternion is not a
+		// rotation and would produce a degenerate matrix if ever converted.
+		gt_slots[i].orient[0] = gt_slots[i].orient[1] = gt_slots[i].orient[2] = 0.0f;
+		gt_slots[i].orient[3] = 1.0f;
 	}
 }
 
@@ -495,7 +576,7 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 		Slayer_GT_InitSlot( gt, ent, now );
 		// still apply the (zero) accumulated angles so the renderer doesn't
 		// see a single-axis spin from the server's avelocity on this frame
-		Slayer_GT_AxisAngleToEngineEuler( gt->avel_dir, gt->accum_theta, ent->angles );
+		QuaternionAngle( gt->orient, ent->angles );
 		Slayer_GT_CompensatePivot( ent );
 		return;
 	}
@@ -504,7 +585,7 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	if( dt <= 0.0f )
 	{
 		// same-frame double call (e.g. multiple visible passes): just reapply
-		Slayer_GT_AxisAngleToEngineEuler( gt->avel_dir, gt->accum_theta, ent->angles );
+		QuaternionAngle( gt->orient, ent->angles );
 		Slayer_GT_CompensatePivot( ent );
 		return;
 	}
@@ -525,19 +606,60 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	if( speed > GT_MAX_SPEED * 2.0f )
 	{
 		Slayer_GT_InitSlot( gt, ent, now );
-		Slayer_GT_AxisAngleToEngineEuler( gt->avel_dir, gt->accum_theta, ent->angles );
+		QuaternionAngle( gt->orient, ent->angles );
 		Slayer_GT_CompensatePivot( ent );
 		return;
 	}
 
-	if( speed < GT_REST_SPEED )
+	// --- Speed -> tumble rate -------------------------------------------------
+	//
+	// The raw speed here is a difference of two INTERPOLATED positions, so it is
+	// noisy by construction: the same physical flight produces a value that
+	// jumps frame to frame, and around the rest threshold that made the rotation
+	// stutter on and off. Two fixes, both about stability rather than looks:
+	//
+	//   * low-pass the speed, so a single bad frame cannot change the rate much;
+	//   * latch "resting" with HYSTERESIS. Without it, a grenade lying on the
+	//     ground whose interpolation jitters by a unit or two kept crossing the
+	//     single threshold and twitched forever. It now needs to fall well below
+	//     the threshold to settle, and to clearly exceed it to start again.
+	{
+		float k = 10.0f * dt;   // ~100 ms time constant
+		float sample = speed;
+
+		// Clamp the SAMPLE before it enters the filter. A low-pass only limits
+		// how fast the output moves, not how far: the harness showed a single
+		// 3000 u/s frame (ordinary interpolation garbage) dragging the filtered
+		// speed past the maximum in one step and doubling the tumble rate. The
+		// physical throw speed is bounded, so an out-of-range sample is not data.
+		if( sample > GT_MAX_SPEED ) sample = GT_MAX_SPEED;
+		if( sample < 0.0f ) sample = 0.0f;
+
+		if( k > 1.0f ) k = 1.0f;
+		gt->smooth_speed += k * ( sample - gt->smooth_speed );
+	}
+
+	if( gt->resting )
+	{
+		// Needs a real push to wake up again (a bounce or a kick).
+		if( gt->smooth_speed > GT_REST_SPEED * 2.0f )
+			gt->resting = false;
+	}
+	else if( gt->smooth_speed < GT_REST_SPEED * 0.5f )
+	{
+		gt->resting = true;
+	}
+
+	if( gt->resting )
 	{
 		rate = 0.0f;
 	}
 	else
 	{
-		if( speed > GT_MAX_SPEED ) speed = GT_MAX_SPEED;
-		rate = GT_BASE_RATE * ( speed / GT_MAX_SPEED );
+		float s = gt->smooth_speed;
+
+		if( s > GT_MAX_SPEED ) s = GT_MAX_SPEED;
+		rate = GT_BASE_RATE * ( s / GT_MAX_SPEED );
 	}
 
 	// --- Tumble axis, derived from the flight direction -----------------------
@@ -560,7 +682,7 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	//   * the axis is eased toward its target rather than snapped, because the
 	//     velocity is differentiated from interpolated positions and is noisy
 	//     frame to frame.
-	if( dt > 0.0f && speed >= GT_REST_SPEED )
+	if( dt > 0.0f && !gt->resting )
 	{
 		static const vec3_t gt_up = { 0.0f, 0.0f, 1.0f };
 		vec3_t vel, want, flight;
@@ -597,22 +719,17 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 		}
 	}
 
-	// Single scalar accumulator — total rotation in radians around fixed
-	// axis avel_dir. This is the proper axis-angle representation; build
-	// the engine's Euler angles from (axis, theta) via quaternion to avoid
-	// the orbital drift that comes from stacking three independent Euler
-	// component accumulators.
-	gt->accum_theta += DEG2RAD( rate * dt );
-
-	// Wrap into [-2π, 2π] to keep float precision over long-lived tumbles
-	// (e.g. a smoke grenade that bounces for many seconds before settling).
-	while( gt->accum_theta >  2.0f * (float)M_PI ) gt->accum_theta -= 2.0f * (float)M_PI;
-	while( gt->accum_theta < -2.0f * (float)M_PI ) gt->accum_theta += 2.0f * (float)M_PI;
+	// Integrate the delta into the stored orientation. Only the SMALL per-frame
+	// rotation uses the current axis, so an axis that drifts (and it always
+	// does, because the velocity is differentiated from interpolated positions)
+	// can no longer throw the accumulated pose into a different plane. There is
+	// nothing to wrap or renormalize by hand either: the quaternion is
+	// renormalized inside Slayer_GT_Integrate.
+	Slayer_GT_Integrate( gt, gt->avel_dir, DEG2RAD( rate * dt ), ent->angles );
 
 	VectorCopy( ent->origin, gt->last_origin );
 	gt->last_time = now;
 
-	Slayer_GT_AxisAngleToEngineEuler( gt->avel_dir, gt->accum_theta, ent->angles );
 	Slayer_GT_CompensatePivot( ent );
 
 	// Level 2+: throttled diagnostic. Runs AFTER the angles and the pivot shift
@@ -623,14 +740,14 @@ void Slayer_GrenadeTumble_Apply( struct cl_entity_s *ent )
 	{
 		gt_diag_last_print_l2 = cl.time;
 
-		Con_Printf( "[SlayerGT] idx=%d speed=%.0f rate=%.0f deg=%.0f\n",
-			ent->index, speed, rate, RAD2DEG( gt->accum_theta ) );
+		Con_Printf( "[SlayerGT] idx=%d speed=%.0f (smooth %.0f) rate=%.0f rest=%d\n",
+			ent->index, speed, gt->smooth_speed, rate, (int)gt->resting );
 
-		Slayer_Log_Printf( "GT idx=%d model=%s speed=%.0f rate=%.0f theta=%.0fdeg "
+		Slayer_Log_Printf( "GT idx=%d model=%s speed=%.0f smooth=%.0f rate=%.0f rest=%d "
 			"axis=(%.2f %.2f %.2f) ang=(%.1f %.1f %.1f) rang=(%.1f %.1f %.1f) "
 			"lcen=(%.1f %.1f %.1f) shift=(%.1f %.1f %.1f)",
 			ent->index, gt_diag_model[0] ? gt_diag_model : "?",
-			speed, rate, RAD2DEG( gt->accum_theta ),
+			speed, gt->smooth_speed, rate, (int)gt->resting,
 			gt->avel_dir[0], gt->avel_dir[1], gt->avel_dir[2],
 			ent->angles[0], ent->angles[1], ent->angles[2],
 			gt_diag_rangles[0], gt_diag_rangles[1], gt_diag_rangles[2],

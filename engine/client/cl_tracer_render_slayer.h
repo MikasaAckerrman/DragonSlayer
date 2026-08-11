@@ -68,6 +68,13 @@ typedef struct
 	float fade_out_start;  // fraction of life where fade-out begins
 	float min_px;
 	float max_px;
+	// Anti-aliasing of the profile. 1 = build the profile texture with a mip
+	// chain so a distant 1-2 pixel streak is filtered instead of point-sampled.
+	int   smooth;
+	// Extra screen width added as the streak gets thinner than `soft_px`. A
+	// sub-pixel line cannot be smooth at any filtering, so past that point it is
+	// widened and dimmed to keep total energy: fades away instead of crawling.
+	float soft_px;
 } slayer_tracer_style_t;
 
 // Sample the ramp at t in [0..1]; out receives 0..1 floats.
@@ -84,14 +91,43 @@ float Slayer_WorldPerPixel( float dist, float fov_y, int screen_h );
 // compensation for the widened case into *dim.
 float Slayer_ClampWidth( float half_world, float wpp, float min_px, float max_px, float *dim );
 
+// As above, plus sub-pixel softening. Below `soft_px` the streak is widened to
+// soft_px and dimmed by the same ratio, so a far tracer FADES instead of
+// flickering between covered and uncovered pixels. `min_px` remains the hard
+// floor, so the streak never becomes invisible geometry.
+//
+// Why not just raise min_px: min_px exists so a distant streak stays visible at
+// all, and its dim floor is deliberately high (0.35) to keep it readable. The
+// softening range is wider and must be allowed to fade much further, so it is a
+// second, gentler stage rather than a bigger version of the first.
+float Slayer_SoftWidth( float half_world, float wpp, float min_px, float max_px,
+	float soft_px, float *dim );
+
 // Draw one tracer (halo + core ribbons + head spark) with the TriAPI.
 // Call between R_PushScene/R_PopScene-equivalent points, i.e. from CL_DrawEFX.
 void Slayer_TracerRender_Draw( const slayer_tracer_t *tr, const slayer_tracer_style_t *st,
 	const vec3_t vieworg, float fov_y, int screen_h );
 
+// Restore GL state after the last tracer of the frame. Additive TriAPI mode
+// leaves depth writes disabled and the TriAPI cannot pop state, so without this
+// the viewmodel drawn right afterwards renders with no depth writes (the arms
+// disappeared while the weapon stayed). Call once per frame, only when at least
+// one tracer was drawn.
+void Slayer_TracerRender_EndFrame( void );
+
 // Build / release the baked profile textures. Init is also called lazily on the
 // first draw, so a vid_restart cannot leave the ribbons untextured.
 void Slayer_TracerRender_InitTextures( void );
+
+// Same, choosing whether the profile carries a mip chain. Mipmaps are what stop
+// a distant 1-2 pixel streak from crawling: minifying a 128-wide profile without
+// them is point-sampling a high-frequency signal.
+void Slayer_TracerRender_InitTexturesEx( qboolean mipmap );
+
+// True when the cached textures already match the requested mip mode. Lets a
+// live cvar change rebuild instead of silently reusing the old chain.
+qboolean Slayer_TracerRender_TexturesMatch( qboolean mipmap );
+
 void Slayer_TracerRender_FreeTextures( void );
 
 // Forget the cached texnums without calling GL. Use on map change / renderer

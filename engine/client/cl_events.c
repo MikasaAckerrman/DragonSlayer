@@ -240,8 +240,19 @@ static qboolean CL_FireEvent( event_info_t *ei, int slot )
 
 			if( ev->func )
 			{
+				int prev_owner;
+
 				CL_DescribeEvent( ei, slot );
+				// Slayer3D: remember WHOSE weapon event is running. The event
+				// computes spread and reports the real impact through
+				// R_BulletImpactParticles, so this is the only place that can
+				// say which player that impact belongs to. Without it, two
+				// players firing point-blank in the same frame are
+				// indistinguishable and our tracer can be finished by someone
+				// else's bullet hole.
+				prev_owner = Slayer_Tracer_BeginEvent( ei->args.entindex );
 				ev->func( &ei->args );
+				Slayer_Tracer_EndEvent( prev_owner );
 				return true;
 			}
 

@@ -1045,10 +1045,13 @@ static void CL_LinkPlayers( frame_t *frame )
 	if( ent && FBitSet( ent->curstate.effects, EF_MUZZLEFLASH ))
 		SetBits( clgame.viewent.curstate.effects, EF_MUZZLEFLASH );
 
-	// Slayer3D: spawn a first-person tracer on the rising edge of the local
-	// muzzleflash (CS 1.6 draws no tracers of its own). Uses the viewent, which
-	// just inherited the flag above, so it fires exactly on the shot frame.
-	Slayer_Tracer_CheckMuzzleflash( &clgame.viewent, 0, true );
+	// Slayer3D: use the viewmodel edge only in first person. In third person the
+	// renderer intentionally skips R_DrawViewModel, so it never consumes/clears
+	// EF_MUZZLEFLASH on clgame.viewent; its rising edge would fire once and then
+	// remain stuck ON. The local player entity below carries the live flag and
+	// is the correct third-person source.
+	if( !V_IsSlayerThirdPerson() && !CL_IsThirdPerson())
+		Slayer_Tracer_CheckMuzzleflash( &clgame.viewent, 0, true );
 
 	// check all the clients but add only visible
 	for( i = 0, state = frame->playerstate; i < MAX_CLIENTS; i++, state++ )
@@ -1108,12 +1111,13 @@ static void CL_LinkPlayers( frame_t *frame )
 		VectorCopy( ent->origin, ent->attachment[2] );
 		VectorCopy( ent->origin, ent->attachment[3] );
 
-		// Slayer3D: remote players get a tracer on the rising edge of their
-		// muzzleflash. The local player is handled via the viewent above, so
-		// skip it here to avoid a double tracer. Checked before the renderer
-		// consumes (clears) the flag in R_StudioClientEvents.
+		// Remote players always use their own entity. In third person the local
+		// player does too (see the viewmodel comment above), but remains tagged
+		// local so aiming and diagnostics use the local-player path.
 		if( i != cl.playernum )
 			Slayer_Tracer_CheckMuzzleflash( ent, i + 1, false );
+		else if( V_IsSlayerThirdPerson() || CL_IsThirdPerson())
+			Slayer_Tracer_CheckMuzzleflash( ent, 0, true );
 
 		CL_AddVisibleEntity( ent, ET_PLAYER );
 	}

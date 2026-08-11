@@ -65,17 +65,19 @@ GNU General Public License for more details.
 // The alpha channel carries the profile; TriRenderMode(kRenderTransAdd) uses
 // GL_SRC_ALPHA, GL_ONE, so alpha attenuates what gets added.
 
-#define SLAYER_TEX_W 64
-#define SLAYER_TEX_H 4
+#define SLAYER_TEX_W 128
+#define SLAYER_TEX_H 8
 
 static int s_tex_core = 0;
 static int s_tex_halo = 0;
+static int s_tex_mipped = 0;   // built with mipmaps? (see Slayer_TracerRender_InitTexturesEx)
 
 static void Slayer_BuildProfileTexture( const char *name, float core_sharp,
-	float shoulder_w, float shoulder_sharp, int *out )
+	float shoulder_w, float shoulder_sharp, qboolean mipmap, int *out )
 {
 	uint pixels[SLAYER_TEX_W * SLAYER_TEX_H];
 	int  x, y;
+	texFlags_t flags = TF_CLAMP | TF_HAS_ALPHA;
 
 	for( y = 0; y < SLAYER_TEX_H; y++ )
 	{
@@ -95,15 +97,43 @@ static void Slayer_BuildProfileTexture( const char *name, float core_sharp,
 		}
 	}
 
+	// Mipmaps are the real anti-aliasing here. A distant streak covers 1-2
+	// pixels, so the GPU is MINIFYING a 128-wide profile into them; without a
+	// mip chain that is point-sampling a high-frequency signal, which is exactly
+	// what makes a far tracer crawl and sparkle pixel to pixel. With mips the
+	// hardware picks a pre-averaged level and the streak fades smoothly instead.
+	// V is constant (0.5) in the ribbon, so collapsing the 8-row height in the
+	// coarser levels costs nothing.
+	if( !mipmap )
+		SetBits( flags, TF_NOMIPMAP );
+
 	*out = ref.dllFuncs.GL_CreateTexture( name, SLAYER_TEX_W, SLAYER_TEX_H,
-		pixels, TF_CLAMP | TF_NOMIPMAP | TF_HAS_ALPHA );
+		pixels, flags );
+}
+
+// `mipmap` comes from a cvar so the old look is one command away if a driver
+// mishandles the tiny mip chain.
+void Slayer_TracerRender_InitTexturesEx( qboolean mipmap )
+{
+	// Re-created on every renderer restart; GL_CreateTexture replaces by name.
+	// The names carry the mip mode: GL_CreateTexture replaces BY NAME, and a
+	// cached texture built with the other setting would otherwise be reused.
+	if( mipmap )
+	{
+		Slayer_BuildProfileTexture( "*slayer_tracer_core_m", 16.0f, 0.22f, 2.6f, true, &s_tex_core );
+		Slayer_BuildProfileTexture( "*slayer_tracer_halo_m", 2.2f, 0.55f, 0.8f, true, &s_tex_halo );
+	}
+	else
+	{
+		Slayer_BuildProfileTexture( "*slayer_tracer_core", 16.0f, 0.22f, 2.6f, false, &s_tex_core );
+		Slayer_BuildProfileTexture( "*slayer_tracer_halo", 2.2f, 0.55f, 0.8f, false, &s_tex_halo );
+	}
+	s_tex_mipped = mipmap ? 1 : 0;
 }
 
 void Slayer_TracerRender_InitTextures( void )
 {
-	// Re-created on every renderer restart; GL_CreateTexture replaces by name.
-	Slayer_BuildProfileTexture( "*slayer_tracer_core", 16.0f, 0.22f, 2.6f, &s_tex_core );
-	Slayer_BuildProfileTexture( "*slayer_tracer_halo", 2.2f, 0.55f, 0.8f, &s_tex_halo );
+	Slayer_TracerRender_InitTexturesEx( true );
 }
 
 void Slayer_TracerRender_FreeTextures( void )
@@ -120,6 +150,15 @@ void Slayer_TracerRender_Invalidate( void )
 {
 	s_tex_core = 0;
 	s_tex_halo = 0;
+	s_tex_mipped = -1;
+}
+
+// Are the cached textures built with the requested mip mode? The renderer asks
+// before drawing so a live cvar change rebuilds instead of silently keeping the
+// old chain.
+qboolean Slayer_TracerRender_TexturesMatch( qboolean mipmap )
+{
+	return ( s_tex_core && s_tex_halo && s_tex_mipped == ( mipmap ? 1 : 0 )) ? true : false;
 }
 
 
@@ -258,6 +297,39 @@ float Slayer_ClampWidth( float half_world, float wpp, float min_px, float max_px
 		return max_px * wpp * 0.5f;
 
 	return half_world;
+}
+
+float Slayer_SoftWidth( float half_world, float wpp, float min_px, float max_px,
+	float soft_px, float *dim )
+{
+	float px, target;
+
+	*dim = 1.0f;
+	if( wpp <= 0.0f ) return half_world;
+
+	px = ( half_world * 2.0f ) / wpp;
+
+	// Too wide: plain clamp, no dimming (a near streak should stay bright).
+	if( max_px > 0.0f && px > max_px )
+		return max_px * wpp * 0.5f;
+
+	// Widen towards whichever floor is higher, then dim by the SAME ratio so the
+	// streak keeps its total energy: a distant tracer loses brightness rather
+	// than resolution, which is what "smooth at distance" actually means.
+	target = ( soft_px > min_px ) ? soft_px : min_px;
+	if( target <= 0.0f || px >= target )
+		return half_world;
+
+	*dim = px / target;
+
+	// Hard floor only where min_px applies; the softening stage is allowed to
+	// fade much further, otherwise a 300 m tracer stays a bright thin bar.
+	if( px >= min_px && *dim < 0.10f )
+		*dim = 0.10f;
+	else if( px < min_px && *dim < 0.35f )
+		*dim = 0.35f;
+
+	return target * wpp * 0.5f;
 }
 
 // ===========================================================================
@@ -459,16 +531,17 @@ void Slayer_TracerRender_Draw( const slayer_tracer_t *tr, const slayer_tracer_st
 	}
 
 	wpp = Slayer_WorldPerPixel( cam_dist, fov_y, screen_h );
-	core_half = Slayer_ClampWidth( tr->radius * 0.5f, wpp, st->min_px, st->max_px, &dim );
+	core_half = Slayer_SoftWidth( tr->radius * 0.5f, wpp, st->min_px, st->max_px,
+		st->soft_px, &dim );
 	halo_half = core_half * st->halo_scale;
 
 	ref.dllFuncs.TriRenderMode( kRenderTransAdd );
 	ref.dllFuncs.CullFace( TRI_NONE );
 
 	// Lazily build the profile textures on the first tracer after a renderer
-	// restart, so a vid_restart cannot leave us drawing untextured quads.
-	if( !s_tex_core || !s_tex_halo )
-		Slayer_TracerRender_InitTextures();
+	// restart, and rebuild when the smoothing cvar changed under us.
+	if( !Slayer_TracerRender_TexturesMatch( st->smooth ? true : false ))
+		Slayer_TracerRender_InitTexturesEx( st->smooth ? true : false );
 
 	// Halo first, core on top: additive is order-independent for colour, but
 	// drawing the wide dim layer first keeps the bright core visually on top
@@ -495,4 +568,21 @@ void Slayer_TracerRender_Draw( const slayer_tracer_t *tr, const slayer_tracer_st
 	}
 
 	ref.dllFuncs.CullFace( TRI_FRONT );
+}
+
+// Restore the GL state the ribbons changed. MUST be called once after the last
+// tracer of the frame.
+//
+// Why this exists: TriRenderMode( kRenderTransAdd ) disables depth WRITES
+// (pglDepthMask GL_FALSE, see TriRenderMode in ref/gl/gl_triapi.c) and the
+// TriAPI has no "pop". R_DrawViewModel() runs immediately after
+// CL_DrawEFX( trans ) in R_DrawEntitiesOnList, so a frame containing a tracer
+// handed the viewmodel a renderer that writes no depth: the viewmodel's own
+// parts stopped occluding each other and the arms vanished while the gun stayed
+// visible. Every engine effect that touches the depth mask restores it the same
+// way (gl_beams.c, gl_rpart.c); ours simply never did.
+void Slayer_TracerRender_EndFrame( void )
+{
+	// kRenderNormal is the only mode that re-enables depth writes.
+	ref.dllFuncs.TriRenderMode( kRenderNormal );
 }

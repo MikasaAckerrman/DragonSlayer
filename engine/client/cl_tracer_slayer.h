@@ -31,6 +31,20 @@ void Slayer_Tracer_Reset( void );
 // remote player index. is_local picks the aim source (view vs entity angles).
 void Slayer_Tracer_CheckMuzzleflash( struct cl_entity_s *ent, int slot, qboolean is_local );
 
+// Exact local impact endpoint from the spread-aware client weapon event.
+// Called from R_BulletImpactParticles before optional spark suppression.
+void Slayer_Tracer_NoteImpact( const vec3_t pos );
+
+// Ownership window around one weapon event (CL_FireEvent). The event that
+// computes spread also reports the impact, so this is the ONLY place that can
+// attribute an impact to a shooter: two players firing point-blank in the same
+// frame are otherwise indistinguishable by position or time alone.
+// `entindex` is the shooting entity (1..maxclients for players).
+// Begin returns the PREVIOUS owner and End takes it back, so a weapon event that
+// plays another event cannot clear ownership for the rest of the outer one.
+int  Slayer_Tracer_BeginEvent( int entindex );
+void Slayer_Tracer_EndEvent( int prev_owner );
+
 // Independent cross-check: note a server-sent TE_TRACER temp-entity. This is a
 // separate path from EF_MUZZLEFLASH; counted in diagnostics so the device log
 // reveals whether the server announces shots even if muzzleflash misses remote

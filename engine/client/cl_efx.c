@@ -1778,6 +1778,11 @@ void GAME_EXPORT R_BulletImpactParticles( const vec3_t pos )
 	vec3_t		dir;
 	particle_t	*p;
 
+	// The client weapon event has already applied spread when this callback is
+	// reached. Pair the pending local tracer before the visual-spark cvar can
+	// early-return, otherwise suppressing sparks would also lose exact impacts.
+	Slayer_Tracer_NoteImpact( pos );
+
 	// Slayer3D: suppress the vanilla bullet-impact burst so our own effect
 	// (or a clean impact) can take its place.
 	if( Slayer_Tracer_SuppressVanillaSparks( ))

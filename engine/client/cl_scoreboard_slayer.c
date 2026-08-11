@@ -26,6 +26,7 @@ GNU General Public License for more details.
 #include "cl_slayer_log.h"
 #include "cl_slayer_toast.h"
 #include "cl_teamcolors_slayer.h"
+#include "ref_common.h"                 // R_GetTextureParms (stretched glyphs)
 #include <math.h>
 
 #if XASH_ANDROID
@@ -42,7 +43,17 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_text_color, "255 255 255 255", FCVAR_
 static CVAR_DEFINE_AUTO( slayer_scoreboard_ct_color, "153 204 255", FCVAR_ARCHIVE, "Slayer3D: CT team RGB (PC CS blue)" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_t_color, "255 63 63", FCVAR_ARCHIVE, "Slayer3D: T team RGB (PC CS red)" );
 // Border alpha lowered from 200 -> 150 (lighter visual weight, less stair-stepping)
-static CVAR_DEFINE_AUTO( slayer_scoreboard_border_color, "235 231 197 95", FCVAR_ARCHIVE, "Slayer3D: scoreboard border RGBA (BaseText, low alpha)" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_border_color, "150 160 172 110", FCVAR_ARCHIVE, "Slayer3D: scoreboard border RGBA" );
+
+// The cream tone that shipped before read as a yellow-ish frame that matched
+// nothing else on screen. Default now follows hud_color (the same source the
+// radar rim uses) so the board belongs to the rest of the interface; the RGBA
+// cvar above supplies the alpha, and setting this to 0 restores explicit RGB.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_border_hud, "1", FCVAR_ARCHIVE,
+	"Slayer3D: take the scoreboard border colour from hud_color (0 = use slayer_scoreboard_border_color)" );
+
+static CVAR_DEFINE_AUTO( slayer_scoreboard_border_migrated, "0", FCVAR_ARCHIVE,
+	"Slayer3D internal: scoreboard border colour migration completed" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_opacity, "220", FCVAR_ARCHIVE, "Slayer3D: overall scoreboard opacity (0-255)" );
 
 // Corner radius as a fraction of board height. 0.022 keeps the anti-aliased
@@ -51,14 +62,28 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_opacity, "220", FCVAR_ARCHIVE, "Slaye
 static CVAR_DEFINE_AUTO( slayer_scoreboard_corner, "0.022", FCVAR_ARCHIVE,
 	"Slayer3D: scoreboard corner radius as a fraction of its height (0 = square)" );
 
-// Per-player colour swatch in the name column: a small filled dot in front of
-// the nickname, using the SAME colour as the radar dot. This is the answer to
-// "where do I put the colour" -- in front of the name, where the eye already
-// goes when it matches a radar dot to a player.
-static CVAR_DEFINE_AUTO( slayer_scoreboard_colordot, "1", FCVAR_ARCHIVE,
-	"Slayer3D: draw the player's radar colour as a dot before the nickname (0 = off)" );
+// Per-player colour marker in the name column. DEFAULT OFF at the user's
+// request: they intend to design this differently. The code and the shared
+// palette stay (cl_teamcolors_slayer.c still drives the radar), so switching
+// the cvar back on restores it. Kept as two cvars so the old "dot" name still
+// disables it in existing configs.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_colordot, "0", FCVAR_ARCHIVE,
+	"Slayer3D: draw the player's radar colour next to the nickname (0 = off)" );
 
-static CVAR_DEFINE_AUTO( slayer_scoreboard_width, "0.84", FCVAR_ARCHIVE, "Slayer3D: scoreboard width as a fraction of screen width (0.50-0.99; PC reference is 0.843)" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_colordot_migrated, "0", FCVAR_ARCHIVE,
+	"Slayer3D internal: colour marker default migration completed" );
+
+static CVAR_DEFINE_AUTO( slayer_scoreboard_width, "0.72", FCVAR_ARCHIVE, "Slayer3D: scoreboard maximum width as a fraction of screen width (0.50-0.95)" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_compact_width, "0.62", FCVAR_ARCHIVE, "Slayer3D: scoreboard width fraction for small rosters" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_corner_rows, "0.45", FCVAR_ARCHIVE, "Slayer3D: corner radius as a fraction of row height (0 = use slayer_scoreboard_corner)" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_colorstripe, "4", FCVAR_ARCHIVE, "Slayer3D: colour marker width in pixels when enabled" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_namegap, "9", FCVAR_ARCHIVE, "Slayer3D: gap in pixels between the avatar block and the nickname" );
+
+// Horizontal glyph stretch. The engine font is a bitmap atlas with three fixed
+// sizes, so the only way to get the wider letterforms of the PC reference board
+// without shipping a font is to widen the destination rect. 1.0 = stock.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_stretch, "1.18", FCVAR_ARCHIVE,
+	"Slayer3D: scoreboard text horizontal stretch (1.0 = off, max 2.0)" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_avatar, "3.0", FCVAR_ARCHIVE, "Slayer3D: avatar icon size as a multiple of the font glyph height" );
 static CVAR_DEFINE_AUTO( slayer_scoreboard_rowscale, "1.15", FCVAR_ARCHIVE, "Slayer3D: scoreboard cell height multiplier (1.0-2.0; PC reference works out to ~1.3)" );
 static CVAR_DEFINE_AUTO( slayer_avatar_recheck, "10", FCVAR_ARCHIVE, "Slayer3D: minutes between Steam avatar change re-checks (0 = never; the check is one small XML fetch)" );
@@ -72,6 +97,12 @@ static CVAR_DEFINE_AUTO( slayer_avatar_recheck, "10", FCVAR_ARCHIVE, "Slayer3D: 
 // that is enough to hide it while every HUD element keeps drawing.
 // Level 2 stays available for a mod that draws its board straight from Redraw.
 static CVAR_DEFINE_AUTO( slayer_scoreboard_block_stock, "1", FCVAR_ARCHIVE, "Slayer3D: hide the game's own scoreboard while ours is up (0 = off, 1 = block VGUI only [keeps the HUD], 2 = also block the client HUD redraw [hides the HUD])" );
+
+// Migration guard for builds before 2026-08-10. Those builds documented level
+// 2 as the reliable way to hide the stock board, so archived configs kept it.
+// Level 2 suppresses the entire client HUD redraw; migrate it once to level 1.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_block_migrated, "0", FCVAR_ARCHIVE,
+	"Slayer3D internal: archived scoreboard block level migration completed" );
 
 static CVAR_DEFINE_AUTO( slayer_scoreboard_ondeath, "1", FCVAR_ARCHIVE, "Slayer3D: show the scoreboard automatically while dead (0 = only when held)" );
 static CVAR_DEFINE_AUTO( slayer_avatar_autofetch, "1", FCVAR_ARCHIVE, "Slayer3D: fetch avatars as soon as we join a server, without waiting for the scoreboard to be opened (0 = off)" );
@@ -759,12 +790,20 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_scoreboard_ct_color );
 	Cvar_RegisterVariable( &slayer_scoreboard_t_color );
 	Cvar_RegisterVariable( &slayer_scoreboard_border_color );
+	Cvar_RegisterVariable( &slayer_scoreboard_border_hud );
+	Cvar_RegisterVariable( &slayer_scoreboard_border_migrated );
 	Cvar_RegisterVariable( &slayer_scoreboard_opacity );
 	Cvar_RegisterVariable( &slayer_scoreboard_corner );
 	Cvar_RegisterVariable( &slayer_scoreboard_colordot );
+	Cvar_RegisterVariable( &slayer_scoreboard_colordot_migrated );
 
 	Cvar_RegisterVariable( &slayer_scoreboard_ondeath );
 	Cvar_RegisterVariable( &slayer_scoreboard_width );
+	Cvar_RegisterVariable( &slayer_scoreboard_compact_width );
+	Cvar_RegisterVariable( &slayer_scoreboard_corner_rows );
+	Cvar_RegisterVariable( &slayer_scoreboard_colorstripe );
+	Cvar_RegisterVariable( &slayer_scoreboard_namegap );
+	Cvar_RegisterVariable( &slayer_scoreboard_stretch );
 	Cvar_RegisterVariable( &slayer_scoreboard_avatar );
 	Cvar_RegisterVariable( &slayer_scoreboard_rowscale );
 	Cvar_RegisterVariable( &slayer_avatar_recheck );
@@ -772,6 +811,38 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_avatar_autofetch_interval );
 	Cvar_RegisterVariable( &slayer_avatar_uploads_per_frame );
 	Cvar_RegisterVariable( &slayer_scoreboard_block_stock );
+	Cvar_RegisterVariable( &slayer_scoreboard_block_migrated );
+
+	// `FCVAR_ARCHIVE` preserves the old value across APK updates. Users who had
+	// level 2 therefore still lost health/ammo/radar despite the newer default
+	// being 1. Do this once; after migration an explicit later choice is kept.
+	if( slayer_scoreboard_block_migrated.value == 0.0f )
+	{
+		if( slayer_scoreboard_block_stock.value >= 2.0f )
+		{
+			Cvar_SetValue( "slayer_scoreboard_block_stock", 1.0f );
+			Slayer_Log_Printf( "stock-board migration: archived level 2 -> 1; client HUD redraw restored" );
+		}
+		Cvar_SetValue( "slayer_scoreboard_block_migrated", 1.0f );
+	}
+
+	// Same archive problem as the block level: the old cream border string is
+	// stored in the user's config and would survive the new default.
+	if( slayer_scoreboard_border_migrated.value == 0.0f )
+	{
+		if( !Q_strcmp( slayer_scoreboard_border_color.string, "235 231 197 95" ))
+			Cvar_DirectSet( &slayer_scoreboard_border_color, "150 160 172 110" );
+		Cvar_SetValue( "slayer_scoreboard_border_migrated", 1.0f );
+	}
+
+	// The marker shipped enabled, so the archived config still says 1. Turn it
+	// off once; an explicit later choice is preserved.
+	if( slayer_scoreboard_colordot_migrated.value == 0.0f )
+	{
+		if( slayer_scoreboard_colordot.value != 0.0f )
+			Cvar_SetValue( "slayer_scoreboard_colordot", 0.0f );
+		Cvar_SetValue( "slayer_scoreboard_colordot_migrated", 1.0f );
+	}
 
 	Cmd_AddCommand( "+slayer_scoreboard", Cmd_ScoreboardDown_f,
 		"show Slayer3D custom scoreboard" );
@@ -914,6 +985,117 @@ static void Slayer_DrawRect( int x, int y, int w, int h, byte r, byte g, byte b,
 	ref.dllFuncs.FillRGBA( kRenderTransTexture, x, y, w, h, r, g, b, a );
 }
 
+// ---------------------------------------------------------------------------
+// Horizontally stretched text
+// ---------------------------------------------------------------------------
+//
+// The engine font is a BITMAP ATLAS with three fixed sizes (Con_GetFont 0..2),
+// so "make the scoreboard font bigger" has no answer through CL_DrawString: it
+// draws each glyph at font->scale and nothing else. But the PC reference board
+// has noticeably WIDER letterforms than our nearest tier, and the phone board
+// has horizontal room to spare.
+//
+// So we re-implement the glyph loop with an independent X scale: same atlas,
+// same tex coords, only the destination rectangle is widened. Vertical size is
+// untouched, because row height is already driven by charHeight and stretching
+// vertically would collide with the row pitch.
+//
+// Both the DRAW and the MEASURE path must apply the same factor, otherwise
+// right-aligned columns and collision avoidance would be computed against the
+// unstretched width and text would overlap. That is why every scoreboard string
+// goes through these two functions and never calls CL_DrawString directly.
+
+static float Slayer_SB_XScale( void )
+{
+	float s = slayer_scoreboard_stretch.value;
+
+	if( s < 1.0f ) s = 1.0f;
+	if( s > 2.0f ) s = 2.0f;
+	return s;
+}
+
+static void Slayer_SB_StringLen( cl_font_t *font, const char *s, int *width, int *height )
+{
+	int w = 0, h = 0;
+
+	CL_DrawStringLen( font, s, &w, &h, FONT_DRAW_UTF8 );
+
+	if( width )  *width = (int)( w * Slayer_SB_XScale() + 0.5f );
+	if( height ) *height = h;
+}
+
+static int Slayer_SB_DrawString( float x, float y, const char *s, const rgba_t color, cl_font_t *font )
+{
+	float xs = Slayer_SB_XScale();
+	float cx = x;
+	rgba_t cur;
+	int    texw = 0, texh = 0;
+
+	if( !font || !font->valid || !s )
+		return 0;
+
+	// Unstretched: use the engine path so behaviour (colour codes, tab stops,
+	// UTF-8 state) is exactly the stock one when the feature is off.
+	if( xs <= 1.001f )
+		return CL_DrawString( x, y, s, color, font, FONT_DRAW_UTF8 );
+
+	R_GetTextureParms( &texw, &texh, font->hFontTexture );
+	if( texw <= 0 || texh <= 0 )
+		return CL_DrawString( x, y, s, color, font, FONT_DRAW_UTF8 );
+
+	MakeRGBA( cur, color[0], color[1], color[2], color[3] );
+
+	CL_SetFontRendermode( font );
+	ref.dllFuncs.Color4ub( cur[0], cur[1], cur[2], cur[3] );
+
+	Con_UtfProcessChar( 0 );   // reset the decoder, same as CL_DrawString does
+
+	while( *s )
+	{
+		int      number;
+		wrect_t *rc;
+		float    w, h, s1, t1, s2, t2;
+
+		// Colour codes must keep working: the nickname column relies on them.
+		if( IsColorString( s ))
+		{
+			const byte *c = g_color_table[ColorIndex( *( s + 1 ))];
+
+			ref.dllFuncs.Color4ub( c[0], c[1], c[2], cur[3] );
+			s += 2;
+			continue;
+		}
+
+		number = Con_UtfProcessChar( (byte)*s++ );
+		if( !number )
+			continue;
+		number &= 255;
+
+		if( number == ' ' )
+		{
+			cx += font->charWidths[' '] * xs;
+			continue;
+		}
+		if( number < 32 || !font->charWidths[number] )
+			continue;
+
+		rc = &font->fontRc[number];
+		s1 = (float)rc->left / texw;
+		t1 = (float)rc->top / texh;
+		s2 = (float)rc->right / texw;
+		t2 = (float)rc->bottom / texh;
+		w = ( rc->right - rc->left ) * font->scale * xs;
+		h = ( rc->bottom - rc->top ) * font->scale;
+
+		ref.dllFuncs.R_DrawStretchPic( cx, y, w, h, s1, t1, s2, t2, font->hFontTexture );
+		cx += font->charWidths[number] * xs;
+	}
+
+	ref.dllFuncs.Color4ub( 255, 255, 255, 255 );
+
+	return (int)( cx - x );
+}
+
 // Draw a proportional string right-aligned so its RIGHT edge sits at right_x.
 // Used for the numeric columns (HP/Score/Deaths/Latency) so digits line up
 // regardless of 1/2/3-digit values, matching PC CS 1.6.
@@ -924,8 +1106,8 @@ static void Slayer_DrawStringRight( cl_font_t *font, int right_x, int y, const c
 	if( !font || !s )
 		return;
 
-	CL_DrawStringLen( font, s, &w, &h, FONT_DRAW_UTF8 );
-	CL_DrawString( (float)( right_x - w ), (float)y, s, color, font, FONT_DRAW_UTF8 );
+	Slayer_SB_StringLen( font, s, &w, &h );
+	Slayer_SB_DrawString( (float)( right_x - w ), (float)y, s, color, font );
 }
 
 // Draw the scoreboard panel: a near-transparent fill with anti-aliased raster
@@ -1390,24 +1572,31 @@ void Slayer_Scoreboard_Draw( void )
 			spec_player_count++;
 	}
 
-	// Screen-relative width, driven by a cvar so it can be tuned live instead of
-	// rebuilding. The measured PC reference is 84.3% of screen width (see
-	// Documentation/slayer3d/scoreboard-pc-reference.md); the default here is a
-	// little wider because the phone board carries an extra avatar gutter.
+	// Adaptive width. A one-player server should not look like an empty full-
+	// width spreadsheet; the reference board stays compact and grows only for a
+	// larger roster. Both endpoints remain live-tunable cvars.
 	{
-		float wfrac = slayer_scoreboard_width.value;
+		float max_frac = slayer_scoreboard_width.value;
+		float compact_frac = slayer_scoreboard_compact_width.value;
+		float roster_t = (float)( num_players - 5 ) / 15.0f;
+		float wfrac;
 		int   min_w, max_w;
 
-		if( wfrac < 0.50f ) wfrac = 0.50f;
-		if( wfrac > 0.99f ) wfrac = 0.99f;
+		if( max_frac < 0.55f ) max_frac = 0.55f;
+		if( max_frac > 0.95f ) max_frac = 0.95f;
+		if( compact_frac < 0.50f ) compact_frac = 0.50f;
+		if( compact_frac > max_frac ) compact_frac = max_frac;
+		if( roster_t < 0.0f ) roster_t = 0.0f;
+		if( roster_t > 1.0f ) roster_t = 1.0f;
 
+		wfrac = compact_frac + ( max_frac - compact_frac ) * roster_t;
 		board_w = (int)( screen_w * wfrac );
 
 		min_w = (int)( screen_w * 0.50f );
-		max_w = (int)( screen_w * 0.99f );
+		max_w = (int)( screen_w * 0.95f );
 		if( board_w < min_w ) board_w = min_w;
 		if( board_w > max_w ) board_w = max_w;
-		if( board_w > (int)( screen_h * 2.1f ) ) board_w = (int)( screen_h * 2.1f ); // ultrawide guard
+		if( board_w > (int)( screen_h * 1.75f )) board_w = (int)( screen_h * 1.75f );
 	}
 
 	// === DIAG: build summary. This runs every frame the board is held, so it is
@@ -1571,9 +1760,17 @@ void Slayer_Scoreboard_Draw( void )
 		// panel. The PC ScorePanel is only slightly rounded, so the default is
 		// now 0.022 with a tighter clamp -- still anti-aliased (no quality lost),
 		// just not a circle.
-		radius = (int)( board_h * slayer_scoreboard_corner.value );
+		// Corner radius from ROW height, not board height. Board height grows
+		// with the roster, so a board-relative radius made a 20-player board
+		// rounder than a 3-player one; the row pitch is the constant that
+		// actually sets perceived corner scale. slayer_scoreboard_corner stays
+		// as the board-relative override for anyone who prefers the old rule.
+		if( slayer_scoreboard_corner_rows.value > 0.0f )
+			radius = (int)( row_h * slayer_scoreboard_corner_rows.value );
+		else
+			radius = (int)( board_h * slayer_scoreboard_corner.value );
 
-		if( radius < 4 ) radius = 4;
+		if( radius < 6 ) radius = 6;
 		if( radius > 22 ) radius = 22;
 		if( radius > board_w / 2 ) radius = board_w / 2;
 		if( radius > board_h / 2 ) radius = board_h / 2;
@@ -1583,6 +1780,26 @@ void Slayer_Scoreboard_Draw( void )
 			(byte)( color_bg[3] * global_opacity / 255 ));
 		MakeRGBA( panel_br, cached_color_border[0], cached_color_border[1], cached_color_border[2],
 			(byte)( cached_color_border[3] * global_opacity / 255 ));
+
+		// Follow the interface colour by default. hud_color lives in the client
+		// library, so read it through Cvar_FindVar exactly like the radar rim
+		// does; alpha stays from our own RGBA cvar.
+		if( slayer_scoreboard_border_hud.value != 0.0f )
+		{
+			convar_t *hud = Cvar_FindVar( "hud_color" );
+
+			if( hud && hud->string[0] )
+			{
+				int hr = 0, hg = 0, hb = 0;
+
+				if( sscanf( hud->string, "%d %d %d", &hr, &hg, &hb ) == 3 )
+				{
+					panel_br[0] = (byte)bound( 0, hr, 255 );
+					panel_br[1] = (byte)bound( 0, hg, 255 );
+					panel_br[2] = (byte)bound( 0, hb, 255 );
+				}
+			}
+		}
 
 		Slayer_DrawRoundedPanel( board_x, board_y, board_w, board_h, radius, panel_bg, panel_br );
 	}
@@ -1623,28 +1840,39 @@ void Slayer_Scoreboard_Draw( void )
 		// the nickname, so names line up whether or not a dot is drawn (same
 		// reasoning as the avatar gutter: nothing may shift when data arrives).
 		colordot_px = 0;
-		if( slayer_scoreboard_colordot.value != 0.0f )
+		if( slayer_scoreboard_colorstripe.value != 0.0f && slayer_scoreboard_colordot.value != 0.0f )
 		{
-			colordot_px = font->charHeight / 2;
-			if( colordot_px < 5 ) colordot_px = 5;
-			if( colordot_px > 12 ) colordot_px = 12;
+			// A vertical stripe, not a dot: it reads as part of the avatar block
+			// (same height, no gap) instead of a floating bullet competing with
+			// the nickname for attention.
+			colordot_px = (int)slayer_scoreboard_colorstripe.value;
+			if( colordot_px < 2 ) colordot_px = 2;
+			if( colordot_px > 10 ) colordot_px = 10;
 		}
-		col_name_text_x = col_name_x + av + 4 + ( colordot_px ? colordot_px + 5 : 0 );
+		{
+			int namegap = (int)slayer_scoreboard_namegap.value;
+
+			if( namegap < 2 ) namegap = 2;
+			if( namegap > 40 ) namegap = 40;
+			// The stripe is glued to the avatar, so only ONE gap exists between
+			// the avatar+stripe block and the name.
+			col_name_text_x = col_name_x + av + colordot_px + namegap;
+		}
 
 		col_ping_x = board_x + (int)( board_w * 0.978f );   // rightmost = Задержка
-		CL_DrawStringLen( font, "Задержка", &hw, &hh, FONT_DRAW_UTF8 );
+		Slayer_SB_StringLen( font, "Задержка", &hw, &hh );
 		col_deaths_x = col_ping_x - hw - gap;
-		CL_DrawStringLen( font, "Смертей", &hw, &hh, FONT_DRAW_UTF8 );
+		Slayer_SB_StringLen( font, "Смертей", &hw, &hh );
 		col_frags_x  = col_deaths_x - hw - gap;
-		CL_DrawStringLen( font, "Счет", &hw, &hh, FONT_DRAW_UTF8 );
+		Slayer_SB_StringLen( font, "Счет", &hw, &hh );
 		col_money_x  = col_frags_x - hw - gap;
-		CL_DrawStringLen( font, "Деньги", &hw, &hh, FONT_DRAW_UTF8 );
+		Slayer_SB_StringLen( font, "Деньги", &hw, &hh );
 		col_health_x = col_money_x - hw - gap;
 
 		// The stat block is a fixed pixel width; on a narrow board its left
 		// (HP) edge can cross into the names or off-screen. If so, shift the
 		// whole block right as a unit so it stays clear of the name column.
-		CL_DrawStringLen( font, "HP", &hw, &hh, FONT_DRAW_UTF8 );
+		Slayer_SB_StringLen( font, "HP", &hw, &hh );
 		min_health_x = col_name_text_x + hw + gap;
 		if( col_health_x < min_health_x )
 		{
@@ -1655,7 +1883,7 @@ void Slayer_Scoreboard_Draw( void )
 
 		// "Компл." sits just LEFT of the (measured, floating) HP column so it
 		// can never overrun the HP digits, and is floored against the names.
-		CL_DrawStringLen( font, "Компл.", &hw, &hh, FONT_DRAW_UTF8 );
+		Slayer_SB_StringLen( font, "Компл.", &hw, &hh );
 		col_kit_x = col_health_x - font->charHeight * 2 - gap - hw;
 		if( col_kit_x < col_name_text_x )
 			col_kit_x = col_name_text_x;
@@ -1696,12 +1924,12 @@ void Slayer_Scoreboard_Draw( void )
 			mapname = clgame.mapname;
 
 		// left: IP then map, side by side with a clear gap
-		CL_DrawString( col_name_x, cur_y, hostname, color_text, font, FONT_DRAW_UTF8 );
+		Slayer_SB_DrawString( col_name_x, cur_y, hostname, color_text, font );
 		if( mapname && mapname[0] != '\0' )
 		{
-			CL_DrawStringLen( font, hostname, &iw, &ih, FONT_DRAW_UTF8 );
+			Slayer_SB_StringLen( font, hostname, &iw, &ih );
 			MakeRGBA( color_map, color_text[0] * 160 / 255, color_text[1] * 160 / 255, color_text[2] * 160 / 255, 200 );
-			CL_DrawString( col_name_x + iw + font->charHeight * 2, cur_y, mapname, color_map, font, FONT_DRAW_UTF8 );
+			Slayer_SB_DrawString( col_name_x + iw + font->charHeight * 2, cur_y, mapname, color_map, font );
 		}
 
 		// right: column labels (soft light grey, Russian)
@@ -1767,7 +1995,7 @@ void Slayer_Scoreboard_Draw( void )
 			drawn_t_header = 1;
 			if( drawn_ct_header || drawn_spec_header ) cur_y += 4;
 			Q_snprintf( buf, sizeof( buf ), "Terrorists  -  %d players", t_player_count );
-			CL_DrawString( col_name_text_x, cur_y, buf, color_t, font, FONT_DRAW_UTF8 );
+			Slayer_SB_DrawString( col_name_text_x, cur_y, buf, color_t, font );
 			cur_y += row_h;
 			// Rule below the T header. Reference: 2px at 1080p (0.185% of screen
 			// height) drawn SOLID — the old alpha 100 made it read as "too thin".
@@ -1780,7 +2008,7 @@ void Slayer_Scoreboard_Draw( void )
 			drawn_ct_header = 1;
 			if( drawn_t_header || drawn_spec_header ) cur_y += 4;
 			Q_snprintf( buf, sizeof( buf ), "Counter-Terrorists  -  %d players", ct_player_count );
-			CL_DrawString( col_name_text_x, cur_y, buf, color_ct, font, FONT_DRAW_UTF8 );
+			Slayer_SB_DrawString( col_name_text_x, cur_y, buf, color_ct, font );
 			cur_y += row_h;
 			// Rule below the CT header (same measured treatment as the T rule).
 			Slayer_DrawRect( board_x + 4, cur_y, board_w - 8, rule_h,
@@ -1792,7 +2020,7 @@ void Slayer_Scoreboard_Draw( void )
 			drawn_spec_header = 1;
 			if( drawn_ct_header || drawn_t_header ) cur_y += 4;
 			Q_snprintf( buf, sizeof( buf ), "Spectators  -  %d players", spec_player_count );
-			CL_DrawString( col_name_text_x, cur_y, buf, color_spec, font, FONT_DRAW_UTF8 );
+			Slayer_SB_DrawString( col_name_text_x, cur_y, buf, color_spec, font );
 			cur_y += row_h;
 			// Rule below the Spectator header — dimmer than the team rules, as on
 			// the reference, but still solid rather than a faint wash.
@@ -1879,24 +2107,19 @@ void Slayer_Scoreboard_Draw( void )
 			if( colordot_px > 0 && team != SLAYER_TEAM_SPECTATOR )
 			{
 				byte dot[3];
-				int  dx = col_name_x + avatar_size + 4;
-				int  dy = cur_y + ( row_h - colordot_px ) / 2;
-				int  inset = colordot_px / 4;
+				int  dx = col_name_x + avatar_size;   // flush against the avatar
+				int  dy = avatar_y;                   // exactly the avatar height
 
 				Slayer_TeamColors_Get( pidx, dot );
 
-				// Body plus clipped corners: a 1px inset on each corner reads as
-				// a rounded chip at this size and costs 5 rects instead of a
-				// per-pixel circle.
-				Slayer_DrawRect( dx, dy + inset, colordot_px, colordot_px - 2 * inset,
+				// One solid rect. Sharing the avatar's y and height is what makes
+				// the two read as a single glued block; any inset here would
+				// reintroduce the floating-chip look.
+				Slayer_DrawRect( dx, dy, colordot_px, avatar_size,
 					dot[0], dot[1], dot[2], row_alpha );
-				Slayer_DrawRect( dx + inset, dy, colordot_px - 2 * inset, inset,
-					dot[0], dot[1], dot[2], row_alpha );
-				Slayer_DrawRect( dx + inset, dy + colordot_px - inset,
-					colordot_px - 2 * inset, inset, dot[0], dot[1], dot[2], row_alpha );
 			}
 
-			CL_DrawString( col_name_text_x, cur_y + text_dy, name, name_color, font, FONT_DRAW_UTF8 );
+			Slayer_SB_DrawString( col_name_text_x, cur_y + text_dy, name, name_color, font );
 		}
 
 		// "Компл." — defuse-kit marker in its own fixed column (CT only). The
@@ -1907,7 +2130,7 @@ void Slayer_Scoreboard_Draw( void )
 		{
 			rgba_t kit_color;
 			MakeRGBA( kit_color, 214, 214, 208, ( row_alpha * 78 ) / 100 );
-			CL_DrawString( col_kit_x, cur_y + text_dy, "Компл.", kit_color, font, FONT_DRAW_UTF8 );
+			Slayer_SB_DrawString( col_kit_x, cur_y + text_dy, "Компл.", kit_color, font );
 		}
 
 		// Score / Deaths / Latency (right-aligned to their column edges)

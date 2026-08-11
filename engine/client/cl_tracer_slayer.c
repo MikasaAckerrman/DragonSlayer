@@ -235,6 +235,27 @@ static CVAR_DEFINE_AUTO( slayer_tracer_max_px, "9.0", FCVAR_ARCHIVE,
 static CVAR_DEFINE_AUTO( slayer_tracer_tp_muzzle, "1", FCVAR_ARCHIVE,
 	"Slayer3D: in third person, trace from the player's own aim, not the camera" );
 
+static CVAR_DEFINE_AUTO( slayer_tracer_impact_window, "0.35", FCVAR_ARCHIVE,
+	"Slayer3D: seconds a recorded bullet impact waits for its shot (must exceed ping)" );
+
+// How long a DETECTED shot waits for an impact that has not happened yet. Kept
+// SHORT and separate from the window above, because the two directions are not
+// symmetric: the impact normally happens first (see s_impacts), so if we already
+// saw the shot and no impact is on record, there will not be one -- the bullet
+// went into the skybox or the mod drew no decal. Waiting the full ping there
+// would delay a visible tracer by that much for no gain.
+static CVAR_DEFINE_AUTO( slayer_tracer_impact_grace, "0.03", FCVAR_ARCHIVE,
+	"Slayer3D: seconds a detected shot waits for a not-yet-seen impact" );
+
+// Anti-aliasing. `smooth` builds the profile texture with a mip chain, which is
+// what stops a distant 1-2 pixel streak from crawling pixel to pixel;
+// `soft_px` widens+dims a sub-pixel streak so it fades instead of flickering.
+static CVAR_DEFINE_AUTO( slayer_tracer_smooth, "1", FCVAR_ARCHIVE,
+	"Slayer3D: filter the tracer profile with mipmaps (0 = crisp/aliased)" );
+
+static CVAR_DEFINE_AUTO( slayer_tracer_soft_px, "2.6", FCVAR_ARCHIVE,
+	"Slayer3D: screen width below which a tracer is widened and dimmed instead of aliasing" );
+
 // ===========================================================================
 // State
 // ===========================================================================
@@ -282,6 +303,62 @@ static double s_last_trace_warn = 0.0;
 // answer is one grep away instead of buried in the summary counts.
 static qboolean s_seen_local_probe  = false;
 static qboolean s_seen_remote_probe = false;
+
+// Local shot rendezvous. The weapon event computes spread and later reports
+// the real impact to R_BulletImpactParticles; spawning at muzzleflash time with
+// an independent view trace can never match that hole. Hold one short-lived
+// pending shot and finish it from the actual impact. Full-auto fire is slower
+// than the 80 ms default window in CS; a fixed queue of four covers custom
+// weapons without allocating.
+#define SLAYER_PENDING_SHOTS 4
+typedef struct
+{
+	qboolean active;
+	double   time;
+	vec3_t   start;
+	vec3_t   fallback;
+} slayer_pending_shot_t;
+
+static slayer_pending_shot_t s_pending[SLAYER_PENDING_SHOTS];
+static int s_pending_next;
+static int s_impact_paired;
+static int s_impact_fallback;
+static int s_impact_foreign;   // impacts rejected as belonging to another player
+static int s_impact_back;      // shots closed by an impact that arrived FIRST
+
+// Recent local impacts, for the case where the impact arrives BEFORE we detect
+// the shot. That is in fact the NORMAL case, and missing it was a real bug in
+// the first version of this code:
+//
+//   * the client predicts its own weapon event immediately, and the event both
+//     sets EF_MUZZLEFLASH on the VIEWMODEL and reports the impact;
+//   * but our rising-edge check runs in CL_LinkPlayers, which happens BEFORE
+//     CL_FireEvents in the same frame, and the renderer clears that viewmodel
+//     flag later in the very same frame (R_StudioClientEvents);
+//   * so the flag we actually see is the one the SERVER echoes back in the
+//     player snapshot -- one round trip after the impact already happened.
+//
+// Waiting forward from the shot therefore never matched anything and every
+// local tracer silently fell back to the view-trace endpoint, i.e. the exact
+// bug this whole mechanism was supposed to fix. Hence a rendezvous in BOTH
+// directions: the impact waits for the shot too.
+#define SLAYER_IMPACT_RING 8
+typedef struct
+{
+	qboolean used;
+	double   time;
+	vec3_t   pos;
+} slayer_impact_rec_t;
+
+static slayer_impact_rec_t s_impacts[SLAYER_IMPACT_RING];
+static int s_impacts_next;
+
+// Which player's weapon event is executing right now, 0 = none. Set by
+// CL_FireEvent around the client DLL callback. This is the ONLY reliable way to
+// attribute an impact: at point-blank range two players' impacts are metres
+// apart and arrive in the same frame, so neither time nor direction can
+// separate them.
+static int s_event_owner;
 
 // Midpoint colour (orange) between cold and hot, so a 3-stop ramp reads right.
 static const byte SLAYER_TRACER_MID[3] = { 255, 150, 50 };
@@ -354,6 +431,8 @@ static void Slayer_Tracer_ReadStyle( slayer_tracer_style_t *st )
 	st->fade_out_start = slayer_tracer_fade_out.value;
 	st->min_px       = slayer_tracer_min_px.value;
 	st->max_px       = slayer_tracer_max_px.value;
+	st->smooth       = ( slayer_tracer_smooth.value != 0.0f ) ? 1 : 0;
+	st->soft_px      = slayer_tracer_soft_px.value;
 
 	// Guards: a zero/garbage cvar must not divide by zero or spin the loop.
 	if( st->speed < 100.0f ) st->speed = 100.0f;
@@ -370,6 +449,8 @@ static void Slayer_Tracer_ReadStyle( slayer_tracer_style_t *st )
 	if( st->fade_in_floor > 1.0f ) st->fade_in_floor = 1.0f;
 	if( st->fade_out_start < 0.1f ) st->fade_out_start = 0.1f;
 	if( st->fade_out_start > 1.0f ) st->fade_out_start = 1.0f;
+	if( st->soft_px < 0.0f ) st->soft_px = 0.0f;
+	if( st->soft_px > 12.0f ) st->soft_px = 12.0f;
 }
 
 // Spawn one tracer into the pool. `is_remote` boosts brightness.
@@ -459,6 +540,12 @@ void Slayer_TracerPool_Draw( void )
 
 	if( live > s_live_peak )
 		s_live_peak = live;
+
+	// Additive TriAPI mode disabled depth writes; the viewmodel is drawn right
+	// after this pass and needs them back. Only when we actually drew, so a
+	// quiet frame does not touch renderer state at all.
+	if( live > 0 )
+		Slayer_TracerRender_EndFrame();
 }
 
 // ===========================================================================
@@ -557,6 +644,10 @@ void Slayer_Tracer_Init( void )
 	Cvar_RegisterVariable( &slayer_tracer_min_px );
 	Cvar_RegisterVariable( &slayer_tracer_max_px );
 	Cvar_RegisterVariable( &slayer_tracer_tp_muzzle );
+	Cvar_RegisterVariable( &slayer_tracer_impact_window );
+	Cvar_RegisterVariable( &slayer_tracer_impact_grace );
+	Cvar_RegisterVariable( &slayer_tracer_smooth );
+	Cvar_RegisterVariable( &slayer_tracer_soft_px );
 
 	Slayer_Tracer_Reset();
 }
@@ -579,6 +670,20 @@ void Slayer_Tracer_Reset( void )
 	s_last_summary = 0.0;
 	s_last_trace_warn = 0.0;
 	s_seen_local_probe = s_seen_remote_probe = false;
+	memset( s_pending, 0, sizeof( s_pending ));
+	s_pending_next = 0;
+	memset( s_impacts, 0, sizeof( s_impacts ));
+	s_impacts_next = 0;
+	// A cleared ring is all-zero, i.e. `used == false` with time 0. That would
+	// look like a valid impact at time 0; mark every slot consumed instead.
+	{
+		int k;
+
+		for( k = 0; k < SLAYER_IMPACT_RING; k++ )
+			s_impacts[k].used = true;
+	}
+	s_impact_paired = s_impact_fallback = s_impact_foreign = s_impact_back = 0;
+	s_event_owner = 0;
 
 	// Own pool: clear it so tracers from the previous map cannot be drawn with
 	// stale world coordinates on the first frame of the new one.
@@ -771,6 +876,92 @@ static qboolean Slayer_Tracer_MuzzleFromAttachment( cl_entity_t *ent, vec3_t out
 	return true;
 }
 
+static void Slayer_Tracer_SpawnVisual( const vec3_t start, const vec3_t end, qboolean is_remote )
+{
+	if( slayer_tracer_render.value != 0.0f )
+		Slayer_Tracer_SpawnOwn( start, end, is_remote );
+	else
+		Slayer_Tracer_SpawnBeam( start, end, 1.0f );
+}
+
+static void Slayer_Tracer_QueueLocal( const vec3_t start, const vec3_t fallback )
+{
+	slayer_pending_shot_t *p;
+	double window = slayer_tracer_impact_window.value;
+	int    i, best = -1;
+	double best_age = 999.0;
+	float  best_dot = 0.94f;
+	vec3_t expected;
+	float  expected_len;
+
+	if( window < 0.0 ) window = 0.0;
+	// Upper bound 0.5 s, not 0.25: the pairing window must exceed the ping
+	// (the muzzleflash we see is the server's echo), and 250 ms rules out
+	// perfectly ordinary high-latency servers.
+	if( window > 0.5 ) window = 0.5;
+
+	// FIRST look BACKWARDS: the impact usually lands before we see the shot
+	// (see the comment on s_impacts). Same direction cone as the forward path,
+	// so a hole from a different shot cannot be adopted.
+	VectorSubtract( fallback, start, expected );
+	expected_len = VectorLength( expected );
+
+	if( expected_len >= 1.0f )
+	{
+		for( i = 0; i < SLAYER_IMPACT_RING; i++ )
+		{
+			double age;
+			vec3_t actual;
+			float  actual_len, dot;
+
+			if( s_impacts[i].used )
+				continue;
+			age = host.realtime - s_impacts[i].time;
+			if( age < 0.0 || age > window )
+				continue;
+
+			VectorSubtract( s_impacts[i].pos, start, actual );
+			actual_len = VectorLength( actual );
+			if( actual_len < 1.0f )
+				continue;
+			dot = DotProduct( expected, actual ) / ( expected_len * actual_len );
+
+			if( dot > best_dot || ( fabs( dot - best_dot ) < 0.0001f && age < best_age ))
+			{
+				best = i;
+				best_dot = dot;
+				best_age = age;
+			}
+		}
+	}
+
+	if( best >= 0 )
+	{
+		Slayer_Tracer_SpawnVisual( start, s_impacts[best].pos, false );
+		s_impacts[best].used = true;
+		s_impact_back++;
+		return;
+	}
+
+	// No matching impact yet: queue and let Slayer_Tracer_NoteImpact or the
+	// timeout finish it.
+	p = &s_pending[s_pending_next];
+
+	// If a custom weapon outruns the queue, preserve the displaced tracer with
+	// its fallback endpoint instead of silently dropping a shot.
+	if( p->active )
+	{
+		Slayer_Tracer_SpawnVisual( p->start, p->fallback, false );
+		s_impact_fallback++;
+	}
+
+	p->active = true;
+	p->time = host.realtime;
+	VectorCopy( start, p->start );
+	VectorCopy( fallback, p->fallback );
+	s_pending_next = ( s_pending_next + 1 ) % SLAYER_PENDING_SHOTS;
+}
+
 // Core: a shot was detected on `ent`. is_local selects the aim source.
 static void Slayer_Tracer_Fire( cl_entity_t *ent, qboolean is_local )
 {
@@ -882,11 +1073,13 @@ static void Slayer_Tracer_Fire( cl_entity_t *ent, qboolean is_local )
 
 	Slayer_Tracer_TraceEnd( start, fwd, end );
 
-	// Own ribbon by default; the engine beam stays behind cvar 0 as a fallback.
-	if( slayer_tracer_render.value != 0.0f )
-		Slayer_Tracer_SpawnOwn( start, end, !is_local );
+	// Remote players do not expose local weapon-event impacts, so their entity
+	// trace remains immediate. Local shots wait briefly for the exact impact
+	// produced by the spread-aware weapon event.
+	if( is_local )
+		Slayer_Tracer_QueueLocal( start, end );
 	else
-		Slayer_Tracer_SpawnBeam( start, end, 1.0f );
+		Slayer_Tracer_SpawnVisual( start, end, true );
 
 	if( is_local ) s_fired_local++;
 	else           s_fired_remote++;
@@ -945,6 +1138,108 @@ void Slayer_Tracer_CheckMuzzleflash( cl_entity_t *ent, int slot, qboolean is_loc
 	s_mf_prev[slot] = now_on;
 }
 
+int Slayer_Tracer_BeginEvent( int entindex )
+{
+	int prev = s_event_owner;
+
+	s_event_owner = entindex;
+	return prev;
+}
+
+void Slayer_Tracer_EndEvent( int prev_owner )
+{
+	// Restore rather than zero: an event that triggers another event must not
+	// leave the outer one un-attributed for its remaining bullets.
+	s_event_owner = prev_owner;
+}
+
+void Slayer_Tracer_NoteImpact( const vec3_t pos )
+{
+	int    i, best = -1;
+	double best_age = 999.0;
+	float  best_dot = 0.94f; // ~20-degree spread cone; rejects unrelated impacts
+	double window = slayer_tracer_impact_window.value;
+
+	if( !pos || slayer_tracer.value == 0.0f )
+		return;
+
+	// OWNERSHIP GATE, checked first and cheapest.
+	//
+	// This is the answer to "can another player's shot steal my tracer while we
+	// stand point-blank?". At contact range the geometric tests are useless: his
+	// bullet hole is within a metre of mine and lands in the same frame, so both
+	// the time window and the direction cone accept it. But R_BulletImpactParticles
+	// is always reached from INSIDE one weapon event, and CL_FireEvent tells us
+	// whose event that is. An impact from anyone but the local player can never
+	// close a local pending shot.
+	//
+	// s_event_owner == 0 means the impact did not come from a weapon event at
+	// all (a server temp-entity, a mod calling the effect directly). That is not
+	// attributable to anyone, so it is refused too: the timeout fallback will
+	// finish the shot with the view endpoint, which is a small error, whereas
+	// accepting a stranger's hole is a visibly wrong tracer.
+	if( s_event_owner != cl.playernum + 1 )
+	{
+		s_impact_foreign++;
+		return;
+	}
+
+	if( window < 0.0 ) window = 0.0;
+	// Upper bound 0.5 s, not 0.25: the pairing window must exceed the ping
+	// (the muzzleflash we see is the server's echo), and 250 ms rules out
+	// perfectly ordinary high-latency servers.
+	if( window > 0.5 ) window = 0.5;
+
+	// Match the newest pending local shot inside the window. Multiple impacts
+	// from shotgun pellets deliberately consume only one shot; the nearest-in-
+	// time impact wins and later pellets find no matching shot.
+	for( i = 0; i < SLAYER_PENDING_SHOTS; i++ )
+	{
+		double age;
+		vec3_t expected, actual;
+		float  expected_len, actual_len, dot;
+
+		if( !s_pending[i].active )
+			continue;
+		age = host.realtime - s_pending[i].time;
+		if( age < 0.0 || age > window )
+			continue;
+
+		VectorSubtract( s_pending[i].fallback, s_pending[i].start, expected );
+		VectorSubtract( pos, s_pending[i].start, actual );
+		expected_len = VectorLength( expected );
+		actual_len = VectorLength( actual );
+		if( expected_len < 1.0f || actual_len < 1.0f )
+			continue;
+		dot = DotProduct( expected, actual ) / ( expected_len * actual_len );
+
+		// Direction dominates time: it prevents another player's nearby impact
+		// from consuming our pending shot during a firefight. Time breaks ties.
+		if( dot > best_dot || ( fabs( dot - best_dot ) < 0.0001f && age < best_age ))
+		{
+			best = i;
+			best_dot = dot;
+			best_age = age;
+		}
+	}
+
+	if( best >= 0 )
+	{
+		Slayer_Tracer_SpawnVisual( s_pending[best].start, pos, false );
+		s_pending[best].active = false;
+		s_impact_paired++;
+		return;
+	}
+
+	// No shot detected yet. Record it: the shot almost always arrives AFTER the
+	// impact (the muzzleflash we can see is the server's echo), and
+	// Slayer_Tracer_QueueLocal looks back through this ring.
+	s_impacts[s_impacts_next].used = false;
+	s_impacts[s_impacts_next].time = host.realtime;
+	VectorCopy( pos, s_impacts[s_impacts_next].pos );
+	s_impacts_next = ( s_impacts_next + 1 ) % SLAYER_IMPACT_RING;
+}
+
 // Independent cross-check hook: called from the TE_TRACER temp-entity handler
 // (cl_tent.c). TE_TRACER is a completely separate, server-driven path from the
 // EF_MUZZLEFLASH one. If muzzleflash turns out not to cover remote players but
@@ -964,6 +1259,7 @@ void Slayer_Tracer_Frame( void )
 	double        now = host.realtime;
 	double        dt;
 	byte          col[3];
+	int           i;
 
 	if( last_time == 0.0 )
 		last_time = now;
@@ -971,6 +1267,23 @@ void Slayer_Tracer_Frame( void )
 	last_time = now;
 	if( dt < 0.0 ) dt = 0.0;      // clock reset guard
 	if( dt > 0.25 ) dt = 0.25;    // don't lurch after a hitch
+
+	// Expire unmatched local shots after the GRACE window (not the full impact
+	// window): a shot we already detected without a recorded impact almost
+	// certainly has none, so holding the tracer back longer only adds latency.
+	for( i = 0; i < SLAYER_PENDING_SHOTS; i++ )
+	{
+		double grace = slayer_tracer_impact_grace.value;
+
+		if( grace < 0.0 ) grace = 0.0;
+		if( grace > 0.25 ) grace = 0.25;
+		if( s_pending[i].active && now - s_pending[i].time > grace )
+		{
+			Slayer_Tracer_SpawnVisual( s_pending[i].start, s_pending[i].fallback, false );
+			s_pending[i].active = false;
+			s_impact_fallback++;
+		}
+	}
 
 	if( slayer_tracer.value == 0.0f || slayer_tracer_heat.value == 0.0f )
 	{
@@ -1017,11 +1330,12 @@ void Slayer_Tracer_Frame( void )
 	{
 		Slayer_Log_Printf(
 			"tracer: 1s summary fired[L=%d R=%d] rawMF[L=%d R=%d] beams[ok=%d noModel=%d null=%d] "
-			"attach[used=%d approx=%d] TE_TRACER=%d heat=%.2f model=%d "
+			"attach[used=%d approx=%d] impact[paired=%d back=%d fallback=%d foreign=%d] TE_TRACER=%d heat=%.2f model=%d "
 			"own[render=%d peak=%d/%d tp=%d]",
 			s_fired_local, s_fired_remote, s_mf_raw_local, s_mf_raw_remote,
 			s_beam_ok, s_beam_fail_model, s_beam_fail_null,
-			s_attach_used, s_attach_reject, s_te_tracer,
+			s_attach_used, s_attach_reject, s_impact_paired, s_impact_back,
+			s_impact_fallback, s_impact_foreign, s_te_tracer,
 			s_heat, s_beam_model,
 			(int)slayer_tracer_render.value, s_live_peak, SLAYER_TRACER_POOL,
 			( V_IsSlayerThirdPerson() || CL_IsThirdPerson()) ? 1 : 0 );
@@ -1030,6 +1344,7 @@ void Slayer_Tracer_Frame( void )
 		s_beam_fail_model = s_beam_fail_null = 0;
 		s_mf_raw_local = s_mf_raw_remote = s_te_tracer = 0;
 		s_attach_used = s_attach_reject = 0;
+		s_impact_paired = s_impact_fallback = s_impact_foreign = s_impact_back = 0;
 		s_live_peak = 0;
 		s_last_summary = now;
 	}
