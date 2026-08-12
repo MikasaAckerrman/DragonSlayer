@@ -27,6 +27,7 @@ GNU General Public License for more details.
 #include "cl_grenade_tumble_slayer.h"
 #include "cl_item_phys_slayer.h"
 #include "cl_model_extent_slayer.h"
+#include "cl_stockboard_gate_slayer.h"
 #include "cl_slayer_log.h"
 
 // ===========================================================================
@@ -252,6 +253,11 @@ void V_InitSlayerCvars( void )
 	// Physical pose for dropped weapons / shields / props. Shares the spin core
 	// with the grenade module above.
 	Slayer_ItemPhys_Init();
+
+	// The gate that drops the game's own scoreboard. Registered here with the rest
+	// so its cvars exist before config.cfg runs; it does nothing until our own
+	// board is opened.
+	Slayer_StockBoard_Init();
 
 	// Shared per-player colour identity. MUST come before the radar and the
 	// scoreboard: both ask it for colours, and it owns the slot -> colour map.

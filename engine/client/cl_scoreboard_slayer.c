@@ -142,19 +142,41 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_scheme_file, "resource/ClientScheme.r
 static CVAR_DEFINE_AUTO( slayer_scoreboard_kd, "1", FCVAR_ARCHIVE,
 	"Slayer3D: show a K/D column where the (unavailable) money column used to be" );
 
-// Highlight on the local player's own row. Colour comes from the scheme's
-// selection entry unless this is set; the alpha is separate because the scheme
-// value is opaque and an opaque bar buries the nickname under it.
+// Highlight on the local player's own row.
 //
-// DEFAULT 0. The highlight was added from a reference screenshot and, seen live,
-// it was the one thing the player disliked -- with TrackerScheme it arrived as an
-// olive bar (Orange 142 137 35) across his own row. Vanilla's own selection is
-// 10 10 10 100, i.e. barely there. Off by default, one cvar to bring it back.
-static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_color, "235 231 197", FCVAR_ARCHIVE,
-	"Slayer3D: highlight colour for your own row (scheme file wins while unset)" );
+// THREE ways to mark your own row, because the first attempt was rejected and the
+// reason was instructive rather than cosmetic.
+//
+//   0 - nothing.
+//   1 - a LINE under the row. This is what CS 1.6 actually does: the vanilla
+//       board separates and marks with 1px rules (its own team headers are
+//       underlined with FillRGBA(..., 1, ...) in the client library), and the
+//       colour it uses for selection is SelectionBG 10 10 10 100 -- near-black and
+//       almost invisible as a fill. A fill of any colour reads as "a stripe
+//       painted over the board"; a line reads as "this row is mine".
+//   2 - the filled bar, which is what was there before. Kept because it is one
+//       cvar away and someone may prefer it.
+//
+// Default 1: the player asked for his row to be marked and rejected the bar, so
+// the honest reading is "mark it, but the way the game does".
+static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_style, "1", FCVAR_ARCHIVE,
+	"Slayer3D: how your own row is marked (0 = not at all, 1 = underline, 2 = filled bar)" );
 
-static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_alpha, "0", FCVAR_ARCHIVE,
-	"Slayer3D: opacity of your own row's highlight (0 = no highlight, 0-255)" );
+// Colour of that mark. Defaults to the board's own text colour rather than to a
+// palette entry: the mark belongs to the row, and a line in the row's own colour
+// cannot clash with whatever scheme the player's game uses.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_color, "255 176 0", FCVAR_ARCHIVE,
+	"Slayer3D: colour of your own row's marker (amber, as in the vanilla scheme)" );
+
+// Opacity of the marker. A LINE can be nearly opaque without burying anything,
+// which is why the default is high here while the old filled bar needed to stay
+// faint; style 2 scales this down itself.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_alpha, "200", FCVAR_ARCHIVE,
+	"Slayer3D: opacity of your own row's marker (0-255)" );
+
+// Thickness of the underline, in pixels, before HUD scaling.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_thick, "1", FCVAR_ARCHIVE,
+	"Slayer3D: thickness of the underline under your own row (pixels)" );
 
 // Empty strip above the header row, as a fraction of the row height. Was a fixed
 // row_h/3 + 4, which read as wasted space on a phone-sized board.
@@ -1078,8 +1100,10 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_scoreboard_scheme );
 	Cvar_RegisterVariable( &slayer_scoreboard_scheme_file );
 	Cvar_RegisterVariable( &slayer_scoreboard_kd );
+	Cvar_RegisterVariable( &slayer_scoreboard_sel_style );
 	Cvar_RegisterVariable( &slayer_scoreboard_sel_color );
 	Cvar_RegisterVariable( &slayer_scoreboard_sel_alpha );
+	Cvar_RegisterVariable( &slayer_scoreboard_sel_thick );
 	Cvar_RegisterVariable( &slayer_scoreboard_toppad );
 	Cvar_RegisterVariable( &slayer_scoreboard_rowgap );
 	Cvar_RegisterVariable( &slayer_scoreboard_width );
@@ -2462,43 +2486,76 @@ void Slayer_Scoreboard_Draw( void )
 			break;
 		}
 
-		// No alternating stripes on PC — rows are plain text over the panel.
-		// Only the LOCAL player gets a highlight bar, and only if asked for.
+		// MARKING YOUR OWN ROW.
 		//
-		// OFF BY DEFAULT (sel_alpha 0). Seen live this was the one element the
-		// player rejected: with TrackerScheme it arrived as an olive bar across
-		// his own row. Vanilla's own selection colour is 10 10 10 100, i.e.
-		// almost invisible, which is the honest reference. Skipping the draw
-		// entirely at alpha 0 also saves the scheme lookup per row.
+		// Style 1 (default) draws a LINE under the row, which is what the vanilla
+		// board does -- it marks and separates with 1px rules, and its selection
+		// colour (SelectionBG 10 10 10 100) is near-black, i.e. barely a fill at
+		// all. The filled bar that used to be here was rejected on sight, and the
+		// reason is that a bar of any colour reads as a stripe painted over the
+		// board rather than as "this row is mine".
 		//
-		// GEOMETRY, from the reference screenshot: the highlight is INSET from the
-		// board edges rather than running edge to edge, and it does not reach the
-		// rounded corners. A full-width bar was the thing that read as "a stripe
-		// painted over the board" instead of "this row is mine".
-		if( pidx == cl.playernum && slayer_scoreboard_sel_alpha.value > 0.0f )
+		// Style 2 is that bar, kept behind a cvar.
+		//
+		// GEOMETRY, from the reference screenshot: inset from the board edges rather
+		// than edge to edge, so it never reaches the rounded corners.
+		if( pidx == cl.playernum )
 		{
-			rgba_t sel;
-			int    inset = (int)( board_w * 0.012f );
-			int    sel_alpha = (int)slayer_scoreboard_sel_alpha.value;
+			int style = (int)slayer_scoreboard_sel_style.value;
+			int sel_alpha = (int)slayer_scoreboard_sel_alpha.value;
 
-			if( inset < 3 ) inset = 3;
+			if( style < 0 ) style = 0;
+			if( style > 2 ) style = 1;
 			if( sel_alpha < 0 ) sel_alpha = 0;
 			if( sel_alpha > 255 ) sel_alpha = 255;
 
-			MakeRGBA( sel, 235, 231, 197, (byte)sel_alpha );
-			if( Slayer_SB_SchemeColor( &slayer_scoreboard_sel_color,
-					SLAYER_SCHEME_HAS_SELECTED_BG, slayer_scheme.selected_bg, sel ))
+			if( style != 0 && sel_alpha > 0 )
 			{
-				sel[3] = (byte)sel_alpha;   // keep OUR alpha, not the file's opaque one
-			}
-			else
-			{
+				rgba_t sel;
+				int    inset = (int)( board_w * 0.012f );
+				int    a;
+
+				if( inset < 3 ) inset = 3;
+
+				// The cvar wins over the scheme here, unlike the board's other
+				// colours: the mark is ours, not the game's -- there is no vanilla
+				// role for "the local player's row" on a board that never had one.
+				MakeRGBA( sel, 255, 176, 0, (byte)sel_alpha );
 				Slayer_ParseColorString( slayer_scoreboard_sel_color.string, sel );
 				sel[3] = (byte)sel_alpha;
-			}
 
-			Slayer_DrawRect( board_x + inset, cur_y, board_w - inset * 2, row_h,
-				sel[0], sel[1], sel[2], (byte)( sel[3] * global_opacity / 255 ));
+				a = (int)( sel[3] * global_opacity / 255 );
+
+				if( style == 1 )
+				{
+					// Underline, sitting ON the row's bottom edge.
+					//
+					// Thickness is derived from the ROW HEIGHT rather than from a
+					// pixel constant scaled by hand: the row height already carries
+					// the HUD scale and the rowscale cvar, so a line at 1/12 of it
+					// stays one hairline on a phone and stays visible on a tablet.
+					// A fixed pixel count would vanish on one and look like a bar on
+					// the other.
+					int thick = (int)( slayer_scoreboard_sel_thick.value
+						* (float)row_h / 12.0f );
+
+					if( thick < 1 ) thick = 1;
+					if( thick > row_h / 3 ) thick = row_h / 3;
+					if( thick < 1 ) thick = 1;
+
+					Slayer_DrawRect( board_x + inset, cur_y + row_h - thick,
+						board_w - inset * 2, thick,
+						sel[0], sel[1], sel[2], (byte)a );
+				}
+				else
+				{
+					// The old filled bar. Scaled down hard: at the alpha a line
+					// wants, a fill would bury the nickname under it.
+					Slayer_DrawRect( board_x + inset, cur_y,
+						board_w - inset * 2, row_h,
+						sel[0], sel[1], sel[2], (byte)( a * 35 / 100 ));
+				}
+			}
 		}
 
 		// Player name
