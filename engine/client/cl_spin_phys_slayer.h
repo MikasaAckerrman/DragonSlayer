@@ -50,6 +50,23 @@ typedef struct
 	                     // so objects do not all tumble in one flat plane
 	float impact_grip;   // 0..1: how much contact slip converts to spin on a hit
 	float roll_grip;     // 1/sec: how fast the spin converges to rolling
+	float roll_speed;    // units/sec: tangential speed above which the object
+	                     // SKIDS instead of rolling. The no-slip condition
+	                     // omega = (n x v)/r is only physical for something that
+	                     // is actually rolling; applied at any speed it makes an
+	                     // object arriving fast spin up violently on contact
+	                     // (measured: 0.40 -> 5.08 turns/sec six frames after
+	                     // landing) and swings the axis onto n x v, which is
+	                     // exactly the "spins buggily, not about its own axis"
+	                     // report. 0 = always roll (the old behaviour).
+	float slide_drag;    // 1/sec: spin lost to friction while skidding
+	float contact_omega; // rad/sec: cap on the ROLLING target. The no-slip
+	                     // condition is geometrically right and visually wrong at
+	                     // these radii -- a 3.5-unit grenade rolling at 200 u/s
+	                     // works out to nine turns a second, which is a smear on a
+	                     // phone screen. max_omega exists to survive one bad
+	                     // frame; this is what rolling is allowed to look like.
+	                     // 0 = no separate cap.
 	float air_drag;      // 1/sec: spin decay in flight
 	float spin_drag;     // 1/sec: extra decay of spin about the contact normal
 	float rest_speed;    // units/sec: below this it may settle
@@ -142,6 +159,29 @@ float Slayer_Spin_Rate( const slayer_spin_t *st );
 // corner instead of standing upright inside it. Does nothing if `normal` is
 // degenerate.
 void Slayer_Spin_SettleTo( slayer_spin_t *st, const float *normal, float rate, float dt );
+
+// The same, generalised, and what dropped items actually use.
+//
+// Two things the version above cannot express, both of which the device showed:
+//
+//  * WHICH body axis should face the surface. "Local up" is meaningless for a
+//    rifle: its mesh is authored lying along its own X, so aligning Z to the
+//    floor normal is arbitrary and the model ends up in a pose nothing chose.
+//    Real objects come to rest on their LARGEST face, i.e. with their SHORTEST
+//    extent along the normal, and the caller knows the model's extents.
+//  * A TOLERANCE. Easing all the way to exact alignment is what produced "you
+//    drop a weapon and it slowly straightens itself out, which looks wrong":
+//    an item that landed at a plausible angle was rotated anyway. With a
+//    tolerance, a pose that already reads as resting is left completely alone,
+//    and only a grossly wrong one (standing on end inside a step) is corrected.
+//    This is also what lets an item rest ON AN EDGE: leaning on a step is within
+//    tolerance of both surfaces, so neither pulls it flat.
+//
+// `local_axis` is in the object's own frame and need not be normalised.
+// `tol_cos` is the cosine of the angle considered "already resting" (1 = always
+// correct, 0.7 ~ 45 degrees of slack). Does nothing when already inside it.
+void Slayer_Spin_SettleAxisTo( slayer_spin_t *st, const float *normal,
+	const float *local_axis, float rate, float dt, float tol_cos );
 
 // Convert the stored orientation into the Euler angles the studio renderer
 // wants, compensating for its pitch negation.

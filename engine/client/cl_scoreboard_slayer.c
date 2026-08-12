@@ -27,6 +27,7 @@ GNU General Public License for more details.
 #include "cl_slayer_toast.h"
 #include "cl_slayer_conspy.h"           // Slayer_ConSpy_QuietStatus
 #include "cl_teamcolors_slayer.h"
+#include "cl_sb_scheme_slayer.h"        // colours from the game's own VGUI scheme
 #include "ref_common.h"                 // R_GetTextureParms (stretched glyphs)
 #include <math.h>
 
@@ -114,6 +115,43 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_block_migrated, "0", FCVAR_ARCHIVE,
 	"Slayer3D internal: archived scoreboard block level migration completed" );
 
 static CVAR_DEFINE_AUTO( slayer_scoreboard_ondeath, "1", FCVAR_ARCHIVE, "Slayer3D: show the scoreboard automatically while dead (0 = only when held)" );
+
+// Colours from the game's own VGUI scheme. The board in CS 1.6 is a
+// SectionedListPanel and takes its colours from resource/TrackerScheme.res, so a
+// player who themed their install expects ours to match. Read as DEFAULTS: a cvar
+// that still holds its built-in value yields to the file, a cvar the player set
+// wins. See Slayer_SB_ApplyScheme for why that comparison is against def_string.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_scheme, "1", FCVAR_ARCHIVE,
+	"Slayer3D: take board colours from the game's VGUI scheme file (0 = cvars only)" );
+
+static CVAR_DEFINE_AUTO( slayer_scoreboard_scheme_file, "resource/TrackerScheme.res", FCVAR_ARCHIVE,
+	"Slayer3D: which scheme file to read board colours from" );
+
+// K/D instead of money. Money is the client library's business -- the engine
+// never receives it, so the column could only ever have been blank -- while K/D
+// is derivable from what ScoreInfo already gives us.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_kd, "1", FCVAR_ARCHIVE,
+	"Slayer3D: show a K/D column where the (unavailable) money column used to be" );
+
+// Highlight on the local player's own row. Colour comes from the scheme's
+// SelectedBgColor unless this is set; the alpha is separate because the scheme
+// value is opaque and an opaque bar buries the nickname under it.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_color, "235 231 197", FCVAR_ARCHIVE,
+	"Slayer3D: highlight colour for your own row (scheme file wins while unset)" );
+
+static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_alpha, "70", FCVAR_ARCHIVE,
+	"Slayer3D: opacity of your own row's highlight (0-255)" );
+
+// Empty strip above the header row, as a fraction of the row height. Was a fixed
+// row_h/3 + 4, which read as wasted space on a phone-sized board.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_toppad, "0.25", FCVAR_ARCHIVE,
+	"Slayer3D: padding above the header row, in row heights (0 = flush)" );
+
+// Vertical breathing room per player row, as a fraction of the row height. The
+// reference board separates rows by roughly a quarter of a cell; ours were flush,
+// which is what made a full roster read as a solid block of text.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_rowgap, "0.18", FCVAR_ARCHIVE,
+	"Slayer3D: gap between player rows, in row heights (0 = flush)" );
 static CVAR_DEFINE_AUTO( slayer_avatar_autofetch, "1", FCVAR_ARCHIVE, "Slayer3D: fetch avatars as soon as we join a server, without waiting for the scoreboard to be opened (0 = off)" );
 static CVAR_DEFINE_AUTO( slayer_avatar_autofetch_interval, "5", FCVAR_ARCHIVE, "Slayer3D: seconds between auto-fetch attempts while some players are still unresolved" );
 static CVAR_DEFINE_AUTO( slayer_avatar_uploads_per_frame, "1", FCVAR_ARCHIVE, "Slayer3D: how many avatar textures may be uploaded to the GPU in one frame (1 = smoothest)" );
@@ -197,6 +235,93 @@ static rgba_t cached_color_text;
 static rgba_t cached_color_ct;
 static rgba_t cached_color_t;
 static rgba_t cached_color_border;
+
+// ===========================================================================
+// Colours from the game's own VGUI scheme
+// ===========================================================================
+//
+// The board in CS 1.6 is a VGUI SectionedListPanel and takes its colours from
+// resource/TrackerScheme.res. A player who themed their install expects ours to
+// match, and re-typing those colours as cvars by hand is not a reasonable thing
+// to ask of them.
+//
+// Read ONCE per map (the file cannot change mid-map) and used as DEFAULTS: see
+// Slayer_SB_SchemeColor for the cvar-versus-file precedence and why the test is
+// against def_string rather than against a hardcoded literal.
+static slayer_sb_scheme_t slayer_scheme;
+static qboolean           slayer_scheme_tried;
+
+static void Slayer_SB_LoadScheme( void )
+{
+	byte       *buf;
+	fs_offset_t len = 0;
+	const char *path;
+	int         got;
+
+	slayer_scheme_tried = true;
+	memset( &slayer_scheme, 0, sizeof( slayer_scheme ));
+
+	if( slayer_scoreboard_scheme.value == 0.0f )
+		return;
+
+	path = slayer_scoreboard_scheme_file.string;
+	if( COM_StringEmptyOrNULL( path ))
+		return;
+
+	buf = FS_LoadFile( path, &len, false );
+	if( !buf )
+	{
+		Slayer_Log_Printf( "scheme: '%s' not found -- board keeps its own colours", path );
+		return;
+	}
+
+	// FS_LoadFile NUL-terminates, but the parser is handed a length-independent
+	// string, so make the guarantee explicit rather than assumed.
+	buf[len] = '\0';
+
+	got = Slayer_SBScheme_Parse( (const char *)buf, &slayer_scheme );
+	Slayer_Log_Printf( "scheme: '%s' -> %d key(s), have=0x%02x bg=(%d %d %d %d) sel=(%d %d %d %d)",
+		path, got, slayer_scheme.have,
+		slayer_scheme.bg[0], slayer_scheme.bg[1], slayer_scheme.bg[2], slayer_scheme.bg[3],
+		slayer_scheme.selected_bg[0], slayer_scheme.selected_bg[1],
+		slayer_scheme.selected_bg[2], slayer_scheme.selected_bg[3] );
+
+	Mem_Free( buf );
+}
+
+/*
+====================
+Slayer_SB_SchemeColor
+
+Should the scheme's colour be used for this cvar, and if so, what is it?
+
+The rule is "the file supplies DEFAULTS": a player who has never touched the cvar
+gets their game's theme, and a player who set the cvar keeps their value. The
+catch is that FCVAR_ARCHIVE makes those two states look identical after a
+restart -- the value is simply in config.cfg either way. What distinguishes them
+is `def_string`: the engine keeps the compiled-in default alongside the current
+one, so "current == default" means "never configured", regardless of whether
+config.cfg re-applied that same default.
+
+Returns true and fills `out` when the scheme should win.
+====================
+*/
+static qboolean Slayer_SB_SchemeColor( const convar_t *cv, unsigned int flag,
+	const unsigned char *scheme_rgba, rgba_t out )
+{
+	if( slayer_scoreboard_scheme.value == 0.0f )
+		return false;
+
+	if( !( slayer_scheme.have & flag ))
+		return false;
+
+	// An explicitly configured cvar always wins over the file.
+	if( cv && cv->string && cv->def_string && Q_strcmp( cv->string, cv->def_string ))
+		return false;
+
+	MakeRGBA( out, scheme_rgba[0], scheme_rgba[1], scheme_rgba[2], scheme_rgba[3] );
+	return true;
+}
 
 // ===========================================================================
 // Border corner template (top-left quadrant, mirrored at draw time)
@@ -932,6 +1057,13 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_scoreboard_colordot_migrated );
 
 	Cvar_RegisterVariable( &slayer_scoreboard_ondeath );
+	Cvar_RegisterVariable( &slayer_scoreboard_scheme );
+	Cvar_RegisterVariable( &slayer_scoreboard_scheme_file );
+	Cvar_RegisterVariable( &slayer_scoreboard_kd );
+	Cvar_RegisterVariable( &slayer_scoreboard_sel_color );
+	Cvar_RegisterVariable( &slayer_scoreboard_sel_alpha );
+	Cvar_RegisterVariable( &slayer_scoreboard_toppad );
+	Cvar_RegisterVariable( &slayer_scoreboard_rowgap );
 	Cvar_RegisterVariable( &slayer_scoreboard_width );
 	Cvar_RegisterVariable( &slayer_scoreboard_compact_width );
 	Cvar_RegisterVariable( &slayer_scoreboard_corner_rows );
@@ -1020,6 +1152,11 @@ void Slayer_Scoreboard_Reset( void )
 	slayer_autofetch_done = false;
 	slayer_autofetch_tries = 0;         // a new map gets a full budget of tries
 	slayer_autofetch_gave_up = false;
+
+	// Re-read the game's scheme on every map: a server can install its own
+	// resource/ files, and this is the only moment they can change.
+	slayer_scheme_tried = false;
+	memset( &slayer_scheme, 0, sizeof( slayer_scheme ));
 
 	Slayer_AvatarDownload_Reset();
 	Slayer_SteamAPI_Reset();
@@ -1508,6 +1645,44 @@ int Slayer_Scoreboard_StockBlockLevel( void )
 	return level;
 }
 
+/*
+====================
+Slayer_SB_FormatKD
+
+Kill/death ratio into `out`.
+
+Two decisions here rather than one obvious formula:
+
+  * deaths == 0 is not infinity and must not print as "inf" or "-". With no
+    deaths the ratio IS the kill count -- that is what a perfect round looks
+    like -- so it prints as a whole number ("7"), which also distinguishes it
+    from a computed ratio at a glance.
+  * two decimals, and no trailing ".00": "1.5" and "12" read instantly, while
+    "1.50" and "12.00" waste the narrow column the money column left behind.
+
+Negative frags happen (team kills subtract), and a negative ratio is meaningful,
+so it is not clamped.
+====================
+*/
+static void Slayer_SB_FormatKD( char *out, size_t size, int frags, int deaths )
+{
+	float ratio;
+
+	if( deaths <= 0 )
+	{
+		Q_snprintf( out, size, "%d", frags );
+		return;
+	}
+
+	ratio = (float)frags / (float)deaths;
+
+	// Whole ratios print without the decimal point: 2.00 -> "2".
+	if( ratio == (float)(int)ratio )
+		Q_snprintf( out, size, "%d", (int)ratio );
+	else
+		Q_snprintf( out, size, "%.2f", ratio );
+}
+
 void Slayer_Scoreboard_Draw( void )
 {
 	slayer_sort_entry_t sorted[MAX_CLIENTS];
@@ -1516,7 +1691,11 @@ void Slayer_Scoreboard_Draw( void )
 	int          screen_w, screen_h;
 	int          board_x, board_y, board_w, board_h;
 	int          row_h, col_name_x, col_frags_x, col_deaths_x, col_ping_x, col_health_x;
-	int          col_money_x;       // "Деньги" column (right edge)
+	int          row_gap;        // vertical breathing room between player rows
+	int          col_kd_x;       // K/D column (right edge). Was "Деньги" — the
+	                            // engine never receives money (it is a client-DLL
+	                            // HUD value), so that column could only ever have
+	                            // been blank. K/D is derivable from ScoreInfo.
 	int          col_kit_x;         // "Компл." (defuse kit) fixed column, left-aligned
 	int          col_name_text_x;   // fixed name-column origin (after the reserved avatar gutter)
 	int          colordot_px;       // size of the per-player colour swatch (0 = disabled)
@@ -1666,6 +1845,19 @@ void Slayer_Scoreboard_Draw( void )
 	memcpy( color_t, cached_color_t, sizeof( rgba_t ) );
 	color_t[3] = 255;
 	MakeRGBA( color_spec, 180, 180, 180, 255 );
+
+	// The game's own scheme, loaded once per map, overrides the colours the
+	// player has NOT configured. Team colours are deliberately left alone: the
+	// scheme has no notion of CT/T, and ours were picked by measured perceptual
+	// distance (see cl_teamcolors_slayer.c) -- replacing them with the panel's
+	// generic text colour would make both teams the same colour.
+	if( !slayer_scheme_tried )
+		Slayer_SB_LoadScheme();
+
+	Slayer_SB_SchemeColor( &slayer_scoreboard_bg_color, SLAYER_SCHEME_HAS_BG,
+		slayer_scheme.bg, color_bg );
+	Slayer_SB_SchemeColor( &slayer_scoreboard_text_color, SLAYER_SCHEME_HAS_TEXT,
+		slayer_scheme.text, color_text );
 
 	global_opacity = (int)slayer_scoreboard_opacity.value;
 	if( global_opacity < 0 ) global_opacity = 0;
@@ -1861,6 +2053,17 @@ void Slayer_Scoreboard_Draw( void )
 		// Board height from the row height ACTUALLY used, so it stays exactly
 		// consistent with the row loop's advances.
 		board_h = row_h * content_rows + chrome_h;
+
+		// Row gap, added to the height as well as to the advances. Computing it
+		// here (rather than at the advance) is what keeps the two in step: a gap
+		// applied only in the loop would push the last player past the bottom and
+		// silently clip them, which is exactly the failure the chrome estimate
+		// above was written to avoid.
+		row_gap = (int)( row_h * slayer_scoreboard_rowgap.value );
+		if( row_gap < 0 ) row_gap = 0;
+		if( row_gap > row_h ) row_gap = row_h;
+		board_h += row_gap * num_players;
+
 		if( board_h > avail_h )
 			board_h = avail_h;
 
@@ -2019,9 +2222,25 @@ void Slayer_Scoreboard_Draw( void )
 		Slayer_SB_StringLen( font, "Смертей", &hw, &hh );
 		col_frags_x  = col_deaths_x - hw - gap;
 		Slayer_SB_StringLen( font, "Счет", &hw, &hh );
-		col_money_x  = col_frags_x - hw - gap;
-		Slayer_SB_StringLen( font, "Деньги", &hw, &hh );
-		col_health_x = col_money_x - hw - gap;
+		col_kd_x  = col_frags_x - hw - gap;
+		if( slayer_scoreboard_kd.value != 0.0f )
+		{
+			int vw, vh;
+
+			// Reserve the WIDER of the label and a worst-case value: "К/С" is
+			// three glyphs while "12.34" is five, and measuring only the label
+			// would let a long ratio run into the frags column.
+			Slayer_SB_StringLen( font, "К/С", &hw, &hh );
+			Slayer_SB_StringLen( font, "12.34", &vw, &vh );
+			if( vw > hw ) hw = vw;
+			col_health_x = col_kd_x - hw - gap;
+		}
+		else
+		{
+			// Column switched off: collapse it instead of leaving a hole between
+			// HP and Счет.
+			col_health_x = col_kd_x;
+		}
 
 		// The stat block is a fixed pixel width; on a narrow board its left
 		// (HP) edge can cross into the names or off-screen. If so, shift the
@@ -2031,7 +2250,7 @@ void Slayer_Scoreboard_Draw( void )
 		if( col_health_x < min_health_x )
 		{
 			int shift = min_health_x - col_health_x;
-			col_health_x += shift; col_money_x  += shift; col_frags_x += shift;
+			col_health_x += shift; col_kd_x  += shift; col_frags_x += shift;
 			col_deaths_x += shift; col_ping_x   += shift;
 		}
 
@@ -2067,8 +2286,20 @@ void Slayer_Scoreboard_Draw( void )
 
 	// ONE header row: server IP + map on the LEFT, column labels on the RIGHT.
 	// (No separate title strip — the user asked to fold the IP/map into the
-	// HP/Деньги/… band and delete the old title row above it.)
-	cur_y += row_h / 3 + 4;
+	// HP/K-D/… band and delete the old title row above it.)
+	//
+	// The gap above that row used to be row_h/3 + 4, which on a phone-sized board
+	// left a visibly empty strip between the panel edge and the labels — the
+	// "пустота в верхней полосе" from the report. It is now a fraction of the row
+	// height (so it scales with the font tier rather than being a magic number)
+	// and defaults to a quarter of it.
+	{
+		int toppad = (int)( row_h * slayer_scoreboard_toppad.value );
+
+		if( toppad < 0 ) toppad = 0;
+		if( toppad > row_h ) toppad = row_h;
+		cur_y += toppad;
+	}
 	{
 		const char *mapname = Info_ValueForKey( cl.serverinfo, "map" );
 		rgba_t color_hdr, color_map;
@@ -2086,10 +2317,17 @@ void Slayer_Scoreboard_Draw( void )
 			Slayer_SB_DrawString( col_name_x + iw + font->charHeight * 2, cur_y, mapname, color_map, font );
 		}
 
-		// right: column labels (soft light grey, Russian)
+		// right: column labels (soft light grey, Russian). The scheme's header
+		// colour wins when the player has not chosen their own text colour --
+		// this is the "196 181 80" olive on the reference install.
 		MakeRGBA( color_hdr, 206, 206, 200, color_text[3] );
+		Slayer_SB_SchemeColor( &slayer_scoreboard_text_color, SLAYER_SCHEME_HAS_HEADER_TEXT,
+			slayer_scheme.header_text, color_hdr );
+		color_hdr[3] = color_text[3];
+
 		Slayer_DrawStringRight( font, col_health_x, cur_y, "HP", color_hdr );
-		Slayer_DrawStringRight( font, col_money_x, cur_y, "Деньги", color_hdr );
+		if( slayer_scoreboard_kd.value != 0.0f )
+			Slayer_DrawStringRight( font, col_kd_x, cur_y, "К/С", color_hdr );
 		Slayer_DrawStringRight( font, col_frags_x, cur_y, "Счет", color_hdr );
 		Slayer_DrawStringRight( font, col_deaths_x, cur_y, "Смертей", color_hdr );
 		Slayer_DrawStringRight( font, col_ping_x, cur_y, "Задержка", color_hdr );
@@ -2207,14 +2445,41 @@ void Slayer_Scoreboard_Draw( void )
 		}
 
 		// No alternating stripes on PC — rows are plain text over the panel.
-		// Only the LOCAL player gets a highlight bar, inset from the rounded
-		// edges so it doesn't run into the corners.
+		// Only the LOCAL player gets a highlight bar.
+		//
+		// GEOMETRY, from the reference screenshot: the highlight is INSET from the
+		// board edges rather than running edge to edge, and it does not reach the
+		// rounded corners. A full-width bar was the thing that read as "a stripe
+		// painted over the board" instead of "this row is mine".
+		//
+		// COLOUR: SectionedListPanel.SelectedBgColor from the game's own scheme
+		// when the player has not chosen their own (olive 142 137 35 on the stock
+		// file). The scheme value is opaque, and an opaque bar would bury the
+		// nickname, so the alpha stays ours.
 		if( pidx == cl.playernum )
 		{
-			// span the whole row (small fixed inset off the 1px border); player
-			// rows sit in the straight-side region so this never hits a corner,
-			// and it clears the right-most Latency column instead of ending on it.
-			Slayer_DrawRect( board_x + 3, cur_y, board_w - 6, row_h, 235, 231, 197, 34 );
+			rgba_t sel;
+			int    inset = (int)( board_w * 0.012f );
+			int    sel_alpha = (int)slayer_scoreboard_sel_alpha.value;
+
+			if( inset < 3 ) inset = 3;
+			if( sel_alpha < 0 ) sel_alpha = 0;
+			if( sel_alpha > 255 ) sel_alpha = 255;
+
+			MakeRGBA( sel, 235, 231, 197, (byte)sel_alpha );
+			if( Slayer_SB_SchemeColor( &slayer_scoreboard_sel_color,
+					SLAYER_SCHEME_HAS_SELECTED_BG, slayer_scheme.selected_bg, sel ))
+			{
+				sel[3] = (byte)sel_alpha;   // keep OUR alpha, not the file's opaque one
+			}
+			else
+			{
+				Slayer_ParseColorString( slayer_scoreboard_sel_color.string, sel );
+				sel[3] = (byte)sel_alpha;
+			}
+
+			Slayer_DrawRect( board_x + inset, cur_y, board_w - inset * 2, row_h,
+				sel[0], sel[1], sel[2], (byte)( sel[3] * global_opacity / 255 ));
 		}
 
 		// Player name
@@ -2310,6 +2575,17 @@ void Slayer_Scoreboard_Draw( void )
 				// Deaths
 				Q_snprintf( buf, sizeof( buf ), "%d", slayer_scores[pidx].deaths );
 				Slayer_DrawStringRight( font, col_deaths_x, cur_y + text_dy, buf, stat_color );
+
+				// K/D — where "Деньги" used to be. Money never reaches the
+				// engine (the client DLL owns it), so that column was blank for
+				// everyone; this is the same information the player actually
+				// wanted from a stat column, derived from what we already have.
+				if( slayer_scoreboard_kd.value != 0.0f )
+				{
+					Slayer_SB_FormatKD( buf, sizeof( buf ),
+						slayer_scores[pidx].frags, slayer_scores[pidx].deaths );
+					Slayer_DrawStringRight( font, col_kd_x, cur_y + text_dy, buf, stat_color );
+				}
 			}
 
 			// Latency (hold-last-good): cl.players[].ping drops to 0 on transient
@@ -2371,7 +2647,7 @@ void Slayer_Scoreboard_Draw( void )
 			}
 		}
 
-		cur_y += row_h;
+		cur_y += row_h + row_gap;
 	}
 }
 

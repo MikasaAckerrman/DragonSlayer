@@ -193,6 +193,18 @@ void Slayer_Spin_DefaultParams( slayer_spin_params_t *p )
 	p->spin_bias   = 0.35f;
 	p->impact_grip = 0.55f;
 	p->roll_grip   = 8.0f;
+	// roll_speed 120: a grenade that has slowed to walking pace is credibly
+	// rolling; one arriving at 200+ u/s is skidding, and forcing the no-slip
+	// condition on it was what made contact look like a bug. Chosen so that the
+	// rolling target at the crossover is (120/3.5) ~ 34 rad/sec, i.e. still under
+	// max_omega -- above the crossover nothing is asked of the spin that the cap
+	// would have to refuse.
+	p->roll_speed  = 120.0f;
+	p->slide_drag  = 4.0f;
+	// contact_omega 12 rad/sec ~ 1.9 turns/sec: faster than the throw tumble
+	// (1.3 turns/sec at a hard throw) so a landing grenade visibly picks up, and
+	// far below the 6.4 turns/sec the uncapped no-slip condition was producing.
+	p->contact_omega = 12.0f;
 	p->air_drag    = 0.35f;
 	p->spin_drag   = 3.0f;
 	p->rest_speed  = 14.0f;
@@ -221,6 +233,9 @@ static void SP_SanitizeParams( const slayer_spin_params_t *in, slayer_spin_param
 	if( out->impact_grip < 0.0f ) out->impact_grip = 0.0f;
 	if( out->impact_grip > 1.0f ) out->impact_grip = 1.0f;
 	if( out->roll_grip < 0.0f ) out->roll_grip = 0.0f;
+	if( out->roll_speed < 0.0f ) out->roll_speed = 0.0f;
+	if( out->slide_drag < 0.0f ) out->slide_drag = 0.0f;
+	if( out->contact_omega < 0.0f ) out->contact_omega = 0.0f;
 	if( out->air_drag < 0.0f ) out->air_drag = 0.0f;
 	if( out->spin_drag < 0.0f ) out->spin_drag = 0.0f;
 	if( out->impact_dv < 1.0f ) out->impact_dv = 1.0f;
@@ -534,6 +549,45 @@ void Slayer_Spin_Step( slayer_spin_t *st, const float *vel, float dt,
 
 			if( have_n )
 			{
+				// The most spin friction can impart is the no-slip condition at
+				// the speed the object arrived with: friction acts precisely until
+				// slipping stops, and once omega == (n x v)/r there is no slip left
+				// to convert. Beyond that the sum below is not physics, it is a
+				// number growing with speed -- and at these radii it grew fast
+				// (a 200 u/s landing added 15.7 rad/sec, 2.5 turns/sec, in ONE
+				// frame, which is the "hits a surface and goes crazy" report in
+				// the impact path rather than the rolling one).
+				float limit_w[3];
+				float limit;
+				float arrive_t[3];
+				float arrive_vn, arrive_tang, arrive_grip;
+
+				SP_RollingOmega( st->prev_vel, n, pp.radius, limit_w );
+				limit = SP_VecLen( limit_w );
+				if( pp.contact_omega > 0.0f && limit > pp.contact_omega )
+					limit = pp.contact_omega;
+
+				// And scaled by the same grip the contact block uses. Friction
+				// does spin up a skidding object, but over its whole slide, not
+				// in the single frame where our sampled velocity happens to
+				// change: we see the entire collision as one dv, so taking the
+				// full no-slip value from it hands the object in one frame what
+				// should take a third of a second. A fast arrival therefore gains
+				// little here and the contact block adds the rest as it slows,
+				// which is what "it skids, then starts rolling" looks like.
+				arrive_vn = SP_VecDot( st->prev_vel, n );
+				SP_VecMA( st->prev_vel, -arrive_vn, n, arrive_t );
+				arrive_tang = SP_VecLen( arrive_t );
+
+				arrive_grip = 1.0f;
+				if( pp.roll_speed > 0.0f )
+				{
+					arrive_grip = 1.0f - ( arrive_tang / pp.roll_speed );
+					if( arrive_grip < 0.15f ) arrive_grip = 0.15f;
+					if( arrive_grip > 1.0f ) arrive_grip = 1.0f;
+				}
+				limit *= arrive_grip;
+
 				// FRICTION IS THE ONLY TANGENTIAL FORCE, so the tangential part
 				// of the velocity change IS the friction impulse per unit mass.
 				// Spinning it up is then r x J with the contact point at
@@ -575,6 +629,13 @@ void Slayer_Spin_Step( slayer_spin_t *st, const float *vel, float dt,
 				}
 
 				SP_ClampOmega( st->omega, pp.max_omega );
+
+				// Friction cannot spin an object faster than no-slip at the speed
+				// it arrived with (see limit above): past that point there is no
+				// slipping left for it to act on.
+				if( limit > 0.0f )
+					SP_ClampOmega( st->omega, limit );
+
 				st->impacts++;
 				st->resting = 0;
 				st->still_time = 0.0f;
@@ -597,14 +658,77 @@ void Slayer_Spin_Step( slayer_spin_t *st, const float *vel, float dt,
 		SP_VecCopy( contact->normal, n );
 		if( SP_VecNormalize( n ) > 1e-3f )
 		{
-			float want[3], diff[3];
-			float k, wn;
+			float want[3], diff[3], v_t[3];
+			float k, wn, vn, tang, grip;
 
-			// Converge toward rolling without slipping.
+			// SLIDING VERSUS ROLLING.
+			//
+			// The no-slip condition omega = (n x v)/r is only physical for an
+			// object that is actually rolling. Applying it at any speed is what
+			// produced the reported "when it touches a wall it starts spinning
+			// buggily, not about its own axis": a grenade (r = 3.5) arriving at
+			// 200 u/s needs 57 rad/sec to roll without slipping, which is nine
+			// turns a second, and it also re-aims the axis from the tumble axis to
+			// n x v within an eighth of a second. Measured on the frames after
+			// landing: 0.40 turns/sec in the air becoming 5.08 six frames later.
+			//
+			// Real objects hitting the ground at speed do not start rolling, they
+			// SKID: friction bleeds their spin and their speed, and only once slow
+			// enough does rolling take over. So the convergence is weighted by how
+			// close the object is to a speed at which rolling is credible, and
+			// what is left over is drag.
+			vn = SP_VecDot( v, n );
+			SP_VecMA( v, -vn, n, v_t );
+			tang = SP_VecLen( v_t );
+
+			// GRIP: is this object rolling, or skidding?
+			//
+			// Full grip below half of roll_speed (a plateau, not a ramp all the
+			// way to zero -- something genuinely rolling must satisfy the no-slip
+			// condition exactly, not approximately), falling to zero at
+			// roll_speed.
+			grip = 1.0f;
+			if( pp.roll_speed > 0.0f )
+			{
+				float full = pp.roll_speed * 0.5f;
+
+				if( tang > full )
+					grip = ( pp.roll_speed - tang ) / ( pp.roll_speed - full );
+				if( grip < 0.0f ) grip = 0.0f;
+				if( grip > 1.0f ) grip = 1.0f;
+			}
+
+			// ONE blended target, not two competing pulls. Converging toward
+			// rolling AND decaying toward zero at the same time would settle
+			// partway between them even at full grip; scaling the TARGET keeps
+			// each regime exact:
+			//
+			//   grip 1 (slow): target = rolling, rate = roll_grip -- the no-slip
+			//     condition, which is right for something actually rolling.
+			//   grip 0 (fast): target = 0, rate = slide_drag -- a skidding object
+			//     loses spin to friction instead of being handed nine turns a
+			//     second by a condition that does not apply to it.
 			SP_RollingOmega( v, n, pp.radius, want );
+
+			// Cap the TARGET, not only the result: an uncapped target drags omega
+			// toward a value the cap would refuse, pinning the object at the cap
+			// for as long as it keeps moving.
+			//
+			// And cap it at contact_omega rather than max_omega, because the
+			// no-slip condition is geometrically correct yet visually wrong at
+			// these radii: a 3.5-unit grenade rolling at 200 u/s works out to 9
+			// turns a second, which on a phone screen is a smear. max_omega
+			// (40 rad/sec) exists to survive one bad frame, not to be a rolling
+			// speed.
+			if( pp.contact_omega > 0.0f )
+				SP_ClampOmega( want, pp.contact_omega );
+			SP_ClampOmega( want, pp.max_omega );
+
+			SP_VecScale( want, grip, want );
+
 			SP_VecSub( want, st->omega, diff );
 
-			k = pp.roll_grip * dt;
+			k = ( pp.roll_grip * grip + pp.slide_drag * ( 1.0f - grip )) * dt;
 			if( k > 1.0f ) k = 1.0f;
 			SP_VecMA( st->omega, k, diff, st->omega );
 
@@ -704,11 +828,21 @@ float Slayer_Spin_Rate( const slayer_spin_t *st )
 
 void Slayer_Spin_SettleTo( slayer_spin_t *st, const float *normal, float rate, float dt )
 {
+	static const float local_up[3] = { 0.0f, 0.0f, 1.0f };
+
+	// Kept as the thin case of the general function so the two cannot drift:
+	// tol_cos 1 means "no tolerance", i.e. exactly the old behaviour.
+	Slayer_Spin_SettleAxisTo( st, normal, local_up, rate, dt, 1.0f );
+}
+
+void Slayer_Spin_SettleAxisTo( slayer_spin_t *st, const float *normal,
+	const float *local_axis, float rate, float dt, float tol_cos )
+{
 	float n[3];
-	float local_up[3] = { 0.0f, 0.0f, 1.0f };
-	float cur_up[3];
+	float body[3] = { 0.0f, 0.0f, 1.0f };
+	float cur[3];
 	float axis[3];
-	float dot, angle, step;
+	float dot, angle, step, slack;
 	float dq[4], result[4];
 
 	if( !st || !normal || dt <= 0.0f )
@@ -718,28 +852,66 @@ void Slayer_Spin_SettleTo( slayer_spin_t *st, const float *normal, float rate, f
 	if( SP_VecNormalize( n ) <= 1e-3f )
 		return;
 
-	// Where the object's own up currently points.
-	SP_QuatRotate( st->orient, local_up, cur_up );
-	SP_VecNormalize( cur_up );
+	if( local_axis )
+	{
+		SP_VecCopy( local_axis, body );
+		if( SP_VecNormalize( body ) <= 1e-3f )
+		{
+			body[0] = 0.0f; body[1] = 0.0f; body[2] = 1.0f;
+		}
+	}
 
-	dot = SP_VecDot( cur_up, n );
+	// Where that body axis currently points in the world.
+	SP_QuatRotate( st->orient, body, cur );
+	SP_VecNormalize( cur );
+
+	dot = SP_VecDot( cur, n );
+
+	// A resting object may lie either way up: a rifle on its left side is as
+	// settled as one on its right, and forcing a particular side would flip
+	// models over for no reason. So the axis is treated as unsigned -- what
+	// matters is that it is PERPENDICULAR to the surface, not which end is up.
+	if( dot < 0.0f )
+	{
+		dot = -dot;
+		SP_VecScale( cur, -1.0f, cur );
+	}
+
 	if( dot > 0.9999f )
 		return;              // already aligned
-	if( dot < -1.0f ) dot = -1.0f;
 	if( dot > 1.0f ) dot = 1.0f;
+
+	// TOLERANCE. Inside it the pose already reads as resting and must be left
+	// exactly alone -- correcting a plausible pose is what looked like the model
+	// straightening itself out after it landed. It is also what allows resting on
+	// an EDGE: a weapon bridging a step is within tolerance of both surfaces, so
+	// neither pulls it flat.
+	slack = tol_cos;
+	if( slack > 1.0f ) slack = 1.0f;
+	if( slack < -1.0f ) slack = -1.0f;
+	if( dot >= slack )
+		return;
 
 	angle = (float)acos( (double)dot );
 
-	SP_VecCross( cur_up, n, axis );
+	// Ease toward the EDGE of the tolerance band, not to exact alignment: the
+	// goal is a pose that reads as resting, and stopping at the boundary keeps
+	// the correction as small as the problem.
+	if( slack < 1.0f )
+		angle -= (float)acos( (double)slack );
+	if( angle <= 0.0f )
+		return;
+
+	SP_VecCross( cur, n, axis );
 	if( SP_VecNormalize( axis ) <= 1e-4f )
 	{
-		// Exactly upside down: any perpendicular axis will do, and without this
-		// the cross product is zero and the object stays inverted forever.
-		axis[0] = 1.0f; axis[1] = 0.0f; axis[2] = 0.0f;
-		if( fabs( (double)cur_up[0] ) > 0.9 )
-		{
-			axis[0] = 0.0f; axis[1] = 1.0f;
-		}
+		// Unreachable by construction, and kept as a guard rather than a
+		// workaround: after the sign fold above |dot| < 0.9999, so the cross
+		// product has magnitude sqrt(1 - dot^2) > 0.014. The old code had a
+		// pick-any-perpendicular fallback here for the exactly-upside-down case,
+		// which the fold makes impossible -- an inverted object is resting on its
+		// other face and needs no rotation at all.
+		return;
 	}
 
 	step = angle * rate * dt;

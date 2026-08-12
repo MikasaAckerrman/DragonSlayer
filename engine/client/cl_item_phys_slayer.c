@@ -55,6 +55,16 @@ static CVAR_DEFINE_AUTO( slayer_item_settle, "1", FCVAR_ARCHIVE,
 static CVAR_DEFINE_AUTO( slayer_item_settle_rate, "6.0", FCVAR_ARCHIVE,
 	"Slayer3D: how quickly a dropped item leans onto the surface (per second)" );
 
+// How far from flat still counts as "resting", in degrees.
+//
+// Zero slack is what made a dropped weapon appear to straighten itself out after
+// it landed: any pose that was not exactly aligned got corrected, including the
+// plausible ones. With slack, only a grossly wrong pose is touched -- and an item
+// bridging a step stays leaning on the edge, because that is within tolerance of
+// both surfaces and neither pulls it flat.
+static CVAR_DEFINE_AUTO( slayer_item_settle_tol, "35", FCVAR_ARCHIVE,
+	"Slayer3D: how far from flat a resting item may lie before it is corrected (degrees)" );
+
 static CVAR_DEFINE_AUTO( slayer_item_spin, "0", FCVAR_ARCHIVE,
 	"Slayer3D: spin per unit of throw speed for dropped items (0 = default)" );
 
@@ -568,6 +578,7 @@ void Slayer_ItemPhys_Init( void )
 	Cvar_RegisterVariable( &slayer_item_phys );
 	Cvar_RegisterVariable( &slayer_item_settle );
 	Cvar_RegisterVariable( &slayer_item_settle_rate );
+	Cvar_RegisterVariable( &slayer_item_settle_tol );
 	Cvar_RegisterVariable( &slayer_item_spin );
 	Cvar_RegisterVariable( &slayer_shield_radius );
 	Cvar_RegisterVariable( &slayer_shield_spin );
@@ -607,6 +618,59 @@ void Slayer_ItemPhys_Reset( void )
 	ip_diag_last_print = 0.0;
 	ip_diag_last_reject = 0.0;
 	ip_traces = 0;
+}
+
+/*
+====================
+Slayer_IP_RestAxis
+
+Which body axis of this model should face the surface it rests on?
+
+The one along its SHORTEST extent. An object comes to rest on its largest face,
+and the largest face is the one perpendicular to the shortest dimension: a rifle
+(long in X, thin in Z) lies flat on its side, not balanced on its butt.
+
+This is why the old settling looked wrong. It aligned the model's local UP to the
+floor normal, which for a rifle is arbitrary -- its mesh is authored lying along
+its own X, so "up" has nothing to do with how it lies. Hence the report: drop a
+weapon and it slowly turns itself into a pose nothing chose.
+
+`model->mins/maxs` is the clip hull rather than the mesh extent, so it is not
+exact -- but picking the smallest of three numbers only needs the ORDER to be
+right, and for a weapon world model it is.
+====================
+*/
+static void Slayer_IP_RestAxis( struct cl_entity_s *ent, vec3_t out )
+{
+	float d[3];
+	int   i, best = 2;
+
+	VectorClear( out );
+
+	if( !ent->model )
+	{
+		out[2] = 1.0f;
+		return;
+	}
+
+	for( i = 0; i < 3; i++ )
+	{
+		d[i] = ent->model->maxs[i] - ent->model->mins[i];
+		if( d[i] < 0.0f ) d[i] = -d[i];
+	}
+
+	for( i = 0; i < 3; i++ )
+	{
+		if( d[i] < d[best] )
+			best = i;
+	}
+
+	// A hull with no meaningful extents (some server props report all zeroes)
+	// gets the historical answer rather than a zero vector.
+	if( !( d[best] > 0.01f ))
+		best = 2;
+
+	out[best] = 1.0f;
 }
 
 void Slayer_ItemPhys_Apply( struct cl_entity_s *ent )
@@ -760,12 +824,29 @@ void Slayer_ItemPhys_Apply( struct cl_entity_s *ent )
 
 		if( ip->have_rest_normal )
 		{
-			float rate = slayer_item_settle_rate.value;
+			float  rate = slayer_item_settle_rate.value;
+			float  tol;
+			vec3_t body_axis;
 
 			if( rate < 0.1f ) rate = 0.1f;
 			if( rate > 30.0f ) rate = 30.0f;
 
-			Slayer_Spin_SettleTo( &ip->spin, ip->rest_normal, rate, dt );
+			// TOLERANCE, in degrees, converted to the cosine the core wants.
+			//
+			// This is the fix for "you drop a weapon and once it lands it starts
+			// straightening itself out". Easing to exact alignment corrected poses
+			// that were already fine; with slack, a plausible pose is left alone
+			// and only a grossly wrong one (standing on end inside a step) is
+			// touched. It is also what lets an item rest ON AN EDGE: bridging a
+			// step is within tolerance of both surfaces, so neither pulls it flat.
+			tol = slayer_item_settle_tol.value;
+			if( tol < 0.0f ) tol = 0.0f;
+			if( tol > 89.0f ) tol = 89.0f;
+
+			Slayer_IP_RestAxis( ent, body_axis );
+
+			Slayer_Spin_SettleAxisTo( &ip->spin, ip->rest_normal, body_axis,
+				rate, dt, (float)cos( (double)( tol * ( M_PI / 180.0 ))));
 		}
 
 		// Long enough at rest for the lean to have converged: stop paying for it.

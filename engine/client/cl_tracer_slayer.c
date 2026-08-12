@@ -103,6 +103,23 @@ static CVAR_DEFINE_AUTO( slayer_tracer_scale, "1.0", FCVAR_ARCHIVE,
 static CVAR_DEFINE_AUTO( slayer_tracer_range, "8192", FCVAR_ARCHIVE,
 	"Slayer3D: max tracer trace distance in units" );
 
+// PENETRATION. A plain trace stops at the first surface, but bullets in CS go
+// through thin walls, doors, crates -- and through a player into the one behind
+// him. A tracer that stops on the near face is visibly disconnected from the hole
+// the shot actually left.
+//
+// The engine has no penetration query, so it is inferred geometrically: step past
+// the surface and check whether the far side is open. That also means a tracer is
+// never drawn through geometry the bullet could not have passed, which matters as
+// much as showing the ones it did.
+#define SLAYER_TRACER_MAX_PIERCE 4
+
+static CVAR_DEFINE_AUTO( slayer_tracer_pierce, "2", FCVAR_ARCHIVE,
+	"Slayer3D: how many thin surfaces a tracer may continue through (0 = none)" );
+
+static CVAR_DEFINE_AUTO( slayer_tracer_pierce_max, "12", FCVAR_ARCHIVE,
+	"Slayer3D: thickest surface a tracer will pass through, in units" );
+
 // Muzzle offset for remote players (no attachment data): forward + up + right
 // from the entity origin so the streak leaves the gun, not the chest.
 static CVAR_DEFINE_AUTO( slayer_tracer_fwd, "20", FCVAR_ARCHIVE,
@@ -325,6 +342,7 @@ static int s_impact_paired;
 static int s_impact_fallback;
 static int s_impact_foreign;   // impacts rejected as belonging to another player
 static int s_impact_back;      // shots closed by an impact that arrived FIRST
+static int s_pierced;          // surfaces a tracer continued through
 
 // Recent local impacts, for the case where the impact arrives BEFORE we detect
 // the shot. That is in fact the NORMAL case, and missing it was a real bug in
@@ -612,6 +630,8 @@ void Slayer_Tracer_Init( void )
 	Cvar_RegisterVariable( &slayer_tracer_bright );
 	Cvar_RegisterVariable( &slayer_tracer_scale );
 	Cvar_RegisterVariable( &slayer_tracer_range );
+	Cvar_RegisterVariable( &slayer_tracer_pierce );
+	Cvar_RegisterVariable( &slayer_tracer_pierce_max );
 	Cvar_RegisterVariable( &slayer_tracer_fwd );
 	Cvar_RegisterVariable( &slayer_tracer_up );
 	Cvar_RegisterVariable( &slayer_tracer_right );
@@ -683,6 +703,7 @@ void Slayer_Tracer_Reset( void )
 			s_impacts[k].used = true;
 	}
 	s_impact_paired = s_impact_fallback = s_impact_foreign = s_impact_back = 0;
+	s_pierced = 0;
 	s_event_owner = 0;
 
 	// Own pool: clear it so tracers from the previous map cannot be drawn with
@@ -816,15 +837,48 @@ static void Slayer_Tracer_SpawnBeam( const vec3_t start, const vec3_t end, float
 
 // Trace forward from `from` along `dir` (unit) up to the tracer range, and
 // write the impact point (or the far end) into `out`.
+/*
+====================
+Slayer_Tracer_TraceEnd
+
+Where does this shot's streak end?
+
+A plain trace stops at the FIRST thing it hits, and that is wrong in CS: bullets
+penetrate. A shot through a thin wall, a door, a crate, or through a player into
+the one behind him leaves a hole on the far side, and a tracer that stops on the
+near face is visibly disconnected from what actually happened -- the reported
+"tracers do not show through penetrations, players included".
+
+The engine has no "does this bullet penetrate?" query, so penetration is inferred
+from geometry, which is what the game itself does: step a short distance past the
+surface, and if the point beyond it is OPEN, the surface was thin enough to shoot
+through. Thick geometry keeps the point inside solid and the streak stops there,
+which is the whole point -- a tracer must NOT be drawn through a wall it could not
+pass.
+
+Bounded by slayer_tracer_pierce (how many surfaces) and slayer_tracer_pierce_max
+(how thick each may be), so the cost is a handful of traces on the rare shot that
+penetrates and exactly one on every other.
+====================
+*/
 static void Slayer_Tracer_TraceEnd( const vec3_t from, const vec3_t dir, vec3_t out )
 {
 	vec3_t    far_end;
+	vec3_t    origin;
 	pmtrace_t tr;
 	float     range = slayer_tracer_range.value;
+	float     thick = slayer_tracer_pierce_max.value;
+	int       pierce = (int)slayer_tracer_pierce.value;
+	int       i;
 
 	if( range < 64.0f ) range = 64.0f;
+	if( thick < 0.0f ) thick = 0.0f;
+	if( thick > 64.0f ) thick = 64.0f;
+	if( pierce < 0 ) pierce = 0;
+	if( pierce > SLAYER_TRACER_MAX_PIERCE ) pierce = SLAYER_TRACER_MAX_PIERCE;
 
 	VectorMA( from, range, dir, far_end );
+	VectorCopy( from, origin );
 
 	// PM_STUDIO_BOX: hit player/monster boxes too, so a tracer at an enemy ends
 	// on them instead of shooting through to the far wall.
@@ -847,10 +901,48 @@ static void Slayer_Tracer_TraceEnd( const vec3_t from, const vec3_t dir, vec3_t 
 		}
 	}
 
-	if( tr.fraction < 1.0f )
-		VectorCopy( tr.endpos, out );
-	else
+	if( tr.fraction >= 1.0f )
+	{
 		VectorCopy( far_end, out );
+		return;
+	}
+
+	VectorCopy( tr.endpos, out );
+
+	// --- penetration ---------------------------------------------------------
+	for( i = 0; i < pierce && thick > 0.0f; i++ )
+	{
+		vec3_t    beyond;
+		pmtrace_t probe;
+
+		// Just past the surface. Nudged along the ray rather than along the
+		// surface normal: the bullet's path is the ray, and a glancing hit on a
+		// steep face has a normal pointing somewhere the bullet never goes.
+		VectorMA( out, thick, dir, beyond );
+
+		// Is the far side open? Trace BACK from there to the hit point: a forward
+		// trace from a point inside solid reports startsolid and no distance,
+		// which cannot distinguish "thin wall" from "half a metre of concrete".
+		// Backwards, the fraction tells us how far the solid extends.
+		probe = CL_TraceLine( beyond, out, PM_STUDIO_BOX );
+
+		if( probe.startsolid || probe.allsolid )
+			break;      // still inside geometry: too thick to shoot through
+
+		// The far side is open, so continue the shot from there.
+		VectorCopy( beyond, origin );
+		tr = CL_TraceLine( origin, far_end, PM_STUDIO_BOX );
+
+		s_pierced++;
+
+		if( tr.fraction >= 1.0f )
+		{
+			VectorCopy( far_end, out );
+			return;
+		}
+
+		VectorCopy( tr.endpos, out );
+	}
 }
 
 // Variant D: try the studio muzzle. The renderer transforms attachment[0] to
@@ -1330,12 +1422,12 @@ void Slayer_Tracer_Frame( void )
 	{
 		Slayer_Log_Printf(
 			"tracer: 1s summary fired[L=%d R=%d] rawMF[L=%d R=%d] beams[ok=%d noModel=%d null=%d] "
-			"attach[used=%d approx=%d] impact[paired=%d back=%d fallback=%d foreign=%d] TE_TRACER=%d heat=%.2f model=%d "
+			"attach[used=%d approx=%d] impact[paired=%d back=%d fallback=%d foreign=%d] pierced=%d TE_TRACER=%d heat=%.2f model=%d "
 			"own[render=%d peak=%d/%d tp=%d]",
 			s_fired_local, s_fired_remote, s_mf_raw_local, s_mf_raw_remote,
 			s_beam_ok, s_beam_fail_model, s_beam_fail_null,
 			s_attach_used, s_attach_reject, s_impact_paired, s_impact_back,
-			s_impact_fallback, s_impact_foreign, s_te_tracer,
+			s_impact_fallback, s_impact_foreign, s_pierced, s_te_tracer,
 			s_heat, s_beam_model,
 			(int)slayer_tracer_render.value, s_live_peak, SLAYER_TRACER_POOL,
 			( V_IsSlayerThirdPerson() || CL_IsThirdPerson()) ? 1 : 0 );
@@ -1345,6 +1437,7 @@ void Slayer_Tracer_Frame( void )
 		s_mf_raw_local = s_mf_raw_remote = s_te_tracer = 0;
 		s_attach_used = s_attach_reject = 0;
 		s_impact_paired = s_impact_fallback = s_impact_foreign = s_impact_back = 0;
+		s_pierced = 0;
 		s_live_peak = 0;
 		s_last_summary = now;
 	}
