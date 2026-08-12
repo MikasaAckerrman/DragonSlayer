@@ -197,6 +197,8 @@ void Slayer_Spin_DefaultParams( slayer_spin_params_t *p )
 	p->spin_drag   = 3.0f;
 	p->rest_speed  = 14.0f;
 	p->rest_omega  = 0.7f;
+	p->rest_time   = 0.35f;
+	p->spinup_time = 0.30f;
 	p->max_omega   = 40.0f;
 	p->impact_dv   = 45.0f;
 }
@@ -222,11 +224,25 @@ static void SP_SanitizeParams( const slayer_spin_params_t *in, slayer_spin_param
 	if( out->air_drag < 0.0f ) out->air_drag = 0.0f;
 	if( out->spin_drag < 0.0f ) out->spin_drag = 0.0f;
 	if( out->impact_dv < 1.0f ) out->impact_dv = 1.0f;
+	if( out->rest_time < 0.0f ) out->rest_time = 0.0f;
+	if( out->spinup_time < 0.0f ) out->spinup_time = 0.0f;
 }
 
 // =============================================================================
 // Seeding
 // =============================================================================
+
+// Defined here rather than with the stepping code below because Slayer_Spin_Seed
+// needs it too: a call before the definition inside one translation unit is an
+// implicit declaration, which clang rejects and which broke this project's CI
+// once already.
+static void SP_ClampOmega( float *omega, float max_omega )
+{
+	float len = SP_VecLen( omega );
+
+	if( len > max_omega && len > 1e-6f )
+		SP_VecScale( omega, max_omega / len, omega );
+}
 
 // Tumble axis for an object flying along `vel`: across the path, so it goes
 // end-over-end rather than spinning about a fixed arbitrary axis. A per-object
@@ -287,6 +303,10 @@ void Slayer_Spin_Seed( slayer_spin_t *st, const float *orient, const float *vel,
 	SP_VecClear( st->omega );
 	st->impacts = 0;
 	st->resting = 0;
+	st->seed = seed;
+	st->spun_up = 0;
+	st->spinup_age = 0.0f;
+	st->still_time = 0.0f;
 
 	if( vel )
 	{
@@ -301,17 +321,22 @@ void Slayer_Spin_Seed( slayer_spin_t *st, const float *orient, const float *vel,
 		speed = 0.0f;
 	}
 
-	// The throw itself is what sets the object spinning. This is the one place
-	// spin is derived from speed -- afterwards it is state, and only contacts
-	// and drag change it.
+	st->spinup_peak = speed;
+
+	// The throw is what sets the object spinning, but on the frame we start
+	// tracking it the velocity is usually NOT known yet: callers derive it by
+	// differencing render positions and need two samples, so they hand us zero.
+	//
+	// This used to latch `resting` in that case, which meant the throw impulse
+	// was never applied to anything and the only spin an object could ever get
+	// came from rolling or from a bounce -- the live bug. Seeding now only
+	// records the starting speed; the impulse itself is applied by
+	// Slayer_Spin_Step while the spin-up window is open (see SP_SpinUp).
 	if( speed > 1.0f )
 	{
 		SP_TumbleAxis( vel, pp.spin_bias, seed, axis );
 		SP_VecScale( axis, speed * pp.throw_spin, st->omega );
-	}
-	else
-	{
-		st->resting = 1;
+		SP_ClampOmega( st->omega, pp.max_omega );
 	}
 }
 
@@ -319,12 +344,44 @@ void Slayer_Spin_Seed( slayer_spin_t *st, const float *orient, const float *vel,
 // Stepping
 // =============================================================================
 
-static void SP_ClampOmega( float *omega, float max_omega )
+// Throw impulse, applied during the spin-up window instead of at seeding.
+//
+// The caller's velocity is a low-passed difference of interpolated positions, so
+// on the first frames of a throw it ramps up from zero toward the real speed.
+// Taking the first sample would spin the object up from almost nothing; waiting
+// for the peak is what gives a throw its actual spin. The window therefore keeps
+// re-aiming the spin at the fastest velocity seen so far, and closes when the
+// object has had its say: time is up, or a contact/collision now owns the spin.
+static void SP_SpinUp( slayer_spin_t *st, const float *v, float speed, float dt,
+	int ramping_up, const slayer_spin_params_t *pp )
 {
-	float len = SP_VecLen( omega );
+	float axis[3];
 
-	if( len > max_omega && len > 1e-6f )
-		SP_VecScale( omega, max_omega / len, omega );
+	st->spinup_age += dt;
+
+	if( speed > st->spinup_peak + 1.0f )
+	{
+		st->spinup_peak = speed;
+
+		// Re-derive rather than accumulate: this is the same "spin from speed"
+		// step the seed used to do, just delayed until the speed is known. The
+		// axis comes from the CURRENT velocity, which by now is the flight
+		// direction rather than the noise of the first frame.
+		SP_TumbleAxis( v, pp->spin_bias, st->seed, axis );
+		SP_VecScale( axis, speed * pp->throw_spin, st->omega );
+		SP_ClampOmega( st->omega, pp->max_omega );
+	}
+	else if( !ramping_up && st->spinup_peak > pp->rest_speed )
+	{
+		// The filter has caught up and the object is no longer accelerating:
+		// the throw is fully expressed. Closing here rather than waiting out the
+		// timer keeps the later part of the flight -- where a falling object
+		// speeds up again -- from re-aiming the spin mid-air.
+		st->spun_up = 1;
+	}
+
+	if( st->spinup_age >= pp->spinup_time )
+		st->spun_up = 1;
 }
 
 void Slayer_Spin_AddImpulse( slayer_spin_t *st, const float *axis, float rad_per_sec,
@@ -348,7 +405,10 @@ void Slayer_Spin_AddImpulse( slayer_spin_t *st, const float *axis, float rad_per
 	// Any real push wakes it: a settled object that gets kicked must start
 	// turning again, and the rest latch below is what would otherwise hold it.
 	if( SP_VecLen( st->omega ) > pp.rest_omega )
+	{
 		st->resting = 0;
+		st->still_time = 0.0f;
+	}
 }
 
 // Spin an object rolling on a surface would have: omega = (n x v) / r. This is
@@ -374,9 +434,12 @@ void Slayer_Spin_Step( slayer_spin_t *st, const float *vel, float dt,
 	slayer_spin_params_t pp;
 	float v[3];
 	float dv[3];
-	float speed, dv_len;
+	float speed, prev_speed, dv_len;
 	float omega_len;
 	float dq[4], result[4];
+	int   ramping_up;
+	int   touching;
+	int   in_spinup;
 
 	if( !st || dt <= 0.0f )
 		return;
@@ -394,6 +457,37 @@ void Slayer_Spin_Step( slayer_spin_t *st, const float *vel, float dt,
 		SP_VecClear( v );
 
 	speed = SP_VecLen( v );
+	prev_speed = st->have_prev_vel ? SP_VecLen( st->prev_vel ) : 0.0f;
+	ramping_up = ( speed > prev_speed );
+	touching = ( contact && contact->on_ground );
+
+	// --- throw impulse -------------------------------------------------------
+	//
+	// Before anything else, because a thrown object must be turning on the frame
+	// it starts moving, not once it hits something.
+	in_spinup = !st->spun_up;
+	if( in_spinup )
+	{
+		if( touching && st->spinup_age > 0.0f )
+		{
+			// It reached a surface: whatever spin it has now is what it carries
+			// into rolling, and re-aiming from speed would fight the rolling
+			// convergence below.
+			st->spun_up = 1;
+		}
+		else if( speed > pp.rest_speed )
+		{
+			SP_SpinUp( st, v, speed, dt, ramping_up, &pp );
+			st->resting = 0;
+		}
+		else if( st->spinup_age > 0.0f )
+		{
+			// Was moving, now is not: the throw is over.
+			st->spinup_age += dt;
+			if( st->spinup_age >= pp.spinup_time )
+				st->spun_up = 1;
+		}
+	}
 
 	// --- collision: the velocity change IS the collision ---------------------
 	//
@@ -406,6 +500,15 @@ void Slayer_Spin_Step( slayer_spin_t *st, const float *vel, float dt,
 	{
 		SP_VecSub( v, st->prev_vel, dv );
 		dv_len = SP_VecLen( dv );
+
+		// A RISING velocity during the spin-up window is the throw itself, not a
+		// bounce. The caller's low-pass climbs from zero to a 600 u/s throw over
+		// a few frames, and each of those steps is larger than impact_dv -- so
+		// without this guard the very first frames of every throw were counted as
+		// collisions, which both inflated the hit counter and closed the spin-up
+		// window immediately, defeating the impulse.
+		if( in_spinup && ramping_up )
+			dv_len = 0.0f;
 
 		if( dv_len > pp.impact_dv )
 		{
@@ -474,6 +577,11 @@ void Slayer_Spin_Step( slayer_spin_t *st, const float *vel, float dt,
 				SP_ClampOmega( st->omega, pp.max_omega );
 				st->impacts++;
 				st->resting = 0;
+				st->still_time = 0.0f;
+				// A collision now owns the spin. Leaving the spin-up window open
+				// would let the post-bounce speed re-derive omega from scratch
+				// and erase exactly the change the bounce just made.
+				st->spun_up = 1;
 			}
 		}
 	}
@@ -527,15 +635,37 @@ void Slayer_Spin_Step( slayer_spin_t *st, const float *vel, float dt,
 	// interpolation jitters by a unit or two, so its apparent speed crosses any
 	// single threshold constantly and it twitches forever. Settling requires
 	// being clearly below; waking requires being clearly above.
+	//
+	// NOTHING RESTS IN MID-AIR. Without the contact requirement an object that
+	// happens to be slow -- the top of a lobbed arc, a grenade dropped straight
+	// down before gravity takes hold, a weapon that spawns before the server
+	// gives it velocity -- latches `resting`, stops integrating and hangs in the
+	// air unturned until it lands. That is the other half of the reported
+	// "doesn't rotate in the air, only starts moving on contact". A no-contact
+	// object may still settle, but only after staying slow for rest_time, which
+	// no falling object does: gravity moves it 100+ units/sec within a third of
+	// a second.
 	if( st->resting )
 	{
 		if( speed > pp.rest_speed * 2.0f || omega_len > pp.rest_omega * 2.0f )
+		{
 			st->resting = 0;
+			st->still_time = 0.0f;
+		}
 	}
 	else if( speed < pp.rest_speed * 0.5f && omega_len < pp.rest_omega )
 	{
-		st->resting = 1;
-		SP_VecClear( st->omega );
+		st->still_time += dt;
+
+		if( touching || st->still_time >= pp.rest_time )
+		{
+			st->resting = 1;
+			SP_VecClear( st->omega );
+		}
+	}
+	else
+	{
+		st->still_time = 0.0f;
 	}
 
 	if( st->resting )

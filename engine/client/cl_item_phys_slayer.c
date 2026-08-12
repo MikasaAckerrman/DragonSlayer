@@ -58,6 +58,24 @@ static CVAR_DEFINE_AUTO( slayer_item_settle_rate, "6.0", FCVAR_ARCHIVE,
 static CVAR_DEFINE_AUTO( slayer_item_spin, "0", FCVAR_ARCHIVE,
 	"Slayer3D: spin per unit of throw speed for dropped items (0 = default)" );
 
+// The shield is not a rifle. Its model is roughly a metre across, so with the
+// generic 7-unit radius the rolling term (omega = (n x v)/r) makes it spin about
+// twice as fast as it should for the speed it is sliding at, and it looks like it
+// is skittering. Separate parameters rather than one radius for everything.
+static CVAR_DEFINE_AUTO( slayer_shield_radius, "16.0", FCVAR_ARCHIVE,
+	"Slayer3D: effective rolling radius for a dropped shield (units)" );
+
+static CVAR_DEFINE_AUTO( slayer_shield_spin, "0.005", FCVAR_ARCHIVE,
+	"Slayer3D: spin per unit of throw speed for a dropped shield (0 = same as items)" );
+
+// How many points along the item are probed to decide which way it leans. One
+// trace gives one normal, and a rifle bridging a step then tilts fully onto
+// whichever surface happens to be under its origin while its other end sinks into
+// the geometry. Three probes (middle, nose, tail) average out to the surface the
+// item actually spans. 1 restores the old single-trace behaviour.
+static CVAR_DEFINE_AUTO( slayer_item_lean_probes, "3", FCVAR_ARCHIVE,
+	"Slayer3D: surface probes along a resting item (1..3, 1 = single trace)" );
+
 static CVAR_DEFINE_AUTO( slayer_item_diag, "0", FCVAR_ARCHIVE,
 	"Slayer3D: dropped-item physics diagnostics (0=off, 1=on, 2=on+rejected models)" );
 
@@ -80,6 +98,24 @@ static CVAR_DEFINE_AUTO( slayer_item_diag, "0", FCVAR_ARCHIVE,
 #define IP_AIR_DRAG    0.9f
 #define IP_SPIN_DRAG   6.0f
 
+// Sleeping. A bomb site late in a round holds dozens of dropped weapons, and
+// every one of them was paying for a trace per frame forever just to be told it
+// is still lying on the same floor. Once an item has been at rest long enough for
+// the settle easing to converge, it is put to sleep: no traces, no integration,
+// only the stored pose written back. Waking is decided by comparing the entity
+// origin against the position it slept at, which costs nothing.
+//
+// The delay must OUTLAST the settle easing, or an item falls asleep mid-lean and
+// freezes halfway into the floor. The easing is exponential at
+// slayer_item_settle_rate per second, so it is within a few percent after ~4 time
+// constants -- hence the delay is derived from the rate rather than being a flat
+// number, which would break as soon as the cvar was lowered.
+#define IP_SLEEP_MIN   0.5f   // sec: floor, so a fast easing still gets a moment
+#define IP_SLEEP_TAUS  4.0f   // time constants of easing to wait out
+// A resting entity's interpolated origin jitters by a fraction of a unit. Two
+// units is comfortably above that and far below any real displacement.
+#define IP_WAKE_DIST   2.0f
+
 // =============================================================================
 // State
 // =============================================================================
@@ -93,12 +129,21 @@ typedef struct
 	slayer_spin_t spin;
 	vec3_t        rest_normal;     // surface it settled on
 	qboolean      have_rest_normal;
+	vec3_t        sleep_origin;    // where it was when it fell asleep
+	float         rest_secs;      // seconds spent at rest since it stopped
+	qboolean      asleep;          // no traces are made while this is set
 	qboolean      inited;
 } item_phys_t;
 
 static item_phys_t ip_slots[IP_MAX_SLOTS];
 static double      ip_diag_last_print;
 static double      ip_diag_last_reject;
+
+// How many world traces this module has made. Only ever read by the diagnostic
+// and by the harness, which asserts it stays at zero while items sleep -- the
+// whole point of the sleep state is that a floor covered in dropped weapons
+// costs nothing, and a counter is the only way to know that stayed true.
+static unsigned int ip_traces;
 
 // =============================================================================
 // Model classification
@@ -149,11 +194,22 @@ static qboolean Slayer_IP_IsLooseItem( const char *name )
 	return false;
 }
 
+// The shield gets its own tuning, so it has to be told apart from a rifle. Same
+// substring the classifier above uses, kept as one function so the two cannot
+// disagree about what a shield is.
+static qboolean Slayer_IP_IsShield( const char *name )
+{
+	if( COM_StringEmptyOrNULL( name ))
+		return false;
+
+	return ( Q_strstr( name, "shield" ) != NULL );
+}
+
 // =============================================================================
 // Parameters
 // =============================================================================
 
-static void Slayer_IP_Params( slayer_spin_params_t *p )
+static void Slayer_IP_Params( slayer_spin_params_t *p, qboolean shield )
 {
 	Slayer_Spin_DefaultParams( p );
 
@@ -165,6 +221,37 @@ static void Slayer_IP_Params( slayer_spin_params_t *p )
 
 	if( slayer_item_spin.value > 0.0f )
 		p->throw_spin = slayer_item_spin.value;
+
+	// The shield last, so its own values win over the generic item override.
+	if( shield )
+	{
+		if( slayer_shield_radius.value > 0.0f )
+			p->radius = slayer_shield_radius.value;
+		if( slayer_shield_spin.value > 0.0f )
+			p->throw_spin = slayer_shield_spin.value;
+	}
+}
+
+// How long an item must lie still before it is allowed to sleep.
+//
+// Derived from the settle rate rather than being a constant: the lean eases
+// exponentially at that rate, so a lower rate needs a longer wait. A flat number
+// would look correct today and freeze items mid-lean the moment somebody lowered
+// slayer_item_settle_rate.
+static float Slayer_IP_SleepDelay( void )
+{
+	float rate = slayer_item_settle_rate.value;
+	float delay;
+
+	if( rate < 0.1f ) rate = 0.1f;
+	if( rate > 30.0f ) rate = 30.0f;
+
+	delay = IP_SLEEP_TAUS / rate;
+
+	if( delay < IP_SLEEP_MIN )
+		delay = IP_SLEEP_MIN;
+
+	return delay;
 }
 
 // =============================================================================
@@ -220,12 +307,22 @@ static void Slayer_IP_Seed( item_phys_t *ip, struct cl_entity_s *ent, float now 
 	VectorCopy( ent->angles, seed_angles );
 	AngleQuaternion( seed_angles, seed_orient, false );
 
-	Slayer_IP_Params( &p );
+	Slayer_IP_Params( &p, Slayer_IP_IsShield( ent->model ? ent->model->name : NULL ));
+
+	// Velocity is unknown on the frame a slot is created (it is differentiated
+	// from render positions, so it needs two samples). Pass NOTHING rather than a
+	// zero vector: on a recycled slot the field would otherwise carry the
+	// PREVIOUS item's velocity. The throw impulse is applied by the core during
+	// its spin-up window instead -- seeding a zero velocity used to make the core
+	// latch `resting`, which is why dropped items never span up in the air.
 	Slayer_Spin_Seed( &ip->spin, seed_orient, NULL, ent->index, &p );
 
 	VectorClear( ip->vel );
 	VectorClear( ip->rest_normal );
 	ip->have_rest_normal = false;
+	ip->asleep = false;
+	ip->rest_secs = 0.0f;
+	VectorClear( ip->sleep_origin );
 
 	VectorCopy( ent->origin, ip->last_origin );
 	ip->last_time = now;
@@ -263,6 +360,7 @@ static void Slayer_IP_TraceContact( struct cl_entity_s *ent,
 	// between contact and no contact between frames.
 	end[2] -= p->radius * 1.5f;
 
+	ip_traces++;
 	tr = CL_TraceLine( start, end, PM_STUDIO_IGNORE );
 
 	if( tr.fraction < 1.0f )
@@ -316,6 +414,7 @@ static qboolean Slayer_IP_FindLeanSurface( struct cl_entity_s *ent, float radius
 		end[1] = start[1] + dirs[i][1] * radius * 2.0f;
 		end[2] = start[2];
 
+		ip_traces++;
 		tr = CL_TraceLine( start, end, PM_STUDIO_IGNORE );
 		if( tr.fraction >= 1.0f )
 			continue;
@@ -337,6 +436,127 @@ static qboolean Slayer_IP_FindLeanSurface( struct cl_entity_s *ent, float radius
 	return found;
 }
 
+/*
+====================
+Slayer_IP_ModelHalfLength
+
+Half the model's longest horizontal extent, from its clipping hull.
+
+`model->mins/maxs` is the CLIP hull rather than the mesh extent -- the grenade
+pivot work established that the hard way -- so it is not trustworthy as an exact
+size. It is fine as a SCALE, which is all this needs: the probes only have to
+straddle the item, and being 20% off changes nothing about which surfaces they
+find.
+====================
+*/
+static float Slayer_IP_ModelHalfLength( struct cl_entity_s *ent, float radius )
+{
+	float dx, dy, len;
+
+	if( !ent->model )
+		return radius;
+
+	dx = ent->model->maxs[0] - ent->model->mins[0];
+	dy = ent->model->maxs[1] - ent->model->mins[1];
+
+	len = ( dx > dy ) ? dx : dy;
+	len *= 0.5f;
+
+	// A degenerate or absurd hull must not send probes across the map.
+	if( len < 2.0f )    len = radius;
+	if( len > 48.0f )   len = 48.0f;
+
+	return len;
+}
+
+/*
+====================
+Slayer_IP_FindRestNormal
+
+Which way should a resting item lean?
+
+ONE trace gives ONE normal, and that is wrong exactly where it matters: a rifle
+lying half on a step and half on the floor gets whichever surface happens to be
+under its origin, so the model tilts fully onto that one and its other end sinks
+into the geometry. The reported symptom was items poking through textures at
+corners and standing at odd angles on stairs.
+
+So the item is probed at several points ALONG ITS OWN LENGTH -- nose, middle,
+tail, taken from the model hull and rotated by the entity's yaw -- and the
+normals are averaged. On flat ground every probe agrees and the result is
+identical to the single trace. On a 90-degree step the average is the diagonal
+between floor and step, which is what an object bridging the two actually rests
+at. Where nothing is found below, the horizontal wall probes still apply.
+
+Cost: three traces, once, when an item comes to rest. It then sleeps and traces
+nothing at all (see the sleep policy in Slayer_ItemPhys_Apply).
+====================
+*/
+static qboolean Slayer_IP_FindRestNormal( struct cl_entity_s *ent, float radius,
+	vec3_t out_normal )
+{
+	vec3_t forward, right, up;
+	vec3_t sum;
+	float  half;
+	int    probes = (int)slayer_item_lean_probes.value;
+	int    hits = 0;
+	int    i;
+
+	if( probes < 1 ) probes = 1;
+	if( probes > 3 ) probes = 3;
+
+	VectorClear( sum );
+
+	AngleVectors( ent->angles, forward, right, up );
+	half = Slayer_IP_ModelHalfLength( ent, radius );
+
+	for( i = 0; i < probes; i++ )
+	{
+		vec3_t    start, end;
+		pmtrace_t tr;
+		float     along;
+
+		// Middle first, then the ends: with probes == 1 this degenerates to
+		// exactly the old single downward trace.
+		if( i == 0 )      along = 0.0f;
+		else if( i == 1 ) along =  half;
+		else              along = -half;
+
+		VectorCopy( ent->origin, start );
+		start[0] += forward[0] * along;
+		start[1] += forward[1] * along;
+		start[2] += forward[2] * along;
+
+		VectorCopy( start, end );
+		end[2] -= radius * 2.0f;
+
+		ip_traces++;
+		tr = CL_TraceLine( start, end, PM_STUDIO_IGNORE );
+		if( tr.fraction >= 1.0f )
+			continue;
+
+		sum[0] += tr.plane.normal[0];
+		sum[1] += tr.plane.normal[1];
+		sum[2] += tr.plane.normal[2];
+		hits++;
+	}
+
+	if( hits > 0 )
+	{
+		// The average of unit normals is not a unit vector, and two opposed
+		// normals (an item wedged in a slot) can cancel out entirely -- in which
+		// case there is no meaningful lean and the wall probes should decide.
+		if( VectorLength( sum ) > 0.1f )
+		{
+			VectorNormalize( sum );
+			VectorCopy( sum, out_normal );
+			return true;
+		}
+	}
+
+	return Slayer_IP_FindLeanSurface( ent, radius, out_normal );
+}
+
 // =============================================================================
 // Public API
 // =============================================================================
@@ -349,6 +569,9 @@ void Slayer_ItemPhys_Init( void )
 	Cvar_RegisterVariable( &slayer_item_settle );
 	Cvar_RegisterVariable( &slayer_item_settle_rate );
 	Cvar_RegisterVariable( &slayer_item_spin );
+	Cvar_RegisterVariable( &slayer_shield_radius );
+	Cvar_RegisterVariable( &slayer_shield_spin );
+	Cvar_RegisterVariable( &slayer_item_lean_probes );
 	Cvar_RegisterVariable( &slayer_item_diag );
 
 	for( i = 0; i < IP_MAX_SLOTS; i++ )
@@ -359,7 +582,7 @@ void Slayer_ItemPhys_Init( void )
 
 		// Seed rather than rely on the memset: an all-zero quaternion is not a
 		// rotation and produces a degenerate matrix if it ever reaches one.
-		Slayer_IP_Params( &p );
+		Slayer_IP_Params( &p, false );
 		Slayer_Spin_Seed( &ip_slots[i].spin, NULL, NULL, i, &p );
 	}
 }
@@ -373,10 +596,17 @@ void Slayer_ItemPhys_Reset( void )
 		ip_slots[i].inited = false;
 		ip_slots[i].index = 0;
 		ip_slots[i].last_time = 0.0f;
+		// A sleeping slot must not survive a map change: the new map's entity at
+		// this index would inherit "asleep at these coordinates" and never be
+		// simulated. `inited` already forces a reseed, but clearing this keeps
+		// the two flags from disagreeing.
+		ip_slots[i].asleep = false;
+		ip_slots[i].rest_secs = 0.0f;
 	}
 
 	ip_diag_last_print = 0.0;
 	ip_diag_last_reject = 0.0;
+	ip_traces = 0;
 }
 
 void Slayer_ItemPhys_Apply( struct cl_entity_s *ent )
@@ -413,7 +643,7 @@ void Slayer_ItemPhys_Apply( struct cl_entity_s *ent )
 	if( !ip )
 		return;
 
-	Slayer_IP_Params( &params );
+	Slayer_IP_Params( &params, Slayer_IP_IsShield( ent->model->name ));
 
 	if( !ip->inited || ip->index != ent->index || ( now - ip->last_time ) > IP_LIFETIME )
 	{
@@ -437,6 +667,36 @@ void Slayer_ItemPhys_Apply( struct cl_entity_s *ent )
 		VectorCopy( ent->origin, ip->last_origin );
 		Slayer_Spin_PoseToAngles( &ip->spin, ent->angles );
 		return;
+	}
+
+	// --- sleep ---------------------------------------------------------------
+	//
+	// A settled item costs nothing: no traces, no integration, just the stored
+	// pose written back. Waking is decided by comparing the entity origin with
+	// where it slept, which is free -- the alternative (tracing to check whether
+	// the floor is still there) is what this is here to avoid.
+	if( ip->asleep )
+	{
+		VectorSubtract( ent->origin, ip->sleep_origin, delta );
+
+		if( VectorLength( delta ) < IP_WAKE_DIST )
+		{
+			Slayer_Spin_PoseToAngles( &ip->spin, ent->angles );
+			ip->last_time = now;
+			VectorCopy( ent->origin, ip->last_origin );
+			return;
+		}
+
+		// It moved: picked up and re-thrown, or shoved by an explosion. Start
+		// over, including the throw impulse -- the next flight is a new throw.
+		ip->asleep = false;
+		ip->rest_secs = 0.0f;
+		ip->have_rest_normal = false;
+		ip->spin.spun_up = 0;
+		ip->spin.spinup_age = 0.0f;
+		ip->spin.spinup_peak = 0.0f;
+		VectorClear( ip->vel );
+		VectorCopy( ent->origin, ip->last_origin );
 	}
 
 	VectorSubtract( ent->origin, ip->last_origin, delta );
@@ -480,12 +740,14 @@ void Slayer_ItemPhys_Apply( struct cl_entity_s *ent )
 	// falling.
 	if( slayer_item_settle.value != 0.0f && Slayer_Spin_IsResting( &ip->spin ))
 	{
+		ip->rest_secs += dt;
+
 		// The surface is found ONCE and remembered. Re-tracing every frame would
-		// spend four traces per resting item forever, and a resting item's
+		// spend traces per resting item forever, and a resting item's
 		// surroundings do not change.
 		if( !ip->have_rest_normal )
 		{
-			if( Slayer_IP_FindLeanSurface( ent, params.radius, ip->rest_normal ))
+			if( Slayer_IP_FindRestNormal( ent, params.radius, ip->rest_normal ))
 			{
 				ip->have_rest_normal = true;
 			}
@@ -505,9 +767,29 @@ void Slayer_ItemPhys_Apply( struct cl_entity_s *ent )
 
 			Slayer_Spin_SettleTo( &ip->spin, ip->rest_normal, rate, dt );
 		}
+
+		// Long enough at rest for the lean to have converged: stop paying for it.
+		// From here on the item costs one vector compare per frame until it moves.
+		if( ip->rest_secs >= Slayer_IP_SleepDelay() )
+		{
+			ip->asleep = true;
+			VectorCopy( ent->origin, ip->sleep_origin );
+		}
+	}
+	else if( Slayer_Spin_IsResting( &ip->spin ))
+	{
+		// Settling disabled, but resting all the same: still worth sleeping,
+		// there is nothing left to compute either way.
+		ip->rest_secs += dt;
+		if( ip->rest_secs >= Slayer_IP_SleepDelay() )
+		{
+			ip->asleep = true;
+			VectorCopy( ent->origin, ip->sleep_origin );
+		}
 	}
 	else
 	{
+		ip->rest_secs = 0.0f;
 		// Moving again (picked up and re-thrown, or knocked by an explosion):
 		// forget the surface so the next rest re-finds it.
 		ip->have_rest_normal = false;
@@ -524,10 +806,12 @@ void Slayer_ItemPhys_Apply( struct cl_entity_s *ent )
 		ip_diag_last_print = cl.time;
 
 		Slayer_Log_Printf( "IP idx=%d model=%s speed=%.0f omega=%.2f hits=%d rest=%d "
-			"lean=%d n=(%.2f %.2f %.2f) ang=(%.1f %.1f %.1f)",
+			"spun=%d asleep=%d traces=%u lean=%d n=(%.2f %.2f %.2f) ang=(%.1f %.1f %.1f)",
 			ent->index, ent->model->name, speed,
 			Slayer_Spin_Rate( &ip->spin ), ip->spin.impacts,
-			Slayer_Spin_IsResting( &ip->spin ), (int)ip->have_rest_normal,
+			Slayer_Spin_IsResting( &ip->spin ),
+			ip->spin.spun_up, (int)ip->asleep, ip_traces,
+			(int)ip->have_rest_normal,
 			ip->rest_normal[0], ip->rest_normal[1], ip->rest_normal[2],
 			ent->angles[0], ent->angles[1], ent->angles[2] );
 	}

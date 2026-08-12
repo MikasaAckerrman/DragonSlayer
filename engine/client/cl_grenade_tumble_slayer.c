@@ -104,6 +104,21 @@ static CVAR_DEFINE_AUTO( slayer_grenade_pivot_fix,
 	"0", FCVAR_ARCHIVE,
 	"Slayer3D: grenade pivot compensation (0=off — bbox centre is the clip hull, not the mesh centre)" );
 
+// Opt-in escape hatch for the compensation above, and the reason the cvar alone
+// is not enough: `slayer_grenade_pivot_fix` is FCVAR_ARCHIVE, so a value stored
+// by an older build survives the newer default of 0. The device config still had
+// `slayer_grenade_pivot_fix "2"`, and the log showed shift=(-6.1 3.6 -3.8) — the
+// grenade drawn six units away from where it lay, which is precisely the
+// "the centre of rotation is offset, it jerks on the ground" report.
+//
+// Migrating the archived value at init cannot fix this: cvars are registered in
+// CL_Init but `exec config.cfg` runs afterwards, so the stored value is applied
+// again right after any migration lowered it. The only order-independent fix is
+// to CLAMP at the point of use, which is what Slayer_GT_PivotEnabled does.
+static CVAR_DEFINE_AUTO( slayer_grenade_pivot_allow,
+	"0", FCVAR_ARCHIVE,
+	"Slayer3D: allow slayer_grenade_pivot_fix to actually move the entity (0 = clamp it off)" );
+
 static CVAR_DEFINE_AUTO( slayer_grenade_diag,
 	"0", FCVAR_ARCHIVE,
 	"Slayer3D: grenade tumble diagnostics to slayer_diag.log (0=off, 1=on, 2=on+rejected models)" );
@@ -166,6 +181,27 @@ static double gt_diag_last_print_l3 = 0.0;  // level-3: rejected model names
 // =============================================================================
 // Helpers
 // =============================================================================
+
+/*
+====================
+Slayer_GT_PivotEnabled
+
+Is the pivot compensation allowed to move the entity this frame?
+
+Clamped here rather than migrated at init, for the reason spelled out at the
+cvar: an archived value is re-applied by config.cfg AFTER cvar registration, so
+no amount of fixing it up during init survives. Clamping at the point of use is
+order-independent — a config may set the cvar to anything and the entity still
+stays where the server put it unless slayer_grenade_pivot_allow says otherwise.
+====================
+*/
+static qboolean Slayer_GT_PivotEnabled( void )
+{
+	if( slayer_grenade_pivot_fix.value == 0.0f )
+		return false;
+
+	return ( slayer_grenade_pivot_allow.value != 0.0f );
+}
 
 static qboolean Slayer_GT_IsGrenadeModel( const char *name )
 {
@@ -296,12 +332,18 @@ static void Slayer_GT_InitSlot( grenade_tumble_t *gt, struct cl_entity_s *ent, f
 	VectorCopy( ent->angles, seed_angles );
 	AngleQuaternion( seed_angles, seed_orient, false );
 
-	// No velocity sample yet on a fresh slot -- the first moving frame supplies
-	// it. Seeding with zero would tell the core the grenade was dropped, and it
-	// would settle instead of tumbling; so the seed carries the last known
-	// velocity, which is zero only for a genuinely new slot.
+	// No velocity sample yet on a fresh slot: velocity here is differentiated
+	// from render positions, so it takes two frames to exist. Pass NOTHING
+	// rather than gt->vel -- on a recycled slot that field still holds the
+	// PREVIOUS grenade's velocity, which would seed this one's spin from a throw
+	// that never happened.
+	//
+	// The throw impulse is applied by the core during its spin-up window instead
+	// (see slayer_spin_t::spun_up). Seeding with a velocity of zero used to make
+	// the core latch `resting`, so the impulse was never applied at all and
+	// grenades only span up once they touched something.
 	Slayer_GrenadeTumble_Params( &p );
-	Slayer_Spin_Seed( &gt->spin, seed_orient, gt->vel, ent->index, &p );
+	Slayer_Spin_Seed( &gt->spin, seed_orient, NULL, ent->index, &p );
 
 	VectorClear( gt->vel );
 
@@ -362,7 +404,7 @@ static void Slayer_GT_CompensatePivot( struct cl_entity_s *ent )
 	// NOTE: the shift is computed even when the compensation is disabled, so the
 	// diagnostic can still report what it *would* have done. Only the final
 	// application to ent->origin is gated.
-	if( !slayer_grenade_pivot_fix.value && slayer_grenade_diag.value < 1.0f )
+	if( !Slayer_GT_PivotEnabled() && slayer_grenade_diag.value < 1.0f )
 		return;
 	if( !ent->model )
 		return;
@@ -400,8 +442,9 @@ static void Slayer_GT_CompensatePivot( struct cl_entity_s *ent )
 	VectorSubtract( rotated_L, L_center, shift );
 
 	// Apply only when explicitly enabled — see the cvar comment for why this is
-	// off by default.
-	if( slayer_grenade_pivot_fix.value )
+	// off by default, and Slayer_GT_PivotEnabled for why an archived value
+	// cannot re-enable it on its own.
+	if( Slayer_GT_PivotEnabled() )
 		VectorSubtract( ent->origin, shift, ent->origin );
 
 	// Capture for the throttled diagnostic (see the tumble step below).
@@ -512,6 +555,7 @@ void Slayer_GrenadeTumble_Init( void )
 
 	Cvar_RegisterVariable( &slayer_grenade_tumble );
 	Cvar_RegisterVariable( &slayer_grenade_pivot_fix );
+	Cvar_RegisterVariable( &slayer_grenade_pivot_allow );
 	Cvar_RegisterVariable( &slayer_grenade_diag );
 	Cvar_RegisterVariable( &slayer_grenade_spin );
 	Cvar_RegisterVariable( &slayer_grenade_grip );

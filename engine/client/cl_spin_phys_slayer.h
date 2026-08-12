@@ -54,6 +54,12 @@ typedef struct
 	float spin_drag;     // 1/sec: extra decay of spin about the contact normal
 	float rest_speed;    // units/sec: below this it may settle
 	float rest_omega;    // rad/sec: below this it may settle
+	float rest_time;     // sec: how long "slow" must last to settle WITHOUT a
+	                     // reported contact. Nothing rests in mid-air, so an
+	                     // object with no contact has to prove it is not simply
+	                     // passing through the slow part of its arc.
+	float spinup_time;   // sec: how long the throw impulse may keep tracking a
+	                     // rising velocity before it is considered final
 	float max_omega;     // rad/sec: hard cap, keeps one bad frame from blurring
 	float impact_dv;     // units/sec: velocity change that counts as a collision
 } slayer_spin_params_t;
@@ -77,6 +83,28 @@ typedef struct
 	int   have_prev_vel;
 	int   resting;       // latched with hysteresis, see Slayer_Spin_Step
 	int   impacts;       // diagnostics: collisions seen since seeding
+
+	// THE THROW IMPULSE IS APPLIED IN Slayer_Spin_Step, NOT IN Slayer_Spin_Seed.
+	//
+	// Seeding happens on the first frame an object becomes visible, and on that
+	// frame its velocity is not known yet: the caller derives velocity by
+	// differencing render positions, so it needs two samples, and the value it
+	// passes to the seed is zero. The core used to take that zero as "this was
+	// dropped, not thrown" and latch `resting` -- which meant the throw impulse
+	// was never applied to anything, ever. Objects then only span up from
+	// contact (rolling, bounces), which is exactly what the reported bug looked
+	// like: "grenades roll along the ground instead of tumbling in the air",
+	// "dropped weapons only start moving when they touch a surface".
+	//
+	// So the spin-up is a WINDOW rather than an event: while the object has not
+	// spun up yet, the spin tracks the rising velocity, and the window closes as
+	// soon as the velocity stops rising (the caller's low-pass has caught up) or
+	// something happens that owns the spin instead -- a collision or a contact.
+	int   spun_up;       // throw impulse has been applied and is final
+	float spinup_peak;   // highest speed seen during the spin-up window
+	float spinup_age;    // seconds the window has been open
+	float still_time;    // seconds spent slow enough to be considered settled
+	int   seed;          // per-object tumble bias, kept so the window can re-aim
 } slayer_spin_t;
 
 // Sensible defaults for a hand grenade (radius ~3.5 units).
