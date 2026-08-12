@@ -39,6 +39,7 @@ GNU General Public License for more details.
 #include "cl_item_phys_slayer.h"
 #include "cl_spin_phys_slayer.h"
 #include "cl_model_extent_slayer.h"
+#include "cl_item_place_slayer.h"
 #include "cl_slayer_log.h"
 
 // =============================================================================
@@ -91,6 +92,35 @@ static CVAR_DEFINE_AUTO( slayer_item_topple_bounce, "0.10", FCVAR_ARCHIVE,
 
 static CVAR_DEFINE_AUTO( slayer_item_extent, "1", FCVAR_ARCHIVE,
 	"Slayer3D: measure model size from the mesh (0 = use the engine's hull, which has the axes wrong on 24 of 34 stock models)" );
+
+// VISUAL PLACEMENT. The toppling above answers "which way does this box tip",
+// which is a good answer to a different question: it reasons about ONE traced
+// plane, so it cannot know that the far end of a rifle is inside a step, that the
+// model is clipping a wall it never traced toward, or that the origin sits low
+// enough that no rotation at all keeps the mesh out of the floor. Those are the
+// three things the player actually sees.
+//
+// The solver in cl_item_place_slayer.c asks the other question -- is the whole box
+// outside the world -- and searches poses until it is. 1 = on.
+static CVAR_DEFINE_AUTO( slayer_item_place, "1", FCVAR_ARCHIVE,
+	"Slayer3D: search for a pose in which the model does not intersect the map (0 = off)" );
+
+// How far the DRAWN position may be nudged to get a model out of the floor.
+// Rotation cannot fix a mesh whose origin the server parked below the surface, and
+// that is the "half inside the texture" case. Bounded hard: a CS weaponbox pickup
+// volume is tens of units across, so a few units cannot move the model out of what
+// picks it up, and only the rendered position moves -- never the entity.
+static CVAR_DEFINE_AUTO( slayer_item_place_lift, "6", FCVAR_ARCHIVE,
+	"Slayer3D: largest visual nudge used to lift a model out of geometry (units, 0 = never move)" );
+
+static CVAR_DEFINE_AUTO( slayer_item_place_yaws, "12", FCVAR_ARCHIVE,
+	"Slayer3D: rotations tried when searching for a non-intersecting pose" );
+
+static CVAR_DEFINE_AUTO( slayer_item_place_tilts, "4", FCVAR_ARCHIVE,
+	"Slayer3D: tilts tried when searching for a non-intersecting pose" );
+
+static CVAR_DEFINE_AUTO( slayer_item_place_traces, "512", FCVAR_ARCHIVE,
+	"Slayer3D: trace budget for one placement search (spent once per item, not per frame)" );
 
 static CVAR_DEFINE_AUTO( slayer_item_spin, "0", FCVAR_ARCHIVE,
 	"Slayer3D: spin per unit of throw speed for dropped items (0 = default)" );
@@ -169,6 +199,9 @@ typedef struct
 	qboolean      have_rest_normal;
 	int           support;         // SLAYER_SUPPORT_*, last reported
 	qboolean      topple_settled;  // the core says the pose is final
+	vec3_t        place_offset;    // visual nudge from the placement solver
+	qboolean      placed;          // the solver has run for this rest position
+	qboolean      place_ok;        // and found a pose with no intersection
 	vec3_t        sleep_origin;    // where it was when it fell asleep
 	float         rest_secs;      // seconds spent at rest since it stopped
 	qboolean      asleep;          // no traces are made while this is set
@@ -714,6 +747,11 @@ void Slayer_ItemPhys_Init( void )
 	Cvar_RegisterVariable( &slayer_item_topple_damping );
 	Cvar_RegisterVariable( &slayer_item_topple_bounce );
 	Cvar_RegisterVariable( &slayer_item_extent );
+	Cvar_RegisterVariable( &slayer_item_place );
+	Cvar_RegisterVariable( &slayer_item_place_lift );
+	Cvar_RegisterVariable( &slayer_item_place_yaws );
+	Cvar_RegisterVariable( &slayer_item_place_tilts );
+	Cvar_RegisterVariable( &slayer_item_place_traces );
 	Cvar_RegisterVariable( &slayer_item_spin );
 	Cvar_RegisterVariable( &slayer_shield_radius );
 	Cvar_RegisterVariable( &slayer_shield_spin );
@@ -748,11 +786,98 @@ void Slayer_ItemPhys_Reset( void )
 		// the two flags from disagreeing.
 		ip_slots[i].asleep = false;
 		ip_slots[i].rest_secs = 0.0f;
+		// Same for the placement: a solved offset belongs to one spot on one map.
+		ip_slots[i].placed = false;
+		ip_slots[i].place_ok = false;
+		VectorClear( ip_slots[i].place_offset );
 	}
 
 	ip_diag_last_print = 0.0;
 	ip_diag_last_reject = 0.0;
 	ip_traces = 0;
+}
+
+/*
+====================
+Slayer_IP_PlaceTrace
+
+The world, as the placement solver wants it: one line trace, plus whether the
+start point was already inside geometry.
+
+`startsolid` is the important part and it is what CL_TraceLine gives us almost for
+free. The solver's containment test depends on being able to tell "the ray hit a
+wall on its way out" from "the ray began inside a wall" -- without that
+distinction a model buried in the floor looks the same as one lying on it.
+====================
+*/
+static int Slayer_IP_PlaceTrace( void *ctx, const float *start, const float *end,
+	float *out_frac, float *out_normal, int *out_startsolid )
+{
+	pmtrace_t tr;
+	vec3_t    s, e;
+
+	(void)ctx;
+
+	VectorCopy( start, s );
+	VectorCopy( end, e );
+
+	ip_traces++;
+	tr = CL_TraceLine( s, e, PM_STUDIO_IGNORE );
+
+	*out_startsolid = tr.startsolid ? 1 : 0;
+	*out_frac = tr.fraction;
+	VectorCopy( tr.plane.normal, out_normal );
+
+	// startsolid comes back with fraction 0 and no useful plane, so it has to be
+	// reported as a hit even though `fraction < 1` would not be enough to tell.
+	return ( tr.fraction < 1.0f || tr.startsolid ) ? 1 : 0;
+}
+
+static void Slayer_IP_PlaceParams( slayer_place_params_t *sp )
+{
+	Slayer_Place_DefaultParams( sp );
+
+	if( slayer_item_place_yaws.value >= 1.0f )
+		sp->yaw_steps = (int)slayer_item_place_yaws.value;
+	if( slayer_item_place_tilts.value >= 1.0f )
+		sp->tilt_steps = (int)slayer_item_place_tilts.value;
+	if( slayer_item_place_lift.value >= 0.0f )
+		sp->max_lift = slayer_item_place_lift.value;
+	if( slayer_item_place_traces.value >= 16.0f )
+		sp->max_traces = (int)slayer_item_place_traces.value;
+}
+
+/*
+====================
+Slayer_IP_ApplyPose
+
+Write the stored pose to the entity, and add the visual nudge.
+
+Every path that returns early has to go through here, or an item would be drawn
+with its solved pose on the frames that integrate and WITHOUT the nudge on the
+frames that do not -- which is a two-unit twitch every time the item is skipped.
+The sleeping path is the one that matters: a settled item takes that path forever.
+
+The nudge is the one place in this module that changes where an item is drawn. It
+exists because rotation cannot save a mesh whose origin the server parked below the
+surface, which is the "half inside the texture" case. Bounded by
+slayer_item_place_lift and capped again inside the solver; a CS weaponbox pickup
+volume is tens of units across, so what you see stays inside what you can pick up.
+`ent->origin` is this frame's render copy, so the entity's own state is untouched.
+====================
+*/
+static void Slayer_IP_ApplyPose( item_phys_t *ip, struct cl_entity_s *ent )
+{
+	Slayer_Spin_PoseToAngles( &ip->spin, ent->angles );
+
+	if( !ip->placed )
+		return;
+
+	if( ip->place_offset[0] == 0.0f && ip->place_offset[1] == 0.0f
+	 && ip->place_offset[2] == 0.0f )
+		return;
+
+	VectorAdd( ent->origin, ip->place_offset, ent->origin );
 }
 
 /*
@@ -841,7 +966,7 @@ void Slayer_ItemPhys_Apply( struct cl_entity_s *ent )
 	if( !ip->inited || ip->index != ent->index || ( now - ip->last_time ) > IP_LIFETIME )
 	{
 		Slayer_IP_Seed( ip, ent, now );
-		Slayer_Spin_PoseToAngles( &ip->spin, ent->angles );
+		Slayer_IP_ApplyPose( ip, ent );
 		return;
 	}
 
@@ -849,7 +974,7 @@ void Slayer_ItemPhys_Apply( struct cl_entity_s *ent )
 	if( dt <= 0.0f )
 	{
 		// Same frame, second visibility pass: reapply, do not integrate twice.
-		Slayer_Spin_PoseToAngles( &ip->spin, ent->angles );
+		Slayer_IP_ApplyPose( ip, ent );
 		return;
 	}
 	if( dt > 0.5f )
@@ -858,7 +983,7 @@ void Slayer_ItemPhys_Apply( struct cl_entity_s *ent )
 		// half-second step, which would spin the item through several turns.
 		ip->last_time = now;
 		VectorCopy( ent->origin, ip->last_origin );
-		Slayer_Spin_PoseToAngles( &ip->spin, ent->angles );
+		Slayer_IP_ApplyPose( ip, ent );
 		return;
 	}
 
@@ -874,9 +999,12 @@ void Slayer_ItemPhys_Apply( struct cl_entity_s *ent )
 
 		if( VectorLength( delta ) < IP_WAKE_DIST )
 		{
-			Slayer_Spin_PoseToAngles( &ip->spin, ent->angles );
+			// Bookkeeping before the pose, for the reason spelled out at the bottom
+			// of this function: ApplyPose adds the visual nudge to ent->origin, and
+			// storing THAT as last_origin would imply a constant phantom velocity.
 			ip->last_time = now;
 			VectorCopy( ent->origin, ip->last_origin );
+			Slayer_IP_ApplyPose( ip, ent );
 			return;
 		}
 
@@ -885,6 +1013,11 @@ void Slayer_ItemPhys_Apply( struct cl_entity_s *ent )
 		ip->asleep = false;
 		ip->rest_secs = 0.0f;
 		ip->have_rest_normal = false;
+		// And the placement: a solved pose and offset belong to the spot it was
+		// solved for. Carrying them to a new spot is worse than not having them.
+		ip->placed = false;
+		ip->place_ok = false;
+		VectorClear( ip->place_offset );
 		ip->spin.spun_up = 0;
 		ip->spin.spinup_age = 0.0f;
 		ip->spin.spinup_peak = 0.0f;
@@ -900,7 +1033,7 @@ void Slayer_ItemPhys_Apply( struct cl_entity_s *ent )
 	if( speed > IP_MAX_SPEED * 2.0f )
 	{
 		Slayer_IP_Seed( ip, ent, now );
-		Slayer_Spin_PoseToAngles( &ip->spin, ent->angles );
+		Slayer_IP_ApplyPose( ip, ent );
 		return;
 	}
 
@@ -1004,6 +1137,56 @@ void Slayer_ItemPhys_Apply( struct cl_entity_s *ent )
 		// found.
 		if( ip->topple_settled || ip->rest_secs >= Slayer_IP_SleepDelay() )
 		{
+			// --- placement, once, at the moment it stops -------------------
+			//
+			// This is the answer to "part of the weapon is inside the floor". The
+			// toppling above produces a plausible pose against ONE plane; this
+			// checks the whole box against everything around it and searches for a
+			// pose (and, if rotation cannot do it, a small drawn nudge) in which no
+			// part of the model is inside the map.
+			//
+			// Deliberately here rather than per frame: the search costs a few dozen
+			// traces, and running it once when the item settles makes that free,
+			// while running it continuously would be the most expensive thing in
+			// the module. The result is frozen until the item moves.
+			if( !ip->placed && slayer_item_place.value != 0.0f )
+			{
+				vec3_t half;
+
+				ip->placed = true;
+				VectorClear( ip->place_offset );
+				ip->place_ok = false;
+
+				if( Slayer_IP_ModelBox( ent, half ))
+				{
+					slayer_place_params_t  sp;
+					slayer_place_result_t  res;
+					vec4_t                 pose;
+
+					Slayer_IP_PlaceParams( &sp );
+					Vector4Copy( ip->spin.orient, pose );
+
+					Slayer_Place_Solve( half, ent->origin, pose,
+						Slayer_IP_PlaceTrace, NULL, &sp, &res );
+
+					if( res.candidates > 0 )
+					{
+						Vector4Copy( res.orient, ip->spin.orient );
+						VectorCopy( res.offset, ip->place_offset );
+						ip->place_ok = ( res.solved != 0 );
+
+						if( slayer_item_diag.value >= 1.0f )
+						{
+							Slayer_Log_Printf( "IP place idx=%d model=%s solved=%d pen=%.2f contacts=%d cand=%d traces=%d off=(%.1f %.1f %.1f)",
+								ent->index, ent->model->name, res.solved,
+								res.penetration, res.contacts, res.candidates,
+								res.traces,
+								res.offset[0], res.offset[1], res.offset[2] );
+						}
+					}
+				}
+			}
+
 			ip->asleep = true;
 			VectorCopy( ent->origin, ip->sleep_origin );
 		}
@@ -1023,16 +1206,29 @@ void Slayer_ItemPhys_Apply( struct cl_entity_s *ent )
 	{
 		ip->rest_secs = 0.0f;
 		// Moving again (picked up and re-thrown, or knocked by an explosion):
-		// forget the surface so the next rest re-finds it.
+		// forget the surface so the next rest re-finds it, and forget the placement
+		// so the next rest re-solves it. A stale offset would follow the item to its
+		// new position, where it means nothing.
 		ip->have_rest_normal = false;
 		ip->topple_settled = false;
 		ip->support = 0;
+		ip->placed = false;
+		ip->place_ok = false;
+		VectorClear( ip->place_offset );
 	}
 
-	Slayer_Spin_PoseToAngles( &ip->spin, ent->angles );
-
+	// BOOKKEEPING BEFORE THE POSE IS APPLIED, and this ordering is not cosmetic.
+	//
+	// `last_origin` is what the next frame differences against to work out the
+	// item's speed, and `sleep_origin` is what the wake check compares to. Both
+	// must hold the SERVER's position. Storing the nudged position instead would
+	// make the item appear to move by the nudge distance every frame -- a constant
+	// phantom velocity that would wake it immediately, re-solve the placement, and
+	// repeat forever. Slayer_IP_ApplyPose is what adds the nudge, so it comes after.
 	VectorCopy( ent->origin, ip->last_origin );
 	ip->last_time = now;
+
+	Slayer_IP_ApplyPose( ip, ent );
 
 	if( slayer_item_diag.value >= 1.0f
 	 && cl.time - ip_diag_last_print >= IP_DIAG_INTERVAL )
