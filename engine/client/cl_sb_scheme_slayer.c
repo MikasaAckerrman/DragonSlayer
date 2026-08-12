@@ -265,20 +265,58 @@ typedef struct
 	const char  *key;          // full KeyValues key
 	unsigned int flag;         // SLAYER_SCHEME_HAS_*
 	int          offset;       // byte offset of the field inside slayer_sb_scheme_t
+	int          prio;         // SB_PRIO_*, higher wins when two keys feed one field
 } sb_wanted_t;
 
 #define SB_FIELD( f ) ( (int)( (char *)&( (slayer_sb_scheme_t *)0 )->f - (char *)0 ) )
 
+// TWO FAMILIES OF KEYS, AND WHY BOTH ARE NEEDED
+//
+// The board's colours were originally taken from `TrackerScheme.res`, whose
+// `SectionedListPanel.*` keys do describe a SectionedListPanel -- but that file
+// is the Tracker/Friends scheme, and its palette is OLIVE (`Orange` there is
+// "142 137 35", Button.BgColor "76 88 68"). That is not what a CS 1.6 scoreboard
+// looks like, and the player who asked for "colours from the game" meant the
+// game's board, not the buddy list.
+//
+// The board's real scheme is `resource/ClientScheme.res`, where the relevant
+// entries are named for their purpose rather than for a widget class:
+//
+//     "ListBG"       "0 0 0 128"       // the file's own comment: "background of scoreboard"
+//     "BaseText"     "255 176 0 255"   // amber, "used in text windows, lists"
+//     "SelectionBG"  "10 10 10 100"    // near-black selection, not an olive bar
+//     "BorderBright" "188 112 0 128"
+//
+// Measured against the game's own client library, that is the right family: the
+// stock board fills "0 0 0 153" and prints "255 140 0". Amber on near-black.
+//
+// Both families are therefore read, and `prio` decides when a file defines both:
+// an explicit `SectionedListPanel.*` key is about this exact widget and wins over
+// a general palette name. A custom TrackerScheme keeps working unchanged, and
+// ClientScheme now works too.
+#define SB_PRIO_PALETTE  0     // general colour names (ClientScheme)
+#define SB_PRIO_WIDGET   1     // SectionedListPanel.* (TrackerScheme)
+
 static const sb_wanted_t sb_wanted[] =
 {
-	{ "SectionedListPanel.BgColor",                    SLAYER_SCHEME_HAS_BG,            SB_FIELD( bg ) },
-	{ "SectionedListPanel.SelectedBgColor",            SLAYER_SCHEME_HAS_SELECTED_BG,   SB_FIELD( selected_bg ) },
-	{ "SectionedListPanel.OutOfFocusSelectedBgColor",  SLAYER_SCHEME_HAS_OOF_BG,        SB_FIELD( oof_selected_bg ) },
-	{ "SectionedListPanel.HeaderTextColor",            SLAYER_SCHEME_HAS_HEADER_TEXT,   SB_FIELD( header_text ) },
-	{ "SectionedListPanel.TextColor",                  SLAYER_SCHEME_HAS_TEXT,          SB_FIELD( text ) },
-	{ "SectionedListPanel.BrightTextColor",            SLAYER_SCHEME_HAS_BRIGHT_TEXT,   SB_FIELD( bright_text ) },
-	{ "SectionedListPanel.DividerColor",               SLAYER_SCHEME_HAS_DIVIDER,       SB_FIELD( divider ) },
-	{ "SectionedListPanel.SelectedTextColor",          SLAYER_SCHEME_HAS_SELECTED_TEXT, SB_FIELD( selected_text ) },
+	{ "SectionedListPanel.BgColor",                    SLAYER_SCHEME_HAS_BG,            SB_FIELD( bg ),              SB_PRIO_WIDGET },
+	{ "SectionedListPanel.SelectedBgColor",            SLAYER_SCHEME_HAS_SELECTED_BG,   SB_FIELD( selected_bg ),     SB_PRIO_WIDGET },
+	{ "SectionedListPanel.OutOfFocusSelectedBgColor",  SLAYER_SCHEME_HAS_OOF_BG,        SB_FIELD( oof_selected_bg ), SB_PRIO_WIDGET },
+	{ "SectionedListPanel.HeaderTextColor",            SLAYER_SCHEME_HAS_HEADER_TEXT,   SB_FIELD( header_text ),     SB_PRIO_WIDGET },
+	{ "SectionedListPanel.TextColor",                  SLAYER_SCHEME_HAS_TEXT,          SB_FIELD( text ),            SB_PRIO_WIDGET },
+	{ "SectionedListPanel.BrightTextColor",            SLAYER_SCHEME_HAS_BRIGHT_TEXT,   SB_FIELD( bright_text ),     SB_PRIO_WIDGET },
+	{ "SectionedListPanel.DividerColor",               SLAYER_SCHEME_HAS_DIVIDER,       SB_FIELD( divider ),         SB_PRIO_WIDGET },
+	{ "SectionedListPanel.SelectedTextColor",          SLAYER_SCHEME_HAS_SELECTED_TEXT, SB_FIELD( selected_text ),   SB_PRIO_WIDGET },
+
+	// ClientScheme.res -- the vanilla CS 1.6 board palette.
+	{ "ListBG",                                        SLAYER_SCHEME_HAS_BG,            SB_FIELD( bg ),              SB_PRIO_PALETTE },
+	{ "SelectionBG",                                   SLAYER_SCHEME_HAS_SELECTED_BG,   SB_FIELD( selected_bg ),     SB_PRIO_PALETTE },
+	{ "SelectionBG2",                                  SLAYER_SCHEME_HAS_OOF_BG,        SB_FIELD( oof_selected_bg ), SB_PRIO_PALETTE },
+	{ "BaseText",                                      SLAYER_SCHEME_HAS_TEXT,          SB_FIELD( text ),            SB_PRIO_PALETTE },
+	{ "BrightBaseText",                                SLAYER_SCHEME_HAS_BRIGHT_TEXT,   SB_FIELD( bright_text ),     SB_PRIO_PALETTE },
+	{ "BorderBright",                                  SLAYER_SCHEME_HAS_HEADER_TEXT,   SB_FIELD( header_text ),     SB_PRIO_PALETTE },
+	{ "BorderDark",                                    SLAYER_SCHEME_HAS_DIVIDER,       SB_FIELD( divider ),         SB_PRIO_PALETTE },
+	{ "SelectedText",                                  SLAYER_SCHEME_HAS_SELECTED_TEXT, SB_FIELD( selected_text ),   SB_PRIO_PALETTE },
 };
 
 #define SB_WANTED_COUNT ( (int)( sizeof( sb_wanted ) / sizeof( sb_wanted[0] )))
@@ -287,9 +325,11 @@ int Slayer_SBScheme_Parse( const char *text, slayer_sb_scheme_t *out )
 {
 	sb_named_color_t table[SB_COLORS_MAX];
 	char raw[SB_WANTED_COUNT][SB_TOK_MAX];
+	char section[SB_DEPTH_MAX][SLAYER_SCHEME_NAME_MAX];
 	const char *p;
 	int  colors;
 	int  resolved = 0;
+	int  depth;
 	int  i;
 
 	if( !out )
@@ -306,17 +346,31 @@ int Slayer_SBScheme_Parse( const char *text, slayer_sb_scheme_t *out )
 	// Values are collected first and resolved afterwards, so the file may list
 	// Colors after BaseSettings. Relying on the stock order would work today and
 	// break on the first reordered custom scheme.
+	//
+	// The enclosing section is tracked because the two key families live in
+	// different places: `SectionedListPanel.*` are BaseSettings entries, while the
+	// palette names are entries of `Colors`. Matching a palette name anywhere
+	// would also match the many places it appears as a VALUE ("ListBgColor"
+	// "ListBG"), and worse, `Borders` in ClientScheme.res repeats "BorderBright"
+	// dozens of times as the value of "color".
 	p = text;
+	depth = 0;
 	for( ;; )
 	{
 		char key[SB_TOK_MAX];
 		char val[SB_TOK_MAX];
 		const char *save;
+		int  in_colors;
 
 		if( !SB_Token( &p, key, sizeof( key )))
 			break;
 
-		if(( key[0] == '{' || key[0] == '}' ) && key[1] == '\0' )
+		if( key[0] == '}' && key[1] == '\0' )
+		{
+			if( depth > 0 ) depth--;
+			continue;
+		}
+		if( key[0] == '{' && key[1] == '\0' )
 			continue;
 
 		save = p;
@@ -324,15 +378,29 @@ int Slayer_SBScheme_Parse( const char *text, slayer_sb_scheme_t *out )
 			break;
 
 		if( val[0] == '{' && val[1] == '\0' )
+		{
+			if( depth < SB_DEPTH_MAX )
+			{
+				strncpy( section[depth], key, SLAYER_SCHEME_NAME_MAX - 1 );
+				section[depth][SLAYER_SCHEME_NAME_MAX - 1] = '\0';
+			}
+			depth++;
 			continue;
+		}
 		if( val[0] == '}' && val[1] == '\0' )
 		{
 			p = save;
 			continue;
 		}
 
+		in_colors = ( depth > 0 && depth <= SB_DEPTH_MAX
+			&& SB_StrEqualNoCase( section[depth - 1], "Colors" ));
+
 		for( i = 0; i < SB_WANTED_COUNT; i++ )
 		{
+			if( sb_wanted[i].prio == SB_PRIO_PALETTE && !in_colors )
+				continue;
+
 			if( SB_StrEqualNoCase( key, sb_wanted[i].key ))
 			{
 				strncpy( raw[i], val, SB_TOK_MAX - 1 );
@@ -345,8 +413,28 @@ int Slayer_SBScheme_Parse( const char *text, slayer_sb_scheme_t *out )
 	for( i = 0; i < SB_WANTED_COUNT; i++ )
 	{
 		unsigned char rgba[4];
+		int j;
+		int shadowed = 0;
 
 		if( !raw[i][0] )
+			continue;
+
+		// Two keys can feed the same field (a widget key and a palette name).
+		// Skip this one if a higher-priority key for the same field was also
+		// present, so a file carrying both is read the way its author meant.
+		for( j = 0; j < SB_WANTED_COUNT; j++ )
+		{
+			if( j == i )
+				continue;
+			if( sb_wanted[j].offset != sb_wanted[i].offset )
+				continue;
+			if( raw[j][0] && sb_wanted[j].prio > sb_wanted[i].prio )
+			{
+				shadowed = 1;
+				break;
+			}
+		}
+		if( shadowed )
 			continue;
 
 		if( !SB_Resolve( table, colors, raw[i], rgba ))

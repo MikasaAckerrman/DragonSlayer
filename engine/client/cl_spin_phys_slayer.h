@@ -180,8 +180,131 @@ void Slayer_Spin_SettleTo( slayer_spin_t *st, const float *normal, float rate, f
 // `local_axis` is in the object's own frame and need not be normalised.
 // `tol_cos` is the cosine of the angle considered "already resting" (1 = always
 // correct, 0.7 ~ 45 degrees of slack). Does nothing when already inside it.
+//
+// SUPERSEDED by Slayer_Spin_Settle below, and kept only so the old behaviour can
+// still be selected live for comparison. See that function for why aiming at a
+// target orientation was the wrong model in the first place.
 void Slayer_Spin_SettleAxisTo( slayer_spin_t *st, const float *normal,
 	const float *local_axis, float rate, float dt, float tol_cos );
+
+// ===========================================================================
+// Toppling: how a dropped item actually comes to rest
+// ===========================================================================
+//
+// WHAT WAS WRONG WITH THE FUNCTION ABOVE
+//
+// It computes a TARGET orientation (short body axis perpendicular to the surface
+// normal) and eases toward it every frame. That is a servo, and it reads as one:
+// the reported symptom was "you drop a weapon and when it touches the ground it
+// straightens itself out and spins". Three separate problems, none fixable by
+// tuning the rate or the tolerance:
+//
+//   1. the target is recomputed every frame from a traced normal, and the trace
+//      normal jitters, so the pose chases a moving target and never arrives;
+//   2. it has exactly one notion of "correct" -- flat against one normal -- so an
+//      item balanced across a step is actively pulled off it. That is why resting
+//      on an edge did not work;
+//   3. it is a KINEMATIC correction, so the motion has no relation to how an
+//      object of that shape would actually come to rest.
+//
+// WHAT THIS DOES INSTEAD
+//
+// No target orientation exists anywhere in the model, so there is nothing to
+// servo toward. The item is an oriented box. Wherever a corner of that box is
+// INSIDE the surface, the surface pushes it out, and the pose that results is
+// whatever pose has nothing buried. Resting flat, resting on an edge and hanging
+// off a ledge are the same three lines of code with different contact sets.
+//
+// THE CONSTRAINT THAT SHAPES EVERYTHING: the origin is the server's and we never
+// move it. So the item cannot fall, it can only rotate about its own origin, and
+// the poses available to it are limited by non-penetration. For a box with
+// half-length a and half-thickness b whose origin sits d above the floor:
+//
+//     a*sin(theta) + b*cos(theta) <= d
+//
+// Measured for a real w_ak47 (a = 17.72, b = 1.22):
+//
+//     origin  1.3 above the floor  ->  at most  0.3 degrees of tilt
+//     origin  4.0                  ->           9.1
+//     origin  8.0                  ->          22.8
+//     origin 16.0                  ->          60.3
+//
+// That single inequality explains both complaints. On flat ground the server parks
+// the origin at d ~= b, so the weapon MUST end up flat -- not because anything
+// aligns it, but because every other pose is inside the floor. The old servo was
+// forcing what the geometry already guaranteed, which is exactly why it was both
+// visible and pointless. On a step or a ledge the origin sits high, a leaning pose
+// is feasible, and nothing pushes it down.
+//
+// NOTE, and this cost a rewrite: gravity does NOT drive this. With the centre of
+// mass pinned at the origin, rotating the body does not change its potential
+// energy, so a gravity torque about the centre is zero and a model built on one
+// pendulums forever (measured: 231 degrees of travel). The force that rotates a
+// dropped weapon is the normal force at the buried corner. See SP_ContactAxis.
+//
+// The last detail is rate. Resolving penetration in one step moves the model as
+// much as 19.7 degrees in a SINGLE FRAME (measured), and that frame is the "it
+// glues itself flat on contact" the player saw. Capped at topple_rate the same
+// correction takes 4.3 degrees per frame over 0.083s, which reads as the item
+// tipping over. Transient penetration is free: only the pose is ours.
+
+#define SLAYER_SUPPORT_AIR   0   // nothing within reach: free flight, no settling
+#define SLAYER_SUPPORT_POINT 1   // one corner touching: balanced on a tip
+#define SLAYER_SUPPORT_EDGE  2   // two corners: resting on an edge
+#define SLAYER_SUPPORT_FACE  3   // three or more: lying on a face
+
+typedef struct
+{
+	float gravity;      // units/sec^2. GoldSrc is 800.
+	float damping;      // 1/sec, contact friction bleeding the tumble off
+	float restitution;  // 0..1: share of the spin surviving a corner landing
+	float topple_rate;  // rad/sec: fastest the pose may be pushed toward feasible
+	float contact_eps;  // units: a corner this close to the surface is touching
+	float pen_tol;      // units: penetration below which nothing is corrected
+	float rest_omega;   // rad/sec: below this, and stable, it is settled
+} slayer_spin_settle_params_t;
+
+// What the last Slayer_Spin_Settle found. Diagnostics AND control: the caller
+// sleeps an item once `settled` is set, and the class is what a harness asserts on.
+typedef struct
+{
+	int   contacts;     // corners within contact_eps of the surface, 0..8
+	int   support;      // SLAYER_SUPPORT_*
+	int   stable;       // nothing buried: no surface is pushing on the item
+	int   settled;      // stable and no longer turning
+	float penetration;  // lowest corner height above the surface (negative = inside)
+	float applied;      // radians of rotation applied this frame
+} slayer_spin_support_t;
+
+// Defaults measured with tests/settle_proto.py: 260 deg/sec topple rate, 0.10
+// restitution, damping 5/sec. See that file for the two failed models that
+// preceded them (a gravity torque about a pinned centre pendulums for 231
+// degrees; an inelastic slap applied to an already-penetrating pose never
+// rotates at all).
+void Slayer_Spin_DefaultSettleParams( slayer_spin_settle_params_t *sp );
+
+// Advance the resting pose by one frame.
+//
+//   half   - the item's REAL half-extents in its own frame, from
+//            Slayer_ModelExtent_Get. Not the engine's hull: that has the axes
+//            permuted on 24 of 34 stock models (see cl_model_extent_slayer.h),
+//            which is what made every earlier attempt at this hopeless.
+//   normal - the supporting surface's normal, unit length.
+//   dist   - how far the origin sits above that surface, along the normal.
+//   out    - may be NULL.
+//
+// Does nothing and reports SLAYER_SUPPORT_AIR when the box does not reach the
+// surface, so an item in flight is left entirely to Slayer_Spin_Step.
+void Slayer_Spin_Settle( slayer_spin_t *st, const float *half,
+	const float *normal, float dist, float dt,
+	const slayer_spin_settle_params_t *sp, slayer_spin_support_t *out );
+
+// The largest tilt, in radians, at which a box of these half-extents still clears
+// a surface `dist` below its origin. Exposed because it is the whole explanation
+// for why items look flat on the floor and leaning on a step, and a harness
+// asserting on the numbers above is worth more than a comment claiming them.
+float Slayer_Spin_MaxTilt( float half_long, float half_short, float dist );
+
 
 // Convert the stored orientation into the Euler angles the studio renderer
 // wants, compensating for its pitch negation.

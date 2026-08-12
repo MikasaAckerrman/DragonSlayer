@@ -38,6 +38,7 @@ GNU General Public License for more details.
 #include "xash3d_mathlib.h"
 #include "cl_item_phys_slayer.h"
 #include "cl_spin_phys_slayer.h"
+#include "cl_model_extent_slayer.h"
 #include "cl_slayer_log.h"
 
 // =============================================================================
@@ -50,20 +51,46 @@ static CVAR_DEFINE_AUTO( slayer_item_phys, "1", FCVAR_ARCHIVE,
 static CVAR_DEFINE_AUTO( slayer_item_settle, "1", FCVAR_ARCHIVE,
 	"Slayer3D: lay a resting item against the surface under it (0 = keep it upright)" );
 
-// How fast a resting item eases into the surface pose. Fast enough to be done
-// before the player walks up to it, slow enough not to snap visibly.
+// How fast a resting item eases into the surface pose. Only used by the OLD
+// alignment mechanic (slayer_item_settle_mode 2), kept for live comparison.
 static CVAR_DEFINE_AUTO( slayer_item_settle_rate, "6.0", FCVAR_ARCHIVE,
-	"Slayer3D: how quickly a dropped item leans onto the surface (per second)" );
+	"Slayer3D: how quickly a dropped item leans onto the surface (legacy mode 2 only)" );
 
-// How far from flat still counts as "resting", in degrees.
-//
-// Zero slack is what made a dropped weapon appear to straighten itself out after
-// it landed: any pose that was not exactly aligned got corrected, including the
-// plausible ones. With slack, only a grossly wrong pose is touched -- and an item
-// bridging a step stays leaning on the edge, because that is within tolerance of
-// both surfaces and neither pulls it flat.
+// How far from flat still counts as "resting", in degrees. Legacy mechanic only.
 static CVAR_DEFINE_AUTO( slayer_item_settle_tol, "35", FCVAR_ARCHIVE,
-	"Slayer3D: how far from flat a resting item may lie before it is corrected (degrees)" );
+	"Slayer3D: tolerance before a resting item is corrected (legacy mode 2 only, degrees)" );
+
+// WHICH RESTING MECHANIC.
+//
+// 1 (default) = toppling. The item is its real measured box; wherever a corner of
+//   that box is inside the surface, the surface pushes it out, at a limited rate.
+//   No target orientation exists, so nothing aligns anything: a weapon that landed
+//   in a plausible pose is untouched, one standing inside a step tips over, and
+//   one bridging a step stays leaning because nothing pushes it flat.
+//
+// 2 = the previous mechanic: ease the model's shortest axis toward the traced
+//   normal. This is what produced "you drop a weapon and it straightens itself out
+//   and spins" -- it recomputes a target every frame from a jittering normal, and
+//   its single notion of correct (flat against one normal) actively pulls an item
+//   off an edge. Kept only so the two can be compared on the device.
+//
+// 0 = no resting behaviour at all; the pose is whatever the tumble left.
+static CVAR_DEFINE_AUTO( slayer_item_settle_mode, "1", FCVAR_ARCHIVE,
+	"Slayer3D: resting mechanic (0 = none, 1 = toppling, 2 = legacy alignment)" );
+
+// Toppling parameters. Defaults measured in tests/settle_proto.py and asserted in
+// tests/settle_test.c; see cl_spin_phys_slayer.h for why these particular numbers.
+static CVAR_DEFINE_AUTO( slayer_item_topple_rate, "260", FCVAR_ARCHIVE,
+	"Slayer3D: fastest a resting item's pose may be corrected (degrees/sec)" );
+
+static CVAR_DEFINE_AUTO( slayer_item_topple_damping, "5.0", FCVAR_ARCHIVE,
+	"Slayer3D: contact friction bleeding off a settling item's tumble (per second)" );
+
+static CVAR_DEFINE_AUTO( slayer_item_topple_bounce, "0.10", FCVAR_ARCHIVE,
+	"Slayer3D: share of the spin a settling item keeps when a corner lands (0-0.9)" );
+
+static CVAR_DEFINE_AUTO( slayer_item_extent, "1", FCVAR_ARCHIVE,
+	"Slayer3D: measure model size from the mesh (0 = use the engine's hull, which has the axes wrong on 24 of 34 stock models)" );
 
 static CVAR_DEFINE_AUTO( slayer_item_spin, "0", FCVAR_ARCHIVE,
 	"Slayer3D: spin per unit of throw speed for dropped items (0 = default)" );
@@ -138,7 +165,10 @@ typedef struct
 	vec3_t        vel;
 	slayer_spin_t spin;
 	vec3_t        rest_normal;     // surface it settled on
+	float         rest_dist;       // how far the origin sits above that surface
 	qboolean      have_rest_normal;
+	int           support;         // SLAYER_SUPPORT_*, last reported
+	qboolean      topple_settled;  // the core says the pose is final
 	vec3_t        sleep_origin;    // where it was when it fell asleep
 	float         rest_secs;      // seconds spent at rest since it stopped
 	qboolean      asleep;          // no traces are made while this is set
@@ -448,89 +478,177 @@ static qboolean Slayer_IP_FindLeanSurface( struct cl_entity_s *ent, float radius
 
 /*
 ====================
-Slayer_IP_ModelHalfLength
+Slayer_IP_ModelBox
 
-Half the model's longest horizontal extent, from its clipping hull.
+The item's REAL half-extents.
 
-`model->mins/maxs` is the CLIP hull rather than the mesh extent -- the grenade
-pivot work established that the hard way -- so it is not trustworthy as an exact
-size. It is fine as a SCALE, which is all this needs: the probes only have to
-straddle the item, and being 20% off changes nothing about which surfaces they
-find.
+This replaces reading `model->mins/maxs`, and it is a correction rather than a
+refinement. Measured over the 34 stock w_*.mdl files plus 25 of the user's
+downloaded replacements (tests/mdl_engine_box.py):
+
+    the engine's box picks the WRONG SHORT AXIS on 24 of 34 stock models
+    and on 24 of 25 custom ones; worst per-axis size error 2564 %
+    w_ak47: engine 2.44 12.31 36.65   real mesh 35.44 15.36 2.44
+
+The cause is in Mod_LoadStudioModel: every one of these models has zero bbmin and
+zero min, so the engine computes bounds from RAW vertex positions -- positions in
+BONE space, without walking the bone chain. A CS world model has one bone rotated
+about 90 degrees, so the axes come out permuted systematically.
+
+Both facts the resting code needs are therefore wrong when taken from the hull:
+which axis faces the surface, and how long the item is. That is the measured cause
+of both live complaints. See cl_model_extent_slayer.h.
+
+Returns false when nothing usable could be produced, in which case the caller must
+fall back rather than proceed with nonsense.
 ====================
 */
-static float Slayer_IP_ModelHalfLength( struct cl_entity_s *ent, float radius )
+static qboolean Slayer_IP_ModelBox( struct cl_entity_s *ent, vec3_t out_half )
 {
-	float dx, dy, len;
+	const slayer_model_extent_t *ext;
+	int i;
 
-	if( !ent->model )
-		return radius;
+	if( !ent || !ent->model )
+		return false;
 
-	dx = ent->model->maxs[0] - ent->model->mins[0];
-	dy = ent->model->maxs[1] - ent->model->mins[1];
+	if( slayer_item_extent.value != 0.0f )
+	{
+		ext = Slayer_ModelExtent_Get( ent->model );
+		if( ext && ext->valid )
+		{
+			for( i = 0; i < 3; i++ )
+				out_half[i] = ext->half[i];
+			return true;
+		}
+	}
 
-	len = ( dx > dy ) ? dx : dy;
-	len *= 0.5f;
+	// Fallback: the engine's hull. Known to have the axes permuted on most models,
+	// so this is a "better than nothing" path (a model that failed to parse, or the
+	// cvar turned off for comparison), not an equivalent one.
+	for( i = 0; i < 3; i++ )
+	{
+		float d = ent->model->maxs[i] - ent->model->mins[i];
 
-	// A degenerate or absurd hull must not send probes across the map.
-	if( len < 2.0f )    len = radius;
-	if( len > 48.0f )   len = 48.0f;
+		if( d < 0.0f ) d = -d;
+		out_half[i] = d * 0.5f;
+	}
 
-	return len;
+	return ( out_half[0] + out_half[1] + out_half[2] ) > 0.01f;
 }
 
 /*
 ====================
-Slayer_IP_FindRestNormal
+Slayer_IP_SettleParams
 
-Which way should a resting item lean?
-
-ONE trace gives ONE normal, and that is wrong exactly where it matters: a rifle
-lying half on a step and half on the floor gets whichever surface happens to be
-under its origin, so the model tilts fully onto that one and its other end sinks
-into the geometry. The reported symptom was items poking through textures at
-corners and standing at odd angles on stairs.
-
-So the item is probed at several points ALONG ITS OWN LENGTH -- nose, middle,
-tail, taken from the model hull and rotated by the entity's yaw -- and the
-normals are averaged. On flat ground every probe agrees and the result is
-identical to the single trace. On a 90-degree step the average is the diagonal
-between floor and step, which is what an object bridging the two actually rests
-at. Where nothing is found below, the horizontal wall probes still apply.
-
-Cost: three traces, once, when an item comes to rest. It then sleeps and traces
-nothing at all (see the sleep policy in Slayer_ItemPhys_Apply).
+Toppling parameters from cvars, with the measured defaults as the baseline.
 ====================
 */
-static qboolean Slayer_IP_FindRestNormal( struct cl_entity_s *ent, float radius,
-	vec3_t out_normal )
+static void Slayer_IP_SettleParams( slayer_spin_settle_params_t *sp )
+{
+	Slayer_Spin_DefaultSettleParams( sp );
+
+	// Degrees per second in the cvar, radians per second in the core: the cvar is
+	// what a player reads and types, the core is what the maths wants.
+	if( slayer_item_topple_rate.value > 0.0f )
+		sp->topple_rate = DEG2RAD( slayer_item_topple_rate.value );
+
+	if( slayer_item_topple_damping.value >= 0.0f )
+		sp->damping = slayer_item_topple_damping.value;
+
+	if( slayer_item_topple_bounce.value >= 0.0f )
+		sp->restitution = slayer_item_topple_bounce.value;
+}
+
+/*
+====================
+Slayer_IP_SettleMode
+
+Which resting mechanic is active, clamped.
+
+Read through a function rather than the cvar directly because it is consulted in
+three places and an out-of-range value has to mean the same thing in all of them.
+====================
+*/
+static int Slayer_IP_SettleMode( void )
+{
+	int mode;
+
+	// The old on/off cvar still disables everything, so a config that turned
+	// settling off keeps it off.
+	if( slayer_item_settle.value == 0.0f )
+		return 0;
+
+	mode = (int)slayer_item_settle_mode.value;
+	if( mode < 0 ) mode = 0;
+	if( mode > 2 ) mode = 1;
+	return mode;
+}
+
+/*
+====================
+Slayer_IP_FindSupport
+
+The surface a resting item is supported by, AND how far its origin sits above it.
+
+Both halves matter, and the old code only produced the first. The set of poses an
+item may hold is bounded by non-penetration, and that bound is a function of the
+origin's height above the surface (see Slayer_Spin_MaxTilt): at 1.3 units above
+the floor a real w_ak47 may tilt 0.3 degrees, at 16 units 60.3. A normal without
+its distance cannot distinguish "lying on the floor" from "bridging a step", which
+is precisely the distinction the player is asking for.
+
+The probes still straddle the item, but along its MEASURED length rather than the
+engine hull's -- the hull reports 12.31 units for an AK whose mesh is 35.44, so the
+old probes sat three times too close together and could not span a step at all.
+
+Distance is taken from the CLOSEST hit rather than an average: the item rests on
+whatever it touches first, and averaging the distance to a floor and to a step
+would place the origin at a height where neither exists.
+====================
+*/
+static qboolean Slayer_IP_FindSupport( struct cl_entity_s *ent,
+	const slayer_spin_params_t *p, vec3_t out_normal, float *out_dist )
 {
 	vec3_t forward, right, up;
+	vec3_t half;
 	vec3_t sum;
-	float  half;
+	float  span;
+	float  best_dist = 1e9f;
+	float  probe_len;
 	int    probes = (int)slayer_item_lean_probes.value;
 	int    hits = 0;
 	int    i;
+
+	*out_dist = 0.0f;
 
 	if( probes < 1 ) probes = 1;
 	if( probes > 3 ) probes = 3;
 
 	VectorClear( sum );
-
 	AngleVectors( ent->angles, forward, right, up );
-	half = Slayer_IP_ModelHalfLength( ent, radius );
+
+	if( Slayer_IP_ModelBox( ent, half ))
+		span = half[0] > half[1] ? half[0] : half[1];
+	else
+		span = p->radius;
+
+	if( span < 1.0f )  span = 1.0f;
+	if( span > 64.0f ) span = 64.0f;
+
+	// Trace far enough to find the floor under an item that is standing on end,
+	// which is exactly the pose that needs correcting.
+	probe_len = span * 2.0f + p->radius * 2.0f;
 
 	for( i = 0; i < probes; i++ )
 	{
 		vec3_t    start, end;
 		pmtrace_t tr;
 		float     along;
+		float     dist;
 
-		// Middle first, then the ends: with probes == 1 this degenerates to
-		// exactly the old single downward trace.
 		if( i == 0 )      along = 0.0f;
-		else if( i == 1 ) along =  half;
-		else              along = -half;
+		else if( i == 1 ) along =  span;
+		else              along = -span;
 
 		VectorCopy( ent->origin, start );
 		start[0] += forward[0] * along;
@@ -538,7 +656,7 @@ static qboolean Slayer_IP_FindRestNormal( struct cl_entity_s *ent, float radius,
 		start[2] += forward[2] * along;
 
 		VectorCopy( start, end );
-		end[2] -= radius * 2.0f;
+		end[2] -= probe_len;
 
 		ip_traces++;
 		tr = CL_TraceLine( start, end, PM_STUDIO_IGNORE );
@@ -549,22 +667,34 @@ static qboolean Slayer_IP_FindRestNormal( struct cl_entity_s *ent, float radius,
 		sum[1] += tr.plane.normal[1];
 		sum[2] += tr.plane.normal[2];
 		hits++;
+
+		// Height of the ENTITY ORIGIN above this surface. The probe may start off
+		// to the side, so what is measured is the probe's own drop; on a flat floor
+		// every probe agrees, and on a step the nearest one wins below.
+		dist = tr.fraction * probe_len;
+		if( dist < best_dist )
+			best_dist = dist;
 	}
 
-	if( hits > 0 )
+	if( hits > 0 && VectorLength( sum ) > 0.1f )
 	{
-		// The average of unit normals is not a unit vector, and two opposed
-		// normals (an item wedged in a slot) can cancel out entirely -- in which
-		// case there is no meaningful lean and the wall probes should decide.
-		if( VectorLength( sum ) > 0.1f )
-		{
-			VectorNormalize( sum );
-			VectorCopy( sum, out_normal );
-			return true;
-		}
+		VectorNormalize( sum );
+		VectorCopy( sum, out_normal );
+		*out_dist = ( best_dist < 1e9f ) ? best_dist : 0.0f;
+		return true;
 	}
 
-	return Slayer_IP_FindLeanSurface( ent, radius, out_normal );
+	// Nothing below: a weapon lodged against a wall. The wall is the support, and
+	// its distance is unknown from a horizontal probe, so zero -- which the core
+	// reads as "the surface is right at the origin", the most constrained case and
+	// the safe one.
+	if( Slayer_IP_FindLeanSurface( ent, p->radius, out_normal ))
+	{
+		*out_dist = 0.0f;
+		return true;
+	}
+
+	return false;
 }
 
 // =============================================================================
@@ -577,8 +707,13 @@ void Slayer_ItemPhys_Init( void )
 
 	Cvar_RegisterVariable( &slayer_item_phys );
 	Cvar_RegisterVariable( &slayer_item_settle );
+	Cvar_RegisterVariable( &slayer_item_settle_mode );
 	Cvar_RegisterVariable( &slayer_item_settle_rate );
 	Cvar_RegisterVariable( &slayer_item_settle_tol );
+	Cvar_RegisterVariable( &slayer_item_topple_rate );
+	Cvar_RegisterVariable( &slayer_item_topple_damping );
+	Cvar_RegisterVariable( &slayer_item_topple_bounce );
+	Cvar_RegisterVariable( &slayer_item_extent );
 	Cvar_RegisterVariable( &slayer_item_spin );
 	Cvar_RegisterVariable( &slayer_shield_radius );
 	Cvar_RegisterVariable( &slayer_shield_spin );
@@ -628,26 +763,26 @@ Which body axis of this model should face the surface it rests on?
 
 The one along its SHORTEST extent. An object comes to rest on its largest face,
 and the largest face is the one perpendicular to the shortest dimension: a rifle
-(long in X, thin in Z) lies flat on its side, not balanced on its butt.
+(long along its own X, thin along Z) lies flat on its side, not on its butt.
 
-This is why the old settling looked wrong. It aligned the model's local UP to the
-floor normal, which for a rifle is arbitrary -- its mesh is authored lying along
-its own X, so "up" has nothing to do with how it lies. Hence the report: drop a
-weapon and it slowly turns itself into a pose nothing chose.
+ONLY USED BY THE LEGACY MECHANIC (slayer_item_settle_mode 2). The toppling
+mechanic needs no such choice -- the box's own corners decide, so there is nothing
+to pick and nothing to get wrong. That is the deeper reason the new mechanic is
+better than a fixed version of the old one.
 
-`model->mins/maxs` is the clip hull rather than the mesh extent, so it is not
-exact -- but picking the smallest of three numbers only needs the ORDER to be
-right, and for a weapon world model it is.
+The extents come from the measured mesh, not from `model->mins/maxs`: the hull
+names the wrong short axis on 24 of 34 stock models, which made this function pick
+the wrong axis exactly as often. See Slayer_IP_ModelBox.
 ====================
 */
 static void Slayer_IP_RestAxis( struct cl_entity_s *ent, vec3_t out )
 {
-	float d[3];
-	int   i, best = 2;
+	vec3_t half;
+	int    i, best = 2;
 
 	VectorClear( out );
 
-	if( !ent->model )
+	if( !Slayer_IP_ModelBox( ent, half ))
 	{
 		out[2] = 1.0f;
 		return;
@@ -655,19 +790,13 @@ static void Slayer_IP_RestAxis( struct cl_entity_s *ent, vec3_t out )
 
 	for( i = 0; i < 3; i++ )
 	{
-		d[i] = ent->model->maxs[i] - ent->model->mins[i];
-		if( d[i] < 0.0f ) d[i] = -d[i];
-	}
-
-	for( i = 0; i < 3; i++ )
-	{
-		if( d[i] < d[best] )
+		if( half[i] < half[best] )
 			best = i;
 	}
 
-	// A hull with no meaningful extents (some server props report all zeroes)
+	// A model with no meaningful extents (some server props report all zeroes)
 	// gets the historical answer rather than a zero vector.
-	if( !( d[best] > 0.01f ))
+	if( !( half[best] > 0.005f ))
 		best = 2;
 
 	out[best] = 1.0f;
@@ -799,59 +928,81 @@ void Slayer_ItemPhys_Apply( struct cl_entity_s *ent )
 
 	// --- settle -------------------------------------------------------------
 	//
-	// Only once the item has stopped. Leaning it while it is still moving would
-	// fight the tumble, and the result reads as the model twitching rather than
-	// falling.
-	if( slayer_item_settle.value != 0.0f && Slayer_Spin_IsResting( &ip->spin ))
+	// Only once the tumble has stopped. Resolving the pose while the item is still
+	// flying would fight the tumble, and the result reads as the model twitching
+	// rather than falling.
+	if( Slayer_IP_SettleMode() != 0 && Slayer_Spin_IsResting( &ip->spin ))
 	{
 		ip->rest_secs += dt;
 
 		// The surface is found ONCE and remembered. Re-tracing every frame would
-		// spend traces per resting item forever, and a resting item's
-		// surroundings do not change.
+		// spend traces per resting item forever, and a resting item's surroundings
+		// do not change. `rest_dist` is remembered with it: the pose constraint is
+		// a function of how high the origin sits, so a normal without its distance
+		// is only half the information.
 		if( !ip->have_rest_normal )
 		{
-			if( Slayer_IP_FindRestNormal( ent, params.radius, ip->rest_normal ))
+			if( Slayer_IP_FindSupport( ent, &params, ip->rest_normal, &ip->rest_dist ))
 			{
 				ip->have_rest_normal = true;
 			}
 			else if( contact.on_ground )
 			{
 				VectorCopy( contact.normal, ip->rest_normal );
+				ip->rest_dist = 0.0f;
 				ip->have_rest_normal = true;
 			}
 		}
 
 		if( ip->have_rest_normal )
 		{
-			float  rate = slayer_item_settle_rate.value;
-			float  tol;
-			vec3_t body_axis;
+			if( Slayer_IP_SettleMode() == 1 )
+			{
+				// TOPPLING. No target orientation: the surface pushes buried
+				// corners out and stops. See cl_spin_phys_slayer.h for why the
+				// alternative below was wrong in principle rather than mistuned.
+				slayer_spin_settle_params_t sp;
+				slayer_spin_support_t       sup;
+				vec3_t half;
 
-			if( rate < 0.1f ) rate = 0.1f;
-			if( rate > 30.0f ) rate = 30.0f;
+				if( Slayer_IP_ModelBox( ent, half ))
+				{
+					Slayer_IP_SettleParams( &sp );
+					Slayer_Spin_Settle( &ip->spin, half, ip->rest_normal,
+						ip->rest_dist, dt, &sp, &sup );
 
-			// TOLERANCE, in degrees, converted to the cosine the core wants.
-			//
-			// This is the fix for "you drop a weapon and once it lands it starts
-			// straightening itself out". Easing to exact alignment corrected poses
-			// that were already fine; with slack, a plausible pose is left alone
-			// and only a grossly wrong one (standing on end inside a step) is
-			// touched. It is also what lets an item rest ON AN EDGE: bridging a
-			// step is within tolerance of both surfaces, so neither pulls it flat.
-			tol = slayer_item_settle_tol.value;
-			if( tol < 0.0f ) tol = 0.0f;
-			if( tol > 89.0f ) tol = 89.0f;
+					ip->support = sup.support;
+					ip->topple_settled = sup.settled;
+				}
+			}
+			else
+			{
+				// LEGACY alignment, kept for on-device comparison only.
+				float  rate = slayer_item_settle_rate.value;
+				float  tol;
+				vec3_t body_axis;
 
-			Slayer_IP_RestAxis( ent, body_axis );
+				if( rate < 0.1f ) rate = 0.1f;
+				if( rate > 30.0f ) rate = 30.0f;
 
-			Slayer_Spin_SettleAxisTo( &ip->spin, ip->rest_normal, body_axis,
-				rate, dt, (float)cos( (double)( tol * ( M_PI / 180.0 ))));
+				tol = slayer_item_settle_tol.value;
+				if( tol < 0.0f ) tol = 0.0f;
+				if( tol > 89.0f ) tol = 89.0f;
+
+				Slayer_IP_RestAxis( ent, body_axis );
+
+				Slayer_Spin_SettleAxisTo( &ip->spin, ip->rest_normal, body_axis,
+					rate, dt, (float)cos( (double)( tol * ( M_PI / 180.0 ))));
+			}
 		}
 
-		// Long enough at rest for the lean to have converged: stop paying for it.
-		// From here on the item costs one vector compare per frame until it moves.
-		if( ip->rest_secs >= Slayer_IP_SleepDelay() )
+		// Sleep once there is nothing left to compute. With toppling that is a
+		// definite answer from the core (`settled`) rather than a timeout, so an
+		// item that reached its resting pose in three frames stops costing anything
+		// after three frames instead of after the fixed delay. The timeout stays as
+		// the backstop for the legacy mode and for an item whose surface was never
+		// found.
+		if( ip->topple_settled || ip->rest_secs >= Slayer_IP_SleepDelay() )
 		{
 			ip->asleep = true;
 			VectorCopy( ent->origin, ip->sleep_origin );
@@ -874,6 +1025,8 @@ void Slayer_ItemPhys_Apply( struct cl_entity_s *ent )
 		// Moving again (picked up and re-thrown, or knocked by an explosion):
 		// forget the surface so the next rest re-finds it.
 		ip->have_rest_normal = false;
+		ip->topple_settled = false;
+		ip->support = 0;
 	}
 
 	Slayer_Spin_PoseToAngles( &ip->spin, ent->angles );
@@ -887,12 +1040,13 @@ void Slayer_ItemPhys_Apply( struct cl_entity_s *ent )
 		ip_diag_last_print = cl.time;
 
 		Slayer_Log_Printf( "IP idx=%d model=%s speed=%.0f omega=%.2f hits=%d rest=%d "
-			"spun=%d asleep=%d traces=%u lean=%d n=(%.2f %.2f %.2f) ang=(%.1f %.1f %.1f)",
+			"spun=%d asleep=%d traces=%u mode=%d support=%d dist=%.2f "
+			"n=(%.2f %.2f %.2f) ang=(%.1f %.1f %.1f)",
 			ent->index, ent->model->name, speed,
 			Slayer_Spin_Rate( &ip->spin ), ip->spin.impacts,
 			Slayer_Spin_IsResting( &ip->spin ),
 			ip->spin.spun_up, (int)ip->asleep, ip_traces,
-			(int)ip->have_rest_normal,
+			Slayer_IP_SettleMode(), ip->support, ip->rest_dist,
 			ip->rest_normal[0], ip->rest_normal[1], ip->rest_normal[2],
 			ent->angles[0], ent->angles[1], ent->angles[2] );
 	}

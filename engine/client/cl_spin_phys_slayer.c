@@ -33,7 +33,13 @@ GNU General Public License for more details.
 //   becomes an unrecoverable blur.
 
 #include <math.h>
+#include <string.h>
 #include "cl_spin_phys_slayer.h"
+
+// Ninety degrees. Spelled out rather than taken from M_PI_2, which is a POSIX
+// extension and not guaranteed by <math.h> in C89 -- this file compiles on the
+// host as well as in the engine, so it cannot rely on it.
+#define SP_HALF_PI  1.57079632679489661923f
 
 // =============================================================================
 // Local vector / quaternion helpers
@@ -925,4 +931,357 @@ void Slayer_Spin_SettleAxisTo( slayer_spin_t *st, const float *normal,
 	st->orient[2] = result[2];
 	st->orient[3] = result[3];
 	SP_QuatNormalize( st->orient );
+}
+
+// =============================================================================
+// Toppling: how a dropped item actually comes to rest
+// =============================================================================
+//
+// See the long note in cl_spin_phys_slayer.h. The short version: there is no
+// target orientation here. The item is a box, gravity acts at its centre, the box
+// rotates about whichever of its own corners it is overbalanced on, and stops
+// when it is not overbalanced. Flat ground, a step and a ledge are the same code
+// with different contact sets.
+
+void Slayer_Spin_DefaultSettleParams( slayer_spin_settle_params_t *sp )
+{
+	if( !sp )
+		return;
+
+	sp->gravity     = 800.0f;   // GoldSrc
+	sp->damping     = 5.0f;     // 1/sec. Measured: without it the item pendulums
+	                            // through 231 degrees before stopping.
+	sp->restitution = 0.10f;    // a corner landing keeps a tenth of its spin
+	sp->topple_rate = 4.5379f;  // 260 deg/sec. Measured: this gives 4.3 deg per
+	                            // frame; a hard clamp gives 19.7 in ONE frame,
+	                            // which is the "sticks flat instantly" symptom.
+	sp->contact_eps = 0.75f;    // units
+	sp->pen_tol     = 0.05f;    // units
+	sp->rest_omega  = 0.03f;    // rad/sec
+}
+
+/*
+====================
+Slayer_Spin_MaxTilt
+
+Largest tilt whose lowest corner still clears a surface `dist` below the origin.
+
+Solve a*sin(theta) + b*cos(theta) <= dist. Writing the left side as
+R*sin(theta + phi) with R = hypot(a,b) and phi = atan2(b,a) gives
+theta_max = asin(dist/R) - phi directly.
+
+Two boundary cases have to be answered honestly rather than clamped away:
+  * dist >= R: the origin is high enough that ANY orientation clears the surface,
+    so there is no constraint at all (a weapon on a table edge, mid-air).
+  * dist < b: even lying perfectly flat penetrates. That happens routinely,
+    because the server parks the origin using its own hull rather than the mesh,
+    and the answer is zero tilt -- flat is as good as it gets.
+====================
+*/
+float Slayer_Spin_MaxTilt( float half_long, float half_short, float dist )
+{
+	float a = half_long, b = half_short;
+	float r, phi, s;
+
+	if( a < 0.0f ) a = -a;
+	if( b < 0.0f ) b = -b;
+
+	// A degenerate box constrains nothing; returning a large angle keeps callers
+	// from having to special-case it, since they clamp against their own limits.
+	if( a <= 1e-4f && b <= 1e-4f )
+		return SP_HALF_PI;
+
+	r = (float)sqrt( (double)( a * a + b * b ));
+	if( dist >= r )
+		return SP_HALF_PI;
+	if( dist <= 0.0f )
+		return 0.0f;
+
+	phi = (float)atan2( (double)b, (double)a );
+	s = dist / r;
+	if( s > 1.0f ) s = 1.0f;
+
+	if( s < (float)sin( (double)phi ))
+		return 0.0f;          // cannot even lie flat; flat is the best pose
+
+	return (float)asin( (double)s ) - phi;
+}
+
+/*
+====================
+SP_BoxCornerHeights
+
+Signed height of each of the box's 8 corners above the supporting surface.
+
+`half` are the box's half-extents in ITS OWN frame; the corners are rotated by the
+current pose and projected onto the surface normal, with the origin sitting `dist`
+above the surface. Negative means the corner is inside the geometry.
+
+Returns the number of corners within `eps` of the surface and writes the lowest
+height to `out_low`. That count IS the support classification: 3+ corners means a
+face is down, 2 means an edge, 1 means a tip. No separate detection logic exists,
+which is the point -- the edge case is not a special branch that can be forgotten.
+====================
+*/
+static int SP_BoxCornerHeights( const slayer_spin_t *st, const float *half,
+	const float *normal, float dist, float eps, float *out_low, float *out_lowest_corner )
+{
+	int   sx, sy, sz;
+	int   contacts = 0;
+	float low = 1e30f;
+	float low_corner[3];
+
+	low_corner[0] = low_corner[1] = low_corner[2] = 0.0f;
+
+	for( sx = -1; sx <= 1; sx += 2 )
+	{
+		for( sy = -1; sy <= 1; sy += 2 )
+		{
+			for( sz = -1; sz <= 1; sz += 2 )
+			{
+				float local[3], world[3];
+				float h;
+
+				local[0] = half[0] * (float)sx;
+				local[1] = half[1] * (float)sy;
+				local[2] = half[2] * (float)sz;
+
+				SP_QuatRotate( st->orient, local, world );
+
+				h = dist + SP_VecDot( world, normal );
+
+				if( h < low )
+				{
+					low = h;
+					SP_VecCopy( world, low_corner );
+				}
+				if( h <= eps )
+					contacts++;
+			}
+		}
+	}
+
+	if( out_low )
+		*out_low = low;
+	if( out_lowest_corner )
+		SP_VecCopy( low_corner, out_lowest_corner );
+
+	return contacts;
+}
+
+/*
+====================
+SP_ContactAxis
+
+About which axis does the surface push a penetrating corner out?
+
+This is the one piece of physics in the module, and getting it right required
+discarding the obvious answer. The obvious answer is "gravity topples it", and
+that answer is WRONG HERE: the origin is the server's and we never move it, so
+the centre of mass is fixed, and gravity acting at a fixed centre of mass
+produces NO torque about it whatsoever. Rotating the body does not change its
+potential energy. A model built on a gravity torque about the centre pendulums
+forever (measured in tests/settle_proto.py: 231 degrees of travel), which is what
+that first prototype did.
+
+What actually rotates a dropped weapon is the NORMAL FORCE at the contact. Its
+torque about the centre is `corner x (N * n)`, i.e. about `corner x n`, and
+rotating about that axis lifts the corner out of the surface:
+
+    d(height)/dt = ((corner x n) x corner) . n
+                 = |corner|^2 - (corner . n)^2   >= 0
+
+So the axis is `corner x n` with no sign games, and the motion it produces is
+precisely "the ground pushes the buried end up until nothing is buried" -- which,
+for a rifle standing on its muzzle inside the floor, is a topple onto its side,
+and for a rifle already lying flat, is nothing at all.
+
+Returns the lever arm (the contact's distance from the origin measured in the
+surface plane); zero means the contact sits directly below the centre and no
+rotation can lift it, in which case the pose is as good as it gets.
+====================
+*/
+static float SP_ContactAxis( const float *low_corner, const float *normal, float *out_axis )
+{
+	float axis[3];
+	float along;
+	float horiz[3];
+
+	SP_VecCross( low_corner, normal, axis );
+
+	if( SP_VecNormalize( axis ) <= 1e-4f )
+	{
+		SP_VecClear( out_axis );
+		return 0.0f;
+	}
+
+	SP_VecCopy( axis, out_axis );
+
+	along = SP_VecDot( low_corner, normal );
+	SP_VecMA( low_corner, -along, normal, horiz );
+	return SP_VecLen( horiz );
+}
+
+void Slayer_Spin_Settle( slayer_spin_t *st, const float *half,
+	const float *normal, float dist, float dt,
+	const slayer_spin_settle_params_t *sp, slayer_spin_support_t *out )
+{
+	slayer_spin_settle_params_t p;
+	slayer_spin_support_t       res;
+	float n[3];
+	float h[3];
+	float low = 0.0f;
+	float low_corner[3];
+	float axis[3];
+	float lever;
+	float reach;
+	float step = 0.0f;
+	int   i;
+
+	memset( &res, 0, sizeof( res ));
+	res.support = SLAYER_SUPPORT_AIR;
+
+	if( !st || !half || !normal || dt <= 0.0f )
+	{
+		if( out ) *out = res;
+		return;
+	}
+
+	if( sp ) p = *sp;
+	else     Slayer_Spin_DefaultSettleParams( &p );
+
+	// Sanitise: these come from cvars, and a zero or negative value here would
+	// either freeze the item or let it turn without limit.
+	if( p.gravity     <= 0.0f ) p.gravity     = 800.0f;
+	if( p.damping     <  0.0f ) p.damping     = 0.0f;
+	if( p.restitution <  0.0f ) p.restitution = 0.0f;
+	if( p.restitution >  0.9f ) p.restitution = 0.9f;
+	if( p.topple_rate <= 0.0f ) p.topple_rate = 4.5379f;
+	if( p.contact_eps <  0.0f ) p.contact_eps = 0.0f;
+	if( p.pen_tol     <  0.0f ) p.pen_tol     = 0.0f;
+	if( p.rest_omega  <= 0.0f ) p.rest_omega  = 0.03f;
+
+	SP_VecCopy( normal, n );
+	if( SP_VecNormalize( n ) <= 1e-3f )
+	{
+		if( out ) *out = res;
+		return;
+	}
+
+	for( i = 0; i < 3; i++ )
+	{
+		h[i] = half[i];
+		if( h[i] < 0.0f ) h[i] = -h[i];
+	}
+
+	// Does the box reach the surface at all? `reach` is the furthest any corner can
+	// be from the origin, so an origin higher than that is simply in the air and
+	// settling does not apply -- Slayer_Spin_Step owns the pose there.
+	reach = (float)sqrt( (double)( h[0] * h[0] + h[1] * h[1] + h[2] * h[2] ));
+	if( dist > reach + p.contact_eps )
+	{
+		if( out ) *out = res;
+		return;
+	}
+
+	res.contacts = SP_BoxCornerHeights( st, h, n, dist, p.contact_eps, &low, low_corner );
+	res.penetration = low;
+
+	if( res.contacts >= 3 )      res.support = SLAYER_SUPPORT_FACE;
+	else if( res.contacts == 2 ) res.support = SLAYER_SUPPORT_EDGE;
+	else if( res.contacts == 1 ) res.support = SLAYER_SUPPORT_POINT;
+	else                         res.support = SLAYER_SUPPORT_AIR;
+
+	// Oriented so that even the lowest corner clears the surface: in the air after
+	// all, whatever `dist` suggested.
+	if( res.contacts == 0 && low > p.contact_eps )
+	{
+		if( out ) *out = res;
+		return;
+	}
+
+	lever = SP_ContactAxis( low_corner, n, axis );
+
+	// STABLE = nothing is buried. No surface is pushing on the item, so the pose
+	// it is in is a genuine resting pose whatever angle that happens to be. This
+	// is where "resting on an edge" comes from: not from a branch that recognises
+	// edges, but from an edge pose having nothing left to push it flat. Two
+	// contacts across a step satisfy this exactly as well as four on a floor.
+	if( low >= -p.pen_tol )
+		res.stable = 1;
+
+	if( !res.stable && lever > 1e-2f )
+	{
+		// --- resolve penetration, at a limited rate -------------------------
+		//
+		// How much rotation lifts the corner out: the corner's height rises by
+		// about `lever` per radian, so `need / lever` radians. Capped at
+		// topple_rate, which is what makes this VISIBLE rather than instant --
+		// measured, the cap yields 4.3 degrees per frame over 0.083s, while
+		// resolving it in one step moves the model 19.7 degrees in a single frame,
+		// and that single frame is the "it glues itself flat on contact" the player
+		// reported. Transient penetration costs nothing: only the pose is ours,
+		// collision uses the server's hull either way.
+		float need = -low;
+		float rot = need / lever;
+		float max_step = p.topple_rate * dt;
+		float dq[4], result[4];
+
+		if( rot > max_step )
+			rot = max_step;
+
+		if( rot > 0.0f )
+		{
+			SP_QuatFromAxisAngle( axis, rot, dq );
+			SP_QuatMul( dq, st->orient, result );
+			st->orient[0] = result[0];
+			st->orient[1] = result[1];
+			st->orient[2] = result[2];
+			st->orient[3] = result[3];
+			SP_QuatNormalize( st->orient );
+			step = rot;
+
+			// The corner is being pushed out, so whatever spin drove it in is
+			// spent. An inelastic slap: keep a tenth, reversed. Without it the item
+			// rocks from corner to corner for seconds.
+			SP_VecScale( st->omega, -p.restitution, st->omega );
+		}
+	}
+	else if( SP_VecLen( st->omega ) > 1e-5f )
+	{
+		// Nothing buried, but still turning: let the remaining tumble run out
+		// against friction. This is what makes a weapon dropped at an angle rock
+		// once and settle instead of stopping dead the instant it touches.
+		float omega_len = SP_VecLen( st->omega );
+		float dq[4], result[4];
+
+		step = omega_len * dt;
+		SP_QuatFromAxisAngle( st->omega, step, dq );
+		SP_QuatMul( dq, st->orient, result );
+		st->orient[0] = result[0];
+		st->orient[1] = result[1];
+		st->orient[2] = result[2];
+		st->orient[3] = result[3];
+		SP_QuatNormalize( st->orient );
+	}
+
+	// Contact friction, applied last so it also damps the tumble integrated above.
+	{
+		float k = p.damping * dt;
+
+		if( k > 1.0f ) k = 1.0f;
+		SP_VecScale( st->omega, 1.0f - k, st->omega );
+	}
+
+	res.applied = step;
+
+	// SETTLED: nothing buried and no longer turning. The caller stops computing
+	// anything for the item from here until its origin moves.
+	if( res.stable && SP_VecLen( st->omega ) < p.rest_omega )
+	{
+		SP_VecClear( st->omega );
+		res.settled = 1;
+	}
+
+	if( out ) *out = res;
 }

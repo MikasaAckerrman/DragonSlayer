@@ -26,6 +26,7 @@ GNU General Public License for more details.
 #include "cl_loading_slayer.h"
 #include "cl_grenade_tumble_slayer.h"
 #include "cl_item_phys_slayer.h"
+#include "cl_model_extent_slayer.h"
 #include "cl_slayer_log.h"
 
 // ===========================================================================
@@ -458,6 +459,14 @@ void Slayer_ResetMatchState( void )
 	// Drop per-entity item poses: entity indices are reassigned on the next map,
 	// so a stale slot would hand a fresh item the previous one's orientation.
 	Slayer_ItemPhys_Reset();
+
+	// Drop the measured model extents. The cache is keyed by `model_t *`, and the
+	// model pool is reset between maps, so the next map's models land on the same
+	// addresses -- keeping the cache would hand a knife the extents of whatever
+	// occupied that pointer before it. (Slayer_ModelExtent_Get also verifies the
+	// model name on every hit, so this is belt and braces rather than the only
+	// defence, which is deliberate: a silently wrong box is invisible in play.)
+	Slayer_ModelExtent_Reset();
 }
 
 // ===========================================================================

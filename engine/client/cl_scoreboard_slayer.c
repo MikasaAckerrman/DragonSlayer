@@ -116,15 +116,24 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_block_migrated, "0", FCVAR_ARCHIVE,
 
 static CVAR_DEFINE_AUTO( slayer_scoreboard_ondeath, "1", FCVAR_ARCHIVE, "Slayer3D: show the scoreboard automatically while dead (0 = only when held)" );
 
-// Colours from the game's own VGUI scheme. The board in CS 1.6 is a
-// SectionedListPanel and takes its colours from resource/TrackerScheme.res, so a
-// player who themed their install expects ours to match. Read as DEFAULTS: a cvar
-// that still holds its built-in value yields to the file, a cvar the player set
-// wins. See Slayer_SB_ApplyScheme for why that comparison is against def_string.
+// Colours from the game's own VGUI scheme. Read as DEFAULTS: a cvar that still
+// holds its built-in value yields to the file, a cvar the player set wins. See
+// Slayer_SB_ApplyScheme for why that comparison is against def_string.
+//
+// WHICH FILE. This was `resource/TrackerScheme.res` and that was the wrong file.
+// TrackerScheme is the Tracker/Friends scheme -- its palette is olive (its
+// "Orange" is 142 137 35, Button.BgColor 76 88 68), which is why taking colours
+// from it turned the board olive and put an olive bar on the local player's row.
+// The board's real scheme is `resource/ClientScheme.res`, whose entries are named
+// for their purpose and whose own comment on "ListBG" reads "background of
+// scoreboard": ListBG 0 0 0 128, BaseText 255 176 0, SelectionBG 10 10 10 100.
+// The game's client library agrees -- the stock board fills 0 0 0 153 and prints
+// 255 140 0. Amber on near-black, not olive. The parser reads both families, so
+// pointing this cvar back at TrackerScheme still works.
 static CVAR_DEFINE_AUTO( slayer_scoreboard_scheme, "1", FCVAR_ARCHIVE,
 	"Slayer3D: take board colours from the game's VGUI scheme file (0 = cvars only)" );
 
-static CVAR_DEFINE_AUTO( slayer_scoreboard_scheme_file, "resource/TrackerScheme.res", FCVAR_ARCHIVE,
+static CVAR_DEFINE_AUTO( slayer_scoreboard_scheme_file, "resource/ClientScheme.res", FCVAR_ARCHIVE,
 	"Slayer3D: which scheme file to read board colours from" );
 
 // K/D instead of money. Money is the client library's business -- the engine
@@ -134,13 +143,18 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_kd, "1", FCVAR_ARCHIVE,
 	"Slayer3D: show a K/D column where the (unavailable) money column used to be" );
 
 // Highlight on the local player's own row. Colour comes from the scheme's
-// SelectedBgColor unless this is set; the alpha is separate because the scheme
+// selection entry unless this is set; the alpha is separate because the scheme
 // value is opaque and an opaque bar buries the nickname under it.
+//
+// DEFAULT 0. The highlight was added from a reference screenshot and, seen live,
+// it was the one thing the player disliked -- with TrackerScheme it arrived as an
+// olive bar (Orange 142 137 35) across his own row. Vanilla's own selection is
+// 10 10 10 100, i.e. barely there. Off by default, one cvar to bring it back.
 static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_color, "235 231 197", FCVAR_ARCHIVE,
 	"Slayer3D: highlight colour for your own row (scheme file wins while unset)" );
 
-static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_alpha, "70", FCVAR_ARCHIVE,
-	"Slayer3D: opacity of your own row's highlight (0-255)" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_alpha, "0", FCVAR_ARCHIVE,
+	"Slayer3D: opacity of your own row's highlight (0 = no highlight, 0-255)" );
 
 // Empty strip above the header row, as a fraction of the row height. Was a fixed
 // row_h/3 + 4, which read as wasted space on a phone-sized board.
@@ -240,10 +254,14 @@ static rgba_t cached_color_border;
 // Colours from the game's own VGUI scheme
 // ===========================================================================
 //
-// The board in CS 1.6 is a VGUI SectionedListPanel and takes its colours from
-// resource/TrackerScheme.res. A player who themed their install expects ours to
-// match, and re-typing those colours as cvars by hand is not a reasonable thing
-// to ask of them.
+// A player who themed their install expects our board to match, and re-typing
+// those colours as cvars by hand is not a reasonable thing to ask of them.
+//
+// The file to read is `resource/ClientScheme.res` -- see the note on
+// slayer_scoreboard_scheme_file for why TrackerScheme.res, which we used first,
+// is the wrong one (it is the Friends/Tracker scheme and its palette is olive).
+// Both key families are understood, so a install that themed TrackerScheme still
+// works if the cvar is pointed back at it.
 //
 // Read ONCE per map (the file cannot change mid-map) and used as DEFAULTS: see
 // Slayer_SB_SchemeColor for the cvar-versus-file precedence and why the test is
@@ -2445,18 +2463,19 @@ void Slayer_Scoreboard_Draw( void )
 		}
 
 		// No alternating stripes on PC — rows are plain text over the panel.
-		// Only the LOCAL player gets a highlight bar.
+		// Only the LOCAL player gets a highlight bar, and only if asked for.
+		//
+		// OFF BY DEFAULT (sel_alpha 0). Seen live this was the one element the
+		// player rejected: with TrackerScheme it arrived as an olive bar across
+		// his own row. Vanilla's own selection colour is 10 10 10 100, i.e.
+		// almost invisible, which is the honest reference. Skipping the draw
+		// entirely at alpha 0 also saves the scheme lookup per row.
 		//
 		// GEOMETRY, from the reference screenshot: the highlight is INSET from the
 		// board edges rather than running edge to edge, and it does not reach the
 		// rounded corners. A full-width bar was the thing that read as "a stripe
 		// painted over the board" instead of "this row is mine".
-		//
-		// COLOUR: SectionedListPanel.SelectedBgColor from the game's own scheme
-		// when the player has not chosen their own (olive 142 137 35 on the stock
-		// file). The scheme value is opaque, and an opaque bar would bury the
-		// nickname, so the alpha stays ours.
-		if( pidx == cl.playernum )
+		if( pidx == cl.playernum && slayer_scoreboard_sel_alpha.value > 0.0f )
 		{
 			rgba_t sel;
 			int    inset = (int)( board_w * 0.012f );
