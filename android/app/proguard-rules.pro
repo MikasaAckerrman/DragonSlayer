@@ -153,3 +153,23 @@
 
 # SteamLoginActivity is launched via Intent and calls XashActivity.nativeSteamLoginResult().
 -keep class su.xash.engine.SteamLoginActivity { *; }
+
+# ---------------------------------------------------------------------------
+# Steam presence — the "playing Counter-Strike" status.
+#
+# The engine reaches these through XashActivity's steamPresence* methods, which
+# the `public static *` rule above already keeps. What still needs saying:
+#
+#   * SteamAuthActivity is named only in an Intent and in the manifest, so
+#     nothing in Java references the class itself.
+#   * The su.xash.engine.steam package is a protocol implementation. Its field
+#     and method names are not reflected on, so shrinking is fine, but the
+#     public API SteamPresence exposes to the settings screen and to the JNI
+#     bridge must survive.
+# ---------------------------------------------------------------------------
+-keep class su.xash.engine.SteamAuthActivity { *; }
+
+-keep class su.xash.engine.steam.SteamPresence {
+    public *;                                   # XashActivity + settings screen
+}
+

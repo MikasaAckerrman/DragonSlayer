@@ -79,5 +79,52 @@
 	<string name="game_path_choose_folder">Выбрать папку самому</string>
 	<string name="game_path_choose_folder_summary">Любая папка на выбор. Переживёт удаление приложения, и в неё проще зайти файловым менеджером.</string>
 	<string name="game_path_reset_to_default">Память приложения: %1$s</string>
+	<!-- Перенос игровых файлов между выбранной папкой и папкой приложения -->
+	<string name="game_transfer">Перенос игровых файлов</string>
+	<string name="game_transfer_title">Перенос игровых файлов</string>
+	<string name="game_transfer_summary">Скопировать папку в память приложения или перенести память приложения обратно в папку</string>
+	<string name="game_transfer_paths">Папка: %1$s\nПамять приложения: %2$s</string>
+	<string name="game_transfer_import">Скопировать папку в память приложения</string>
+	<string name="game_transfer_import_summary">Копирует всё в собственную папку приложения. Выбранная папка остаётся нетронутой.</string>
+	<string name="game_transfer_export">Перенести память приложения в папку</string>
+	<string name="game_transfer_export_summary">Переносит файлы из папки приложения, освобождая её. Файл удаляется только после проверки копии.</string>
+	<string name="game_transfer_running_import">Копирование в память приложения</string>
+	<string name="game_transfer_running_export">Перенос в папку</string>
+	<string name="game_transfer_done">Готово: файлов %1$d, %2$s</string>
+	<string name="game_transfer_failed">Перенос не удался: %1$s</string>
+	<string name="game_transfer_no_folder">Сначала выберите папку в «Расположение игровых данных»</string>
+	<string name="game_transfer_source_missing">Переносить нечего: %1$s не существует</string>
+	<string name="game_transfer_not_a_game_dir">В %1$s нет подпапки valve/ или cstrike/</string>
+	<string name="game_transfer_confirm_export_title">Перенести файлы из памяти приложения?</string>
+	<string name="game_transfer_confirm_export">Файлы будут ПЕРЕНЕСЕНЫ в %1$s и удалены из памяти приложения. Каждый файл удаляется только после проверки копии.</string>
+	<string name="game_transfer_continue">Продолжить</string>
+
 	<string name="steam_advertise_summary">Отправляет ваш настоящий SteamID на сервер, чтобы другие игроки видели вашу аватарку. Выключите, если сервер отклоняет подключение.</string>
+
+	<!-- Steam presence / sign-in -->
+	<string name="steam_presence">Показывать, во что играю</string>
+	<string name="steam_presence_summary">В профиле Steam будет «Играет в Counter-Strike», пока вы в игре.</string>
+	<string name="steam_presence_needs_signin">Сначала войдите в Steam — для статуса нужен вошедший аккаунт.</string>
+	<string name="steam_presence_active">Включено — профиль показывает игру, пока вы играете.</string>
+	<string name="steam_presence_off">Выключено — в Steam ничего не отправляется.</string>
+	<string name="steam_auth_title">Вход через Steam</string>
+	<string name="steam_auth_starting">Связь со Steam…</string>
+	<string name="steam_auth_qr_ready">Подтвердите вход в приложении Steam.\n\nЕсли Steam установлен здесь, нажмите кнопку ниже. Чтобы подтвердить с другого устройства, откройте:\n%1$s</string>
+	<string name="steam_auth_open_app">Подтвердить в приложении Steam</string>
+	<string name="steam_auth_use_password">Ввести имя аккаунта и пароль</string>
+	<string name="steam_auth_account_hint">Имя аккаунта Steam</string>
+	<string name="steam_auth_password_hint">Пароль</string>
+	<string name="steam_auth_sign_in">Войти</string>
+	<string name="steam_auth_need_credentials">Введите и имя аккаунта, и пароль.</string>
+	<string name="steam_auth_signing_in">Вход…</string>
+	<string name="steam_auth_waiting_approval">Ожидание подтверждения входа…</string>
+	<string name="steam_auth_email_code">Код из письма</string>
+	<string name="steam_auth_app_code">Код из приложения Steam</string>
+	<string name="steam_auth_enter_email_code">Steam прислал код на почту. Введите его ниже.</string>
+	<string name="steam_auth_enter_app_code">Введите код Steam Guard из приложения-аутентификатора.</string>
+	<string name="steam_auth_submit_code">Отправить код</string>
+	<string name="steam_auth_signed_in">Вход в Steam выполнен — SteamID %1$s</string>
+	<string name="steam_auth_failed">Не удалось войти: %1$s</string>
+	<string name="steam_auth_cancelled">Вход отменён.</string>
+	<string name="steam_auth_timed_out">Время ожидания входа истекло. Попробуйте снова.</string>
 </resources>

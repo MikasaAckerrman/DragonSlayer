@@ -23,6 +23,7 @@ GNU General Public License for more details.
 #include "cl_avatar_download.h"
 #include "cl_steam_api.h"
 #include "cl_steam_login.h"
+#include "cl_steam_presence_slayer.h"
 #include "cl_slayer_log.h"
 #include "cl_slayer_toast.h"
 #include "cl_slayer_conspy.h"           // Slayer_ConSpy_QuietStatus
@@ -140,19 +141,22 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_scheme_file, "resource/ClientScheme.r
 //
 // Money is not an option here: the engine never receives it (it belongs to the
 // client library's own message stream), so that column could only ever have been
-// blank. K/D was put in its place, and the player has now asked for the column
-// to go away again -- but for the SPACE to stay, so the rest of the table keeps
-// the geometry it has.
+// blank. K/D took its place, and the player has now asked for the column to go
+// away AND for HP to move over into where it was -- "колонка где была k/d
+// осталась пустой, нужно было колонку с HP перенести на место k/d".
 //
-//   0 - no column, and its width stays RESERVED and empty (default, asked for)
+//   0 - no column, width kept reserved and empty
 //   1 - show K/D
-//   2 - no column and the space closes up
+//   2 - no column, HP moves right into the K/D slot (default, asked for)
 //
-// 0 rather than 2 as the default is the whole point of this cvar existing at
-// three values: collapsing the gap moves HP, Компл. and the nicknames, which is
-// exactly what "не ломая геометрию таблицы" rules out.
-static CVAR_DEFINE_AUTO( slayer_scoreboard_kd, "0", FCVAR_ARCHIVE,
-	"Slayer3D: K/D column between HP and Score (0 = gone, space kept; 1 = shown; 2 = gone, space closed)" );
+// Default 2: the earlier request to KEEP the empty space was itself rejected on
+// sight -- the gap between HP and Счет read as a missing column, not as tidy
+// spacing. So HP now sits flush where K/D was and there is no hole.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_kd, "2", FCVAR_ARCHIVE,
+	"Slayer3D: K/D column between HP and Score (0 = gone, space kept; 1 = shown; 2 = gone, HP fills the slot)" );
+
+static CVAR_DEFINE_AUTO( slayer_scoreboard_kd_migrated, "0", FCVAR_ARCHIVE,
+	"Slayer3D internal: K/D column-mode migration completed" );
 
 // Marking the LOCAL player's row.
 //
@@ -1129,6 +1133,7 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_scoreboard_scheme );
 	Cvar_RegisterVariable( &slayer_scoreboard_scheme_file );
 	Cvar_RegisterVariable( &slayer_scoreboard_kd );
+	Cvar_RegisterVariable( &slayer_scoreboard_kd_migrated );
 	Cvar_RegisterVariable( &slayer_scoreboard_sel_style );
 	Cvar_RegisterVariable( &slayer_scoreboard_sel_color );
 	Cvar_RegisterVariable( &slayer_scoreboard_sel_alpha );
@@ -1234,6 +1239,20 @@ void Slayer_Scoreboard_Init( void )
 			(int)slayer_scoreboard_sel_alpha.value );
 	}
 
+	// K/D COLUMN MODE. The previous build shipped mode 0 (column gone, gap kept)
+	// and that value is now in the player's config.cfg; a new default of 2 cannot
+	// take effect without a migration. The kept gap read as a missing column, so
+	// the shipped 0 is moved to 2 (HP fills the slot). A deliberately chosen 0 or
+	// 1 is left alone -- only the exact shipped default is touched.
+	if( slayer_scoreboard_kd_migrated.value == 0.0f )
+	{
+		if( (int)slayer_scoreboard_kd.value == 0 )
+			Cvar_SetValue( "slayer_scoreboard_kd", 2.0f );
+		Cvar_SetValue( "slayer_scoreboard_kd_migrated", 1.0f );
+		Slayer_Log_Printf( "K/D column migration: reserved-gap -> HP fills the slot (kd=%d)",
+			(int)slayer_scoreboard_kd.value );
+	}
+
 	Cmd_AddCommand( "+slayer_scoreboard", Cmd_ScoreboardDown_f,
 		"show Slayer3D custom scoreboard" );
 	Cmd_AddCommand( "-slayer_scoreboard", Cmd_ScoreboardUp_f,
@@ -1251,6 +1270,7 @@ void Slayer_Scoreboard_Init( void )
 	Slayer_AvatarDownload_MigrateCache();
 	Slayer_SteamAPI_Init();
 	Slayer_SteamLogin_Init();
+	Slayer_SteamPresence_Init();
 
 	Slayer_Log_Printf( "=== scoreboard init; local SteamID=%" PRIu64 " ===",
 		Slayer_SteamLogin_GetLocalID() );
@@ -1514,47 +1534,68 @@ static void Slayer_DrawStringRight( cl_font_t *font, int right_x, int y, const c
 // takes an alpha), so a smooth corner is a per-pixel signed-distance composite
 // of the border stroke over the fill — the staircase dissolves into the alpha.
 // bg/border already carry their final alpha (global opacity pre-applied).
-static void Slayer_DrawRoundedPanel( int x, int y, int w, int h, int R,
-	const rgba_t bg, const rgba_t border )
+//
+// COST, and why it is cached.
+//
+// Measured by counting: the corner loop runs R rows (R is clamped to 22) and for
+// each row searches up to R columns for the fill boundary and then composites up
+// to that many anti-aliased pixels, each as FOUR FillRGBA calls (the four mirrored
+// corners). At R = 16 that is ~250 sqrt() and ~1000 draw calls PER FRAME, every
+// frame the board is open, to redraw four corners that have not changed.
+//
+// The geometry depends only on ( R, bg, border ). All three are constant for as
+// long as the board is open -- row_h changes only with the roster or the font
+// tier, and the colours only when a cvar is edited. So the composite is computed
+// once into SLAYER_CORNER_MAX^2 bytes and replayed afterwards, and the replay
+// also skips fully transparent pixels, which the original could only discover by
+// computing them.
+//
+// A texture would cut the draw calls too, but GL_CreateTexture replaces textures
+// BY NAME (see the notes in cl_radar_map_slayer.c) and the board would need to
+// invalidate it on every colour change -- a bigger change than the win justifies.
+#define SLAYER_CORNER_MAX 24
+
+typedef struct
+{
+	int  valid;
+	int  R;
+	byte bg[4], border[4];
+	int  xin[SLAYER_CORNER_MAX];                       // fill boundary per row
+	byte px[SLAYER_CORNER_MAX][SLAYER_CORNER_MAX][4];  // composited AA pixel
+} slayer_corner_cache_t;
+
+static slayer_corner_cache_t sb_corner;
+
+static void Slayer_BuildCornerCache( int R, const rgba_t bg, const rgba_t border )
 {
 	const float EDGE   = (float)R - 0.5f;
 	const float STROKE = 1.25f;
-	const byte  bR = border[0], bG = border[1], bB = border[2];
 	const float bgA  = bg[3] / 255.0f;
 	const float brA  = border[3] / 255.0f;
 	const float bevA = brA * 0.47f;
-	const byte  bevAA = (byte)( border[3] * 0.47f );
 	int py, xx;
 
-	if( R <= 0 )
-	{
-		Slayer_DrawRect( x, y, w, h, bg[0], bg[1], bg[2], bg[3] );
-		Slayer_DrawRect( x, y, w, 1, bR, bG, bB, border[3] );
-		Slayer_DrawRect( x, y + h - 1, w, 1, bR, bG, bB, border[3] );
-		Slayer_DrawRect( x, y, 1, h, bR, bG, bB, border[3] );
-		Slayer_DrawRect( x + w - 1, y, 1, h, bR, bG, bB, border[3] );
-		return;
-	}
+	memset( &sb_corner, 0, sizeof( sb_corner ));
+	sb_corner.R = R;
+	memcpy( sb_corner.bg, bg, 4 );
+	memcpy( sb_corner.border, border, 4 );
 
 	for( py = 0; py < R; py++ )
 	{
 		float cy = (float)py + 0.5f - (float)R;
-		int   yT = y + py, yB = y + h - 1 - py;
 		int   xIn = R;
 
 		for( xx = 0; xx < R; xx++ )
 		{
 			float cx = (float)xx + 0.5f - (float)R;
+
 			if( sqrt( cx * cx + cy * cy ) <= EDGE - STROKE - 2.4f )
 			{
 				xIn = xx;
 				break;
 			}
 		}
-
-		// solid fill span for these two mirrored rows
-		Slayer_DrawRect( x + xIn, yT, w - 2 * xIn, 1, bg[0], bg[1], bg[2], bg[3] );
-		Slayer_DrawRect( x + xIn, yB, w - 2 * xIn, 1, bg[0], bg[1], bg[2], bg[3] );
+		sb_corner.xin[py] = xIn;
 
 		for( xx = 0; xx < xIn; xx++ )
 		{
@@ -1562,7 +1603,6 @@ static void Slayer_DrawRoundedPanel( int x, int y, int w, int h, int R,
 			float d = (float)sqrt( cx * cx + cy * cy );
 			float cov = EDGE - d + 0.5f;
 			float s, bev, t, a;
-			byte  rr, gg, bb, aa;
 
 			if( cov <= 0.0f ) continue;
 			if( cov > 1.0f ) cov = 1.0f;
@@ -1582,17 +1622,68 @@ static void Slayer_DrawRoundedPanel( int x, int y, int w, int h, int R,
 
 			a = bgA * cov * ( 1.0f - t ) + brA * s + bevA * bev;
 			if( a > 1.0f ) a = 1.0f;
-			aa = (byte)( a * 255.0f + 0.5f );
-			if( aa < 2 ) continue;
 
-			rr = (byte)( bR * t );
-			gg = (byte)( bG * t );
-			bb = (byte)( bB * t );
+			// Alpha below 2 was already skipped by the original draw; storing 0
+			// here is what lets the replay skip it without a test per pixel.
+			if( a * 255.0f + 0.5f < 2.0f )
+				continue;
 
-			Slayer_DrawRect( x + xx,         yT, 1, 1, rr, gg, bb, aa );
-			Slayer_DrawRect( x + w - 1 - xx, yT, 1, 1, rr, gg, bb, aa );
-			Slayer_DrawRect( x + xx,         yB, 1, 1, rr, gg, bb, aa );
-			Slayer_DrawRect( x + w - 1 - xx, yB, 1, 1, rr, gg, bb, aa );
+			sb_corner.px[py][xx][0] = (byte)( border[0] * t );
+			sb_corner.px[py][xx][1] = (byte)( border[1] * t );
+			sb_corner.px[py][xx][2] = (byte)( border[2] * t );
+			sb_corner.px[py][xx][3] = (byte)( a * 255.0f + 0.5f );
+		}
+	}
+
+	sb_corner.valid = 1;
+}
+
+static void Slayer_DrawRoundedPanel( int x, int y, int w, int h, int R,
+	const rgba_t bg, const rgba_t border )
+{
+	const byte  bR = border[0], bG = border[1], bB = border[2];
+	const byte  bevAA = (byte)( border[3] * 0.47f );
+	int py, xx;
+
+	if( R <= 0 )
+	{
+		Slayer_DrawRect( x, y, w, h, bg[0], bg[1], bg[2], bg[3] );
+		Slayer_DrawRect( x, y, w, 1, bR, bG, bB, border[3] );
+		Slayer_DrawRect( x, y + h - 1, w, 1, bR, bG, bB, border[3] );
+		Slayer_DrawRect( x, y, 1, h, bR, bG, bB, border[3] );
+		Slayer_DrawRect( x + w - 1, y, 1, h, bR, bG, bB, border[3] );
+		return;
+	}
+
+	if( R > SLAYER_CORNER_MAX )
+		R = SLAYER_CORNER_MAX;
+
+	// Rebuild only when something the geometry depends on actually changed.
+	if( !sb_corner.valid || sb_corner.R != R
+	 || memcmp( sb_corner.bg, bg, 4 ) != 0
+	 || memcmp( sb_corner.border, border, 4 ) != 0 )
+		Slayer_BuildCornerCache( R, bg, border );
+
+	for( py = 0; py < R; py++ )
+	{
+		int yT = y + py, yB = y + h - 1 - py;
+		int xIn = sb_corner.xin[py];
+
+		// solid fill span for these two mirrored rows
+		Slayer_DrawRect( x + xIn, yT, w - 2 * xIn, 1, bg[0], bg[1], bg[2], bg[3] );
+		Slayer_DrawRect( x + xIn, yB, w - 2 * xIn, 1, bg[0], bg[1], bg[2], bg[3] );
+
+		for( xx = 0; xx < xIn; xx++ )
+		{
+			const byte *p = sb_corner.px[py][xx];
+
+			if( p[3] == 0 )
+				continue;
+
+			Slayer_DrawRect( x + xx,         yT, 1, 1, p[0], p[1], p[2], p[3] );
+			Slayer_DrawRect( x + w - 1 - xx, yT, 1, 1, p[0], p[1], p[2], p[3] );
+			Slayer_DrawRect( x + xx,         yB, 1, 1, p[0], p[1], p[2], p[3] );
+			Slayer_DrawRect( x + w - 1 - xx, yB, 1, 1, p[0], p[1], p[2], p[3] );
 		}
 	}
 
@@ -1681,28 +1772,33 @@ SB_LocalDeadNow
 
 Is the LOCAL player dead right now?
 
-ONE definition, used by both the visibility query and the draw path. Having two
-was the measured cause of both live complaints about the death view:
+ONE definition, used by both the visibility query and the draw path -- having two
+was the measured cause of the board FLASHING (Draw read the ScoreAttrib flag,
+IsVisible read `flag || health<=0`, and for the 1-3 frames the flag lags they
+disagreed). One function, so they cannot disagree.
 
-  * Draw() decided from the ScoreAttrib flag only, while IsVisible() accepted
-    `flags || health <= 0`. Between death and the flag's arrival (1-3 frames)
-    IsVisible said yes and Draw said no, so the stock-board gate engaged with
-    nothing drawn in its place -- the board FLASHED.
-  * The flag lags on RESPAWN as well, so the reverse gap kept the board up for a
-    few frames after the player was already alive again.
+BOTH signals are consulted, because neither works alone:
 
-And the flag is dropped from the local decision entirely, not merely OR-ed in:
-`cl.local.health` is in the same snapshot as everything else we draw, it is
-authoritative for the local player in both directions, and it never lags. The
-flag remains what marks OTHER players' rows "DEAD", where no health arrives.
+  * cl.local.health is immediate -- it arrives in the same snapshot as everything
+    else we draw -- and it is what makes both death and RESPAWN instant.
+  * the ScoreAttrib dead flag (bit 0) is authoritative for the whole dead period
+    (it is what the game's own client keys its death board off,
+    g_PlayerExtraInfo[].dead) but lags by 1-3 frames.
 
-The team gate stays: health is 0 during team selection too, and auto-showing a
-scoreboard to someone who has not picked a side yet is not what CS does.
+The trap is health == 1. CBasePlayer::StartObserver sets pev->health = 1 and
+cl_parse.c forces cl.local.health = 1 for spectators, so a dead player watching
+the round reads as ALIVE on health alone -- that is why the death board stopped
+appearing. Health decides at 0 and at >= 2; only the ambiguous 1 falls back to
+the flag, by which point it has long arrived.
+
+The team gate stays: health is 0 during team selection too, and CS shows no board
+to someone who has not picked a side.
 ====================
 */
 static qboolean SB_LocalDeadNow( void )
 {
 	int myteam;
+	int hp;
 
 	if( cl.playernum < 0 || cl.playernum >= MAX_CLIENTS )
 		return false;
@@ -1712,7 +1808,32 @@ static qboolean SB_LocalDeadNow( void )
 	if( myteam != SLAYER_TEAM_CT && myteam != SLAYER_TEAM_T )
 		return false;
 
-	return ( cl.local.health <= 0 );
+	hp = cl.local.health;
+
+	// THREE cases, because neither signal is usable alone. Measured against what
+	// the two sides actually send:
+	//
+	//   hp <= 0   -- dead, and known IMMEDIATELY. This is the death frame and the
+	//               few that follow it, before any server flag arrives.
+	//   hp >= 2   -- alive, and known immediately. This is what makes RESPAWN
+	//               instant: the ScoreAttrib dead flag lags by 1-3 frames there
+	//               too, and waiting for it would keep the board up over a live
+	//               player.
+	//   hp == 1   -- AMBIGUOUS, and this is the case that broke the death board.
+	//               CBasePlayer::StartObserver sets pev->health = 1
+	//               (ReGameDLL dlls/player.cpp), and cl_parse.c forces
+	//               cl.local.health = 1 for spectators as well. So a dead player
+	//               watching the round has health 1, not 0 -- and a health-only
+	//               test reads him as alive, which is exactly "при смерти
+	//               скорборд вовсе не отображается". A player genuinely on 1 HP
+	//               also exists, so the tie is broken by the server's flag, which
+	//               by this point has long arrived.
+	if( hp <= 0 )
+		return true;
+	if( hp >= 2 )
+		return false;
+
+	return ( slayer_scores[cl.playernum].flags & 1 ) ? true : false;
 }
 
 /*
@@ -1931,11 +2052,26 @@ void Slayer_Scoreboard_Draw( void )
 	int          global_opacity;
 	cl_font_t   *font;
 
+	// AVATAR MACHINERY. Runs even when the board is closed, on purpose: downloads
+	// and GPU uploads are budgeted per frame, so they have to make progress while
+	// nobody is looking or the first board open would stall.
+	//
+	// But NOT while disconnected. Every one of these pumps ends in a "not active"
+	// or "nothing pending" check of its own, so this gate changes no behaviour --
+	// it just stops four calls, a 32-slot scan and up to 32 FS_FileExists() per
+	// frame from happening in the menu, where there is no server and no player
+	// list to act on. Measured on the menu: the FS scan is the expensive part,
+	// since a stat() per slot per frame is real I/O.
+	if( cls.state != ca_active )
+	{
+		return;
+	}
+
 	// Always request the LOCAL player's own avatar by the REAL logged-in
 	// SteamID (independent of the possibly-fake id we advertise to the server).
 	// This makes your own icon show, and — crucially — exercises the whole
 	// download path even solo (no other players needed to reproduce/diagnose).
-	if( cls.state == ca_active && cl.playernum >= 0 && cl.playernum < MAX_CLIENTS )
+	if( cl.playernum >= 0 && cl.playernum < MAX_CLIENTS )
 	{
 		uint64_t myid = Slayer_SteamLogin_GetLocalID();
 		if( myid != 0 && slayer_steamid64[cl.playernum] != myid )
@@ -1986,13 +2122,11 @@ void Slayer_Scoreboard_Draw( void )
 	if( slayer_scoreboard.value == 0.0f )
 		return;
 
-	if( cls.state != ca_active )
-		return;
-
 	// ONE decision, taken in Slayer_Scoreboard_IsVisible, which every gate in the
 	// frame also asks. Re-deriving it here is what made the board flash: the two
 	// copies disagreed for the 1-3 frames the ScoreAttrib flag lags behind death,
 	// so the gate suppressed the stock board while we drew nothing.
+	// (cls.state was already checked above, before the avatar pumps.)
 	if( !Slayer_Scoreboard_IsVisible( ))
 		return;
 
@@ -2328,7 +2462,10 @@ void Slayer_Scoreboard_Draw( void )
 			radius = (int)( board_h * slayer_scoreboard_corner.value );
 
 		if( radius < 6 ) radius = 6;
-		if( radius > 22 ) radius = 22;
+		// Ceiling tied to the corner cache's own size, so the two cannot drift
+		// apart: a radius larger than the cache would be silently clamped inside
+		// the panel helper and the corners would stop matching the cvar.
+		if( radius > SLAYER_CORNER_MAX - 2 ) radius = SLAYER_CORNER_MAX - 2;
 		if( radius > board_w / 2 ) radius = board_w / 2;
 		if( radius > board_h / 2 ) radius = board_h / 2;
 

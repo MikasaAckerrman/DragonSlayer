@@ -6,6 +6,12 @@
 		app:layout="@layout/edit_text_preference"
 		app:title="@string/game_data_location" />
 
+	<Preference
+		app:key="game_transfer"
+		app:layout="@layout/edit_text_preference"
+		app:title="@string/game_transfer"
+		app:summary="@string/game_transfer_summary" />
+
 	<SwitchPreferenceCompat
 		app:key="use_icons"
 		app:layout="@layout/switch_preference"
@@ -30,6 +36,13 @@
 			app:title="@string/steam_advertise"
 			app:summary="@string/steam_advertise_summary"
 			app:defaultValue="false" />
+
+		<SwitchPreferenceCompat
+			app:key="steam_presence_enabled"
+			app:layout="@layout/switch_preference"
+			app:title="@string/steam_presence"
+			app:summary="@string/steam_presence_summary"
+			app:defaultValue="true" />
 
 	</PreferenceCategory>
 

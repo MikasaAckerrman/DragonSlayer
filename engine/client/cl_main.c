@@ -25,6 +25,7 @@ GNU General Public License for more details.
 #include "cl_hud_slayer.h"
 #include "cl_sgs_slayer.h"
 #include "cl_steam_login.h"
+#include "cl_steam_presence_slayer.h"
 #include "cl_slayer_toast.h"
 #include "vid_common.h"
 #include "pm_local.h"
@@ -3742,6 +3743,10 @@ void Host_ClientFrame( void )
 
 	// adjust client time
 	CL_AdjustClock ();
+
+	// tell Steam whether we are in a game; sends only on a change, and never
+	// blocks -- the CM session lives on its own thread in the launcher
+	Slayer_SteamPresence_Frame ();
 }
 
 //============================================================================
@@ -3808,6 +3813,9 @@ void CL_Shutdown( void )
 	SCR_Shutdown ();
 	CL_UnloadProgs ();
 	SteamBroker_Shutdown();
+	// before cls.initialized goes false: an abandoned "playing" status on the
+	// profile outlives the process, so clearing it is not optional
+	Slayer_SteamPresence_Shutdown();
 	cls.initialized = false;
 
 	// for client-side VGUI support we use other order

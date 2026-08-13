@@ -559,4 +559,115 @@ public class XashActivity extends SDLActivity {
 	 * @param steamid64 The SteamID64, or -1 if login failed/cancelled
 	 */
 	public static native void nativeSteamLoginResult( long steamid64 );
+
+	// =========================================================================
+	// Steam rich presence — the "playing Counter-Strike" status
+	// =========================================================================
+	//
+	// These are the engine's only way in; everything else lives in
+	// su.xash.engine.steam. The engine calls them from its own thread and
+	// never blocks: SteamPresence owns a background thread for the network.
+	//
+	// Note how this differs from startSteamLogin() above. That one runs Steam
+	// OpenID, whose entire answer is a SteamID64 — an identity, not a session.
+	// A status needs a credential, which is what the token flow in
+	// SteamAuthActivity produces.
+
+	/**
+	 * Announce a game as being played. Called from native C via JNI.
+	 *
+	 * @param appid      Steam app id; 10 is Counter-Strike
+	 * @param extraInfo  optional title shown beside the game
+	 * @param serverIp   dotted-quad server address, or empty
+	 * @param serverPort server port, or 0
+	 * @return 1 if a Steam token is stored and the status was requested, else 0
+	 */
+	public static int steamPresenceStart( long appid, String extraInfo,
+		String serverIp, int serverPort )
+	{
+		android.content.Context ctx = SDLActivity.getContext();
+
+		if( ctx == null )
+		{
+			Log.e( TAG, "steamPresenceStart: no context" );
+			return 0;
+		}
+
+		try
+		{
+			su.xash.engine.steam.SteamPresence p =
+				su.xash.engine.steam.SteamPresence.get( ctx );
+
+			if( !p.isAvailable() )
+				return 0;
+
+			p.start( appid, extraInfo,
+				serverIp != null && serverIp.length() > 0 ? serverIp : null,
+				serverPort );
+			return 1;
+		}
+		catch( Throwable e )
+		{
+			// A broken status must never take the game down with it.
+			Log.e( TAG, "steamPresenceStart: " + e );
+			return 0;
+		}
+	}
+
+	/** Clear the status. Called from native C via JNI. */
+	public static void steamPresenceStop()
+	{
+		try
+		{
+			su.xash.engine.steam.SteamPresence p =
+				su.xash.engine.steam.SteamPresence.peek();
+
+			if( p != null )
+				p.stop();
+		}
+		catch( Throwable e )
+		{
+			Log.e( TAG, "steamPresenceStop: " + e );
+		}
+	}
+
+	/** Tear down the session; called when the engine shuts down. */
+	public static void steamPresenceShutdown()
+	{
+		try
+		{
+			su.xash.engine.steam.SteamPresence p =
+				su.xash.engine.steam.SteamPresence.peek();
+
+			if( p != null )
+				p.shutdown();
+		}
+		catch( Throwable e )
+		{
+			Log.e( TAG, "steamPresenceShutdown: " + e );
+		}
+	}
+
+	/**
+	 * Whether a usable Steam credential is stored, so the engine can tell the
+	 * player why nothing is showing instead of failing silently.
+	 * Called from native C via JNI.
+	 */
+	public static int steamPresenceAvailable()
+	{
+		android.content.Context ctx = SDLActivity.getContext();
+
+		if( ctx == null )
+			return 0;
+
+		try
+		{
+			return su.xash.engine.steam.SteamPresence.get( ctx ).isAvailable() ? 1 : 0;
+		}
+		catch( Throwable e )
+		{
+			Log.e( TAG, "steamPresenceAvailable: " + e );
+			return 0;
+		}
+	}
 }
