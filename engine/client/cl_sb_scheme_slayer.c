@@ -309,12 +309,27 @@ static const sb_wanted_t sb_wanted[] =
 	{ "SectionedListPanel.SelectedTextColor",          SLAYER_SCHEME_HAS_SELECTED_TEXT, SB_FIELD( selected_text ),   SB_PRIO_WIDGET },
 
 	// ClientScheme.res -- the vanilla CS 1.6 board palette.
+	//
+	// TEXT COLOURS ARE DELIBERATELY NOT TAKEN FROM PALETTE NAMES. They were, and
+	// it was wrong in a way only the player's own file makes obvious:
+	//
+	//     "BaseText"     "255 176 0 255"   // "used in text windows, lists"
+	//     "BorderBright" "188 112 0 128"   // "the lit side of a control"
+	//
+	// BaseText is a general text colour for every list in the game, and BorderBright
+	// is a BORDER colour -- mapping it onto the column labels was an assumption, and
+	// it produced dull brown headers on a dark panel. Because a cvar only loses to
+	// the file while it still holds its compiled-in default, the board's white text
+	// was being replaced by amber for every player who had never touched the cvar,
+	// with no way to tell that a file was responsible.
+	//
+	// Widget-specific keys stay (see above): `SectionedListPanel.TextColor` and
+	// `.HeaderTextColor` name THIS widget, so a themed scheme still wins. Only the
+	// guesses are gone.
 	{ "ListBG",                                        SLAYER_SCHEME_HAS_BG,            SB_FIELD( bg ),              SB_PRIO_PALETTE },
 	{ "SelectionBG",                                   SLAYER_SCHEME_HAS_SELECTED_BG,   SB_FIELD( selected_bg ),     SB_PRIO_PALETTE },
 	{ "SelectionBG2",                                  SLAYER_SCHEME_HAS_OOF_BG,        SB_FIELD( oof_selected_bg ), SB_PRIO_PALETTE },
-	{ "BaseText",                                      SLAYER_SCHEME_HAS_TEXT,          SB_FIELD( text ),            SB_PRIO_PALETTE },
 	{ "BrightBaseText",                                SLAYER_SCHEME_HAS_BRIGHT_TEXT,   SB_FIELD( bright_text ),     SB_PRIO_PALETTE },
-	{ "BorderBright",                                  SLAYER_SCHEME_HAS_HEADER_TEXT,   SB_FIELD( header_text ),     SB_PRIO_PALETTE },
 	{ "BorderDark",                                    SLAYER_SCHEME_HAS_DIVIDER,       SB_FIELD( divider ),         SB_PRIO_PALETTE },
 	{ "SelectedText",                                  SLAYER_SCHEME_HAS_SELECTED_TEXT, SB_FIELD( selected_text ),   SB_PRIO_PALETTE },
 };

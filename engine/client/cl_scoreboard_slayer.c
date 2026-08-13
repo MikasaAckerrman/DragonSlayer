@@ -136,47 +136,77 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_scheme, "1", FCVAR_ARCHIVE,
 static CVAR_DEFINE_AUTO( slayer_scoreboard_scheme_file, "resource/ClientScheme.res", FCVAR_ARCHIVE,
 	"Slayer3D: which scheme file to read board colours from" );
 
-// K/D instead of money. Money is the client library's business -- the engine
-// never receives it, so the column could only ever have been blank -- while K/D
-// is derivable from what ScoreInfo already gives us.
-static CVAR_DEFINE_AUTO( slayer_scoreboard_kd, "1", FCVAR_ARCHIVE,
-	"Slayer3D: show a K/D column where the (unavailable) money column used to be" );
-
-// Highlight on the local player's own row.
+// K/D column.
 //
-// THREE ways to mark your own row, because the first attempt was rejected and the
-// reason was instructive rather than cosmetic.
+// Money is not an option here: the engine never receives it (it belongs to the
+// client library's own message stream), so that column could only ever have been
+// blank. K/D was put in its place, and the player has now asked for the column
+// to go away again -- but for the SPACE to stay, so the rest of the table keeps
+// the geometry it has.
 //
-//   0 - nothing.
-//   1 - a LINE under the row. This is what CS 1.6 actually does: the vanilla
-//       board separates and marks with 1px rules (its own team headers are
-//       underlined with FillRGBA(..., 1, ...) in the client library), and the
-//       colour it uses for selection is SelectionBG 10 10 10 100 -- near-black and
-//       almost invisible as a fill. A fill of any colour reads as "a stripe
-//       painted over the board"; a line reads as "this row is mine".
-//   2 - the filled bar, which is what was there before. Kept because it is one
-//       cvar away and someone may prefer it.
+//   0 - no column, and its width stays RESERVED and empty (default, asked for)
+//   1 - show K/D
+//   2 - no column and the space closes up
 //
-// Default 1: the player asked for his row to be marked and rejected the bar, so
-// the honest reading is "mark it, but the way the game does".
-static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_style, "1", FCVAR_ARCHIVE,
-	"Slayer3D: how your own row is marked (0 = not at all, 1 = underline, 2 = filled bar)" );
+// 0 rather than 2 as the default is the whole point of this cvar existing at
+// three values: collapsing the gap moves HP, Компл. and the nicknames, which is
+// exactly what "не ломая геометрию таблицы" rules out.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_kd, "0", FCVAR_ARCHIVE,
+	"Slayer3D: K/D column between HP and Score (0 = gone, space kept; 1 = shown; 2 = gone, space closed)" );
 
-// Colour of that mark. Defaults to the board's own text colour rather than to a
-// palette entry: the mark belongs to the row, and a line in the row's own colour
-// cannot clash with whatever scheme the player's game uses.
-static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_color, "255 176 0", FCVAR_ARCHIVE,
-	"Slayer3D: colour of your own row's marker (amber, as in the vanilla scheme)" );
+// Marking the LOCAL player's row.
+//
+// Fourth attempt, and the request is now explicit: "убрать жёлтую полосу,
+// вместо неё тонкая прозрачная линия через всю ячейку МОЕГО игрока".
+//
+// What was shipped and rejected: an AMBER (255 176 0) underline at alpha 200.
+// The shape was right; the colour was not. Amber at alpha 200 is a painted
+// stripe -- it adds a hue the board does not otherwise have, which is what made
+// it read as a highlight bar rather than as "this row is mine".
+//
+// The vanilla client's own answer is one call, and it adds LIGHT, not colour:
+//
+//     FillRGBABlend( xstart, ypos, xend - xstart, ScoreRowGap(),
+//                    255, 255, 255, isDead ? 7 : 15 );
+//
+// (cs16-client cl_dll/hud/scoreboard.cpp, `if( pl_info->thisplayer )`.)
+//
+//   2 - a THIN translucent WHITE line spanning the whole cell (default)
+//   1 - the full-cell translucent band, i.e. exactly the vanilla fill
+//   3 - the old opaque-ish coloured bar
+//   0 - nothing
+//
+// Default 2 because that is what was asked for in words: a line, across the
+// whole cell, transparent. Style 1 stays one cvar away for anyone who prefers
+// the vanilla wash.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_style, "2", FCVAR_ARCHIVE,
+	"Slayer3D: how your own row is marked (0 = not at all, 1 = translucent band, 2 = thin line, 3 = coloured bar)" );
 
-// Opacity of the marker. A LINE can be nearly opaque without burying anything,
-// which is why the default is high here while the old filled bar needed to stay
-// faint; style 2 scales this down itself.
-static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_alpha, "200", FCVAR_ARCHIVE,
-	"Slayer3D: opacity of your own row's marker (0-255)" );
+// WHITE. The mark is a lightening of the panel, not a colour applied to it;
+// anything else reads as a stripe painted over the board, which is the exact
+// complaint about the amber version.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_color, "255 255 255", FCVAR_ARCHIVE,
+	"Slayer3D: colour of your own row's marker (white, as in the vanilla board)" );
 
-// Thickness of the underline, in pixels, before HUD scaling.
+// 70 for a LINE, where the vanilla full-cell fill uses 15. A hairline covers a
+// fraction of the pixels a full cell does, so at the fill's alpha it would be
+// invisible; the perceived weight, not the number, is what matches.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_alpha, "70", FCVAR_ARCHIVE,
+	"Slayer3D: opacity of your own row's marker (0-255; the vanilla full-cell fill uses ~15)" );
+
+// Thickness of the line in style 2, in row-height/12 units. 1 = one hairline.
 static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_thick, "1", FCVAR_ARCHIVE,
-	"Slayer3D: thickness of the underline under your own row (pixels)" );
+	"Slayer3D: thickness of the style-2 line (scaled by row height)" );
+
+// One-shot migration of the REJECTED amber marker out of an existing config.
+//
+// This is not optional politeness. sel_* are FCVAR_ARCHIVE, so the amber values
+// from the previous build are already written into the player's config.cfg, and
+// `exec config.cfg` runs AFTER cvar registration (host.c) -- a new default alone
+// cannot dislodge them. Without this the yellow bar would still be there in the
+// new APK and the bug report would be identical.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_migrated, "0", FCVAR_ARCHIVE,
+	"Slayer3D internal: amber row-marker migration completed" );
 
 // Empty strip above the header row, as a fraction of the row height. Was a fixed
 // row_h/3 + 4, which read as wasted space on a phone-sized board.
@@ -226,6 +256,7 @@ typedef struct
 static slayer_score_t  slayer_scores[MAX_CLIENTS];
 static qboolean        slayer_scoreboard_active = false;
 static qboolean        slayer_death_dismissed = false;  // hid the death auto-show until respawn/re-press
+static qboolean        slayer_death_prev = false;       // previous frame's dead state, for the edge
 
 // Avatar state: SteamID64 per player slot and cached texture handles
 static uint64_t        slayer_steamid64[MAX_CLIENTS];
@@ -1104,6 +1135,7 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_scoreboard_sel_color );
 	Cvar_RegisterVariable( &slayer_scoreboard_sel_alpha );
 	Cvar_RegisterVariable( &slayer_scoreboard_sel_thick );
+	Cvar_RegisterVariable( &slayer_scoreboard_sel_migrated );
 	Cvar_RegisterVariable( &slayer_scoreboard_toppad );
 	Cvar_RegisterVariable( &slayer_scoreboard_rowgap );
 	Cvar_RegisterVariable( &slayer_scoreboard_width );
@@ -1154,6 +1186,33 @@ void Slayer_Scoreboard_Init( void )
 		Cvar_SetValue( "slayer_scoreboard_colordot_migrated", 1.0f );
 	}
 
+	// THE AMBER ROW MARKER. Same archive trap as the two above, and this one is
+	// the live complaint: the previous build shipped sel_color "255 176 0" at
+	// alpha 200 as the DEFAULT, so those values are now in the player's
+	// config.cfg. A new compiled-in default cannot displace them, because
+	// `exec config.cfg` runs after registration.
+	//
+	// Only the exact rejected values are replaced -- a player who has since
+	// chosen their own colour keeps it. Both are checked independently, because
+	// the yellow could equally come from a stale colour with a fresh alpha.
+	if( slayer_scoreboard_sel_migrated.value == 0.0f )
+	{
+		if( !Q_strcmp( slayer_scoreboard_sel_color.string, "255 176 0" ))
+			Cvar_DirectSet( &slayer_scoreboard_sel_color, "255 255 255" );
+		if( slayer_scoreboard_sel_alpha.value >= 150.0f )
+			Cvar_SetValue( "slayer_scoreboard_sel_alpha", 70.0f );
+		// Style 1 in an old config meant "underline"; in the new numbering it is
+		// the full-cell band. Same NUMBER, different meaning -- so an untouched
+		// old config would silently switch shapes. 2 is the new "line".
+		if( slayer_scoreboard_sel_style.value == 1.0f )
+			Cvar_SetValue( "slayer_scoreboard_sel_style", 2.0f );
+		Cvar_SetValue( "slayer_scoreboard_sel_migrated", 1.0f );
+		Slayer_Log_Printf( "row-marker migration: amber bar -> thin white line (style=%d colour=%s alpha=%d)",
+			(int)slayer_scoreboard_sel_style.value,
+			slayer_scoreboard_sel_color.string,
+			(int)slayer_scoreboard_sel_alpha.value );
+	}
+
 	Cmd_AddCommand( "+slayer_scoreboard", Cmd_ScoreboardDown_f,
 		"show Slayer3D custom scoreboard" );
 	Cmd_AddCommand( "-slayer_scoreboard", Cmd_ScoreboardUp_f,
@@ -1186,6 +1245,8 @@ void Slayer_Scoreboard_Reset( void )
 	memset( slayer_ping_cache_time, 0, sizeof( slayer_ping_cache_time ) );
 	memset( slayer_avatar_upload_pending, 0, sizeof( slayer_avatar_upload_pending ) );
 	slayer_scoreboard_active = false;
+	slayer_death_dismissed = false;
+	slayer_death_prev = false;   // a new map is not "just respawned"
 	slayer_status_pending = false;
 	slayer_status_next_time = 0.0;   // allow immediate re-fetch on next connect
 	slayer_status_deadline = 0.0;
@@ -1595,16 +1656,84 @@ static int Slayer_SortCompare( const void *a, const void *b )
 
 /*
 ====================
+SB_LocalDeadNow
+
+Is the LOCAL player dead right now?
+
+ONE definition, used by both the visibility query and the draw path. Having two
+was the measured cause of both live complaints about the death view:
+
+  * Draw() decided from the ScoreAttrib flag only, while IsVisible() accepted
+    `flags || health <= 0`. Between death and the flag's arrival (1-3 frames)
+    IsVisible said yes and Draw said no, so the stock-board gate engaged with
+    nothing drawn in its place -- the board FLASHED.
+  * The flag lags on RESPAWN as well, so the reverse gap kept the board up for a
+    few frames after the player was already alive again.
+
+And the flag is dropped from the local decision entirely, not merely OR-ed in:
+`cl.local.health` is in the same snapshot as everything else we draw, it is
+authoritative for the local player in both directions, and it never lags. The
+flag remains what marks OTHER players' rows "DEAD", where no health arrives.
+
+The team gate stays: health is 0 during team selection too, and auto-showing a
+scoreboard to someone who has not picked a side yet is not what CS does.
+====================
+*/
+static qboolean SB_LocalDeadNow( void )
+{
+	int myteam;
+
+	if( cl.playernum < 0 || cl.playernum >= MAX_CLIENTS )
+		return false;
+
+	myteam = slayer_scores[cl.playernum].team_id;
+
+	if( myteam != SLAYER_TEAM_CT && myteam != SLAYER_TEAM_T )
+		return false;
+
+	return ( cl.local.health <= 0 );
+}
+
+/*
+====================
+SB_UpdateDeathLatch
+
+Re-arm the dismissible death view on the dead -> alive EDGE, and only there.
+
+The old code cleared `slayer_death_dismissed` on every frame that read "not
+dead". With the flag-based test that included the 1-3 frame holes described
+above, so a board the player had just dismissed came BACK on its own the moment
+one of those frames went by -- the "мигание / самопроизвольное возвращение" in
+the report. An edge cannot do that: dismissal survives until the player actually
+respawns or presses the button again.
+
+Idempotent, so calling it from several places in one frame is safe.
+====================
+*/
+static void SB_UpdateDeathLatch( void )
+{
+	qboolean dead = SB_LocalDeadNow();
+
+	if( slayer_death_prev && !dead )
+		slayer_death_dismissed = false;   // respawned: arm the next death view
+
+	slayer_death_prev = dead;
+}
+
+/*
+====================
 Slayer_Scoreboard_IsVisible
 
 Whether our board is on screen right now — held open, at intermission, or
-auto-shown while dead. Mirrors the checks at the top of Draw(), but without
-side effects, so callers earlier in the frame (the VGUI and client-HUD gates in
-V_PostRender / CL_DrawHUD) can ask before we have drawn anything.
+auto-shown while dead. This is THE answer; Draw() asks it too rather than
+repeating the conditions, which is what keeps the gates and the drawing in step
+within a single frame.
 ====================
 */
 qboolean Slayer_Scoreboard_IsVisible( void )
 {
+	SB_UpdateDeathLatch();
+
 	if( slayer_scoreboard.value == 0.0f || cls.state != ca_active )
 		return false;
 
@@ -1612,19 +1741,8 @@ qboolean Slayer_Scoreboard_IsVisible( void )
 		return true;
 
 	if( slayer_scoreboard_ondeath.value != 0.0f && !slayer_death_dismissed
-	 && cl.playernum >= 0 && cl.playernum < MAX_CLIENTS )
-	{
-		// Consider the player dead if EITHER source says so:
-		// 1) ScoreAttrib flags (from server) — reliable but delayed 1-3 frames
-		// 2) cl.local.health <= 0 — immediate, no round-trip delay
-		// Without the health check, the stock scoreboard is visible for those
-		// 1-3 frames between death and ScoreAttrib, because block_level
-		// returns 0 and the client DLL draws its own board.
-		qboolean dead = ( slayer_scores[cl.playernum].flags & 1 )
-			|| ( cl.local.health <= 0 );
-		if( dead )
-			return true;   // dead: CS shows its board here, and so do we
-	}
+	 && SB_LocalDeadNow( ))
+		return true;   // dead: CS shows its board here, and so do we
 
 	return false;
 }
@@ -1812,33 +1930,12 @@ void Slayer_Scoreboard_Draw( void )
 	if( cls.state != ca_active )
 		return;
 
-	// Show automatically where CS shows its own board — end of map and while
-	// dead — so ours covers the game library's stock scoreboard. We draw after
-	// CL_DrawHUD so ours lands on top. The death auto-show is DISMISSIBLE: a
-	// tap of the scoreboard button (release -> slayer_death_dismissed) hides it
-	// until you press again or respawn, so you're never stuck staring at it.
-	if( !slayer_scoreboard_active )
-	{
-		qboolean auto_show = cl.intermission != 0;
-		qboolean dead = false;
-
-		if( cl.playernum >= 0 && cl.playernum < MAX_CLIENTS )
-		{
-			int myteam = slayer_scores[cl.playernum].team_id;
-			dead = ( myteam == SLAYER_TEAM_CT || myteam == SLAYER_TEAM_T )
-			    && ( slayer_scores[cl.playernum].flags & 1 );
-		}
-
-		if( !dead )
-			slayer_death_dismissed = false;   // rearm for the next death
-
-		if( !auto_show && slayer_scoreboard_ondeath.value != 0.0f
-		 && dead && !slayer_death_dismissed )
-			auto_show = true;
-
-		if( !auto_show )
-			return;
-	}
+	// ONE decision, taken in Slayer_Scoreboard_IsVisible, which every gate in the
+	// frame also asks. Re-deriving it here is what made the board flash: the two
+	// copies disagreed for the 1-3 frames the ScoreAttrib flag lags behind death,
+	// so the gate suppressed the stock board while we drew nothing.
+	if( !Slayer_Scoreboard_IsVisible( ))
+		return;
 
 	screen_w = refState.width;
 	screen_h = refState.height;
@@ -2265,8 +2362,8 @@ void Slayer_Scoreboard_Draw( void )
 		col_frags_x  = col_deaths_x - hw - gap;
 		Slayer_SB_StringLen( font, "Счет", &hw, &hh );
 		col_kd_x  = col_frags_x - hw - gap;
-		if( slayer_scoreboard_kd.value != 0.0f )
 		{
+			int kd_mode = (int)slayer_scoreboard_kd.value;
 			int vw, vh;
 
 			// Reserve the WIDER of the label and a worst-case value: "К/С" is
@@ -2275,13 +2372,16 @@ void Slayer_Scoreboard_Draw( void )
 			Slayer_SB_StringLen( font, "К/С", &hw, &hh );
 			Slayer_SB_StringLen( font, "12.34", &vw, &vh );
 			if( vw > hw ) hw = vw;
-			col_health_x = col_kd_x - hw - gap;
-		}
-		else
-		{
-			// Column switched off: collapse it instead of leaving a hole between
-			// HP and Счет.
-			col_health_x = col_kd_x;
+
+			// mode 2 is the ONLY one that closes the gap. Mode 0 -- the default,
+			// and what was asked for -- keeps the width reserved and simply draws
+			// nothing in it, so HP, "Компл." and the nicknames stay exactly where
+			// they are with the column on. Collapsing would shift all of them,
+			// which is the geometry change the request rules out.
+			if( kd_mode == 2 )
+				col_health_x = col_kd_x;
+			else
+				col_health_x = col_kd_x - hw - gap;
 		}
 
 		// The stat block is a fixed pixel width; on a narrow board its left
@@ -2368,7 +2468,7 @@ void Slayer_Scoreboard_Draw( void )
 		color_hdr[3] = color_text[3];
 
 		Slayer_DrawStringRight( font, col_health_x, cur_y, "HP", color_hdr );
-		if( slayer_scoreboard_kd.value != 0.0f )
+		if( (int)slayer_scoreboard_kd.value == 1 )
 			Slayer_DrawStringRight( font, col_kd_x, cur_y, "К/С", color_hdr );
 		Slayer_DrawStringRight( font, col_frags_x, cur_y, "Счет", color_hdr );
 		Slayer_DrawStringRight( font, col_deaths_x, cur_y, "Смертей", color_hdr );
@@ -2488,72 +2588,77 @@ void Slayer_Scoreboard_Draw( void )
 
 		// MARKING YOUR OWN ROW.
 		//
-		// Style 1 (default) draws a LINE under the row, which is what the vanilla
-		// board does -- it marks and separates with 1px rules, and its selection
-		// colour (SelectionBG 10 10 10 100) is near-black, i.e. barely a fill at
-		// all. The filled bar that used to be here was rejected on sight, and the
-		// reason is that a bar of any colour reads as a stripe painted over the
-		// board rather than as "this row is mine".
+		// Style 2 (default) is what was asked for: a THIN, TRANSLUCENT, WHITE
+		// line running the whole width of my cell. White because the mark has to
+		// add light rather than a hue -- the amber line that shipped before was
+		// the right shape in the wrong colour, and read as a stripe painted over
+		// the board. Vertically CENTRED in the cell, not on its bottom edge: a
+		// line on the edge reads as a separator between two rows, so it is
+		// ambiguous which of the two is mine.
 		//
-		// Style 2 is that bar, kept behind a cvar.
+		// Style 1 is the vanilla client's own answer, a full-cell white fill at
+		// alpha 15 (cl_dll/hud/scoreboard.cpp). Style 3 is the original bar.
 		//
-		// GEOMETRY, from the reference screenshot: inset from the board edges rather
-		// than edge to edge, so it never reaches the rounded corners.
+		// The band spans the full cell width like the reference does; the inset
+		// exists only so it never touches the rounded corners.
 		if( pidx == cl.playernum )
 		{
 			int style = (int)slayer_scoreboard_sel_style.value;
 			int sel_alpha = (int)slayer_scoreboard_sel_alpha.value;
 
 			if( style < 0 ) style = 0;
-			if( style > 2 ) style = 1;
+			if( style > 3 ) style = 2;
 			if( sel_alpha < 0 ) sel_alpha = 0;
 			if( sel_alpha > 255 ) sel_alpha = 255;
 
 			if( style != 0 && sel_alpha > 0 )
 			{
 				rgba_t sel;
-				int    inset = (int)( board_w * 0.012f );
+				int    inset = (int)( board_w * 0.006f );
 				int    a;
 
-				if( inset < 3 ) inset = 3;
+				if( inset < 2 ) inset = 2;
 
 				// The cvar wins over the scheme here, unlike the board's other
-				// colours: the mark is ours, not the game's -- there is no vanilla
-				// role for "the local player's row" on a board that never had one.
-				MakeRGBA( sel, 255, 176, 0, (byte)sel_alpha );
+				// colours: there is no vanilla scheme role for "the local player's
+				// row" -- the client library hardcodes white -- so a scheme lookup
+				// would only invent one.
+				MakeRGBA( sel, 255, 255, 255, (byte)sel_alpha );
 				Slayer_ParseColorString( slayer_scoreboard_sel_color.string, sel );
 				sel[3] = (byte)sel_alpha;
 
 				a = (int)( sel[3] * global_opacity / 255 );
 
-				if( style == 1 )
+				if( style == 2 )
 				{
-					// Underline, sitting ON the row's bottom edge.
-					//
-					// Thickness is derived from the ROW HEIGHT rather than from a
-					// pixel constant scaled by hand: the row height already carries
-					// the HUD scale and the rowscale cvar, so a line at 1/12 of it
-					// stays one hairline on a phone and stays visible on a tablet.
-					// A fixed pixel count would vanish on one and look like a bar on
-					// the other.
+					// Thin line. Thickness from the ROW HEIGHT rather than a pixel
+					// constant: the row height already carries the HUD scale, so the
+					// line stays a hairline on a phone and visible on a tablet.
 					int thick = (int)( slayer_scoreboard_sel_thick.value
 						* (float)row_h / 12.0f );
+					int line_y;
 
 					if( thick < 1 ) thick = 1;
 					if( thick > row_h / 3 ) thick = row_h / 3;
-					if( thick < 1 ) thick = 1;
 
-					Slayer_DrawRect( board_x + inset, cur_y + row_h - thick,
+					// Centred in the cell. ( row_h - thick ) / 2 rather than
+					// row_h / 2 so an even thickness straddles the middle instead
+					// of sitting one pixel low.
+					line_y = cur_y + ( row_h - thick ) / 2;
+
+					Slayer_DrawRect( board_x + inset, line_y,
 						board_w - inset * 2, thick,
 						sel[0], sel[1], sel[2], (byte)a );
 				}
 				else
 				{
-					// The old filled bar. Scaled down hard: at the alpha a line
-					// wants, a fill would bury the nickname under it.
+					// Styles 1 and 3 are the same rectangle; only the intended alpha
+					// differs, and that is the cvar's job. Style 3 exists because the
+					// bar was what the board had before, not because it is a
+					// different shape.
 					Slayer_DrawRect( board_x + inset, cur_y,
 						board_w - inset * 2, row_h,
-						sel[0], sel[1], sel[2], (byte)( a * 35 / 100 ));
+						sel[0], sel[1], sel[2], (byte)a );
 				}
 			}
 		}
@@ -2654,9 +2759,9 @@ void Slayer_Scoreboard_Draw( void )
 
 				// K/D — where "Деньги" used to be. Money never reaches the
 				// engine (the client DLL owns it), so that column was blank for
-				// everyone; this is the same information the player actually
-				// wanted from a stat column, derived from what we already have.
-				if( slayer_scoreboard_kd.value != 0.0f )
+				// everyone. Only mode 1 prints it; mode 0 leaves the reserved
+				// width empty on purpose.
+				if( (int)slayer_scoreboard_kd.value == 1 )
 				{
 					Slayer_SB_FormatKD( buf, sizeof( buf ),
 						slayer_scores[pidx].frags, slayer_scores[pidx].deaths );

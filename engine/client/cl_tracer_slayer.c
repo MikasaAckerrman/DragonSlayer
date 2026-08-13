@@ -40,10 +40,12 @@ GNU General Public License for more details.
 
 #include "common.h"
 #include "client.h"
+#include "studio.h"      // studiohdr_t, for reading which attachment fired
 #include "r_efx.h"       // BEAM / struct beam_s, beamdef flags
 #include "cl_tent.h"     // R_BeamPoints, R_TracerEffect
 #include "cl_tracer_slayer.h"
 #include "cl_tracer_render_slayer.h"   // our own ribbon geometry
+#include "cl_muzzle_slayer.h"          // which attachment the animation fires from
 #include "cl_view_slayer.h"            // V_IsSlayerThirdPerson
 #include "cl_slayer_log.h"
 
@@ -148,6 +150,20 @@ static CVAR_DEFINE_AUTO( slayer_tracer_attach_min, "4", FCVAR_ARCHIVE,
 
 static CVAR_DEFINE_AUTO( slayer_tracer_attach_max, "128", FCVAR_ARCHIVE,
 	"Slayer3D: max attachment[0]-origin distance still trusted as a muzzle (units)" );
+
+// WHICH attachment. Not always 0 -- see cl_muzzle_slayer.h for the measurement.
+//
+// The Dual Berettas were firing every tracer from the left gun because the muzzle
+// was hardcoded to attachment[0]. The model itself says otherwise: v_elite's
+// shoot_left* sequences carry studio event 5001 (attachment[0]) and its
+// shoot_right* sequences carry 5011 (attachment[1]), and the player models carry
+// the same pair the other way round for their two dual-pistol animations. So the
+// muzzle is a property of the ANIMATION PLAYING, read from the model, per shot.
+//
+// 0 pins it back to attachment[0] -- the pre-change behaviour, kept as an escape
+// hatch for a broken custom model rather than as a preference.
+static CVAR_DEFINE_AUTO( slayer_tracer_muzzle_seq, "1", FCVAR_ARCHIVE,
+	"Slayer3D: read the firing attachment from the playing animation (0 = always attachment[0])" );
 
 // Verbose diagnostic: log every spawned tracer (who, start, end, hit) so the
 // device log can confirm EF_MUZZLEFLASH really fires for remote players.
@@ -312,6 +328,8 @@ static int    s_mf_raw_remote = 0;
 static int    s_te_tracer     = 0;
 static int    s_attach_used   = 0;   // shots that used the real attachment muzzle
 static int    s_attach_reject = 0;   // shots where attachment was degenerate -> offset
+static int    s_muzzle_alt    = 0;   // shots that fired from an attachment OTHER than 0
+static int    s_muzzle_fallback = 0; // sequence named an attachment the renderer left empty
 static double s_last_trace_warn = 0.0;
 
 // One-shot probes: the single most important thing the morning device log has
@@ -377,6 +395,44 @@ static int s_impacts_next;
 // apart and arrive in the same frame, so neither time nor direction can
 // separate them.
 static int s_event_owner;
+
+// WHICH BARREL, in FIRE ORDER, for local shots.
+//
+// This queue exists because of the timing already documented above, and without
+// it the two-barrel fix would be not merely incomplete but INVERTED.
+//
+// A local shot is detected from the SERVER'S ECHO of EF_MUZZLEFLASH, one round
+// trip after the shot happened (the locally predicted flag is set and cleared
+// inside a single frame, before our edge test ever sees it). By then
+// cl.local.weaponsequence has moved on: with the Dual Berettas at ~0.12 s between
+// shots and any ordinary ping, the animation playing when the echo lands is the
+// NEXT shot's. Reading the sequence at detection time would therefore have
+// swapped left and right systematically -- alternating, and wrong, which is worse
+// than the original bug because it looks plausible.
+//
+// So the barrel is sampled where it is unambiguous: immediately after the weapon
+// event returns, which is the moment the client library has just called
+// pfnWeaponAnim for THIS shot. The samples are consumed oldest-first by the
+// detector. Same rendezvous shape as the impact pairing, for the same reason.
+#define SLAYER_MUZZLE_QUEUE 8
+typedef struct
+{
+	qboolean used;
+	double   time;
+	unsigned int order;   // fire order; see below
+	int      attach;
+} slayer_muzzle_rec_t;
+
+static slayer_muzzle_rec_t s_muzzleq[SLAYER_MUZZLE_QUEUE];
+// ORDER, not a head/tail pair. A ring indexed by two cursors cannot distinguish
+// "empty" from "full" without wasting a slot, and the version that did got it
+// wrong: eight pushes brought tail back to head and the whole queue read as
+// empty. A monotonic counter has no such state -- oldest is simply smallest --
+// and it also breaks the tie between two shots that land in the same frame,
+// which a timestamp cannot.
+static unsigned int s_muzzleq_order;
+static int s_muzzleq_hit;    // shots placed from the queue
+static int s_muzzleq_miss;   // shots that had to read the live sequence instead
 
 // Midpoint colour (orange) between cold and hot, so a 3-stop ramp reads right.
 static const byte SLAYER_TRACER_MID[3] = { 255, 150, 50 };
@@ -638,6 +694,7 @@ void Slayer_Tracer_Init( void )
 	Cvar_RegisterVariable( &slayer_tracer_use_attach );
 	Cvar_RegisterVariable( &slayer_tracer_attach_min );
 	Cvar_RegisterVariable( &slayer_tracer_attach_max );
+	Cvar_RegisterVariable( &slayer_tracer_muzzle_seq );
 	Cvar_RegisterVariable( &slayer_tracer_debug );
 	Cvar_RegisterVariable( &slayer_tracer_logevents );
 
@@ -687,6 +744,10 @@ void Slayer_Tracer_Reset( void )
 	s_beam_fail_model = s_beam_fail_null = 0;
 	s_mf_raw_local = s_mf_raw_remote = s_te_tracer = 0;
 	s_attach_used = s_attach_reject = 0;
+	s_muzzle_alt = s_muzzle_fallback = 0;
+	memset( s_muzzleq, 0, sizeof( s_muzzleq ));
+	s_muzzleq_order = 0;
+	s_muzzleq_hit = s_muzzleq_miss = 0;
 	s_last_summary = 0.0;
 	s_last_trace_warn = 0.0;
 	s_seen_local_probe = s_seen_remote_probe = false;
@@ -945,12 +1006,66 @@ static void Slayer_Tracer_TraceEnd( const vec3_t from, const vec3_t dir, vec3_t 
 	}
 }
 
-// Variant D: try the studio muzzle. The renderer transforms attachment[0] to
-// the real gun tip and writes it into the global entity one frame before we
-// read it here. We trust it only when it sits a sane distance from the origin
-// (a model without attachments leaves it AT the origin; a stale/teleport value
-// is absurdly far). Returns true and writes `out` when trusted.
-static qboolean Slayer_Tracer_MuzzleFromAttachment( cl_entity_t *ent, vec3_t out )
+/*
+====================
+Slayer_Tracer_MuzzleIndexFromModel
+
+WHICH of the entity's four attachment points is the barrel that just fired?
+
+Read from the model, for the sequence the entity is playing NOW. See
+cl_muzzle_slayer.h for the measurement; the short version is that studio event
+5001/5011/5021/5031 in a firing animation means "muzzle flash at attachment
+0/1/2/3", and the Dual Berettas use two different ones for their two hands.
+
+Correct for the PLAYER entity (third person and remote players): its sequence
+arrives in the same snapshot as the EF_MUZZLEFLASH echo we detect the shot from,
+so the two describe the same shot. NOT correct for the viewmodel, whose sequence
+is client-predicted and has already advanced by then -- that case uses the queue
+below.
+
+Returns 0 when the model says nothing, because attachment[0] is what every
+single-barrel weapon uses and is what this code did unconditionally before.
+====================
+*/
+static int Slayer_Tracer_MuzzleIndexFromModel( cl_entity_t *ent )
+{
+	studiohdr_t *phdr;
+	int          idx;
+
+	if( slayer_tracer_muzzle_seq.value == 0.0f )
+		return 0;
+
+	if( !ent || !ent->model )
+		return 0;
+
+	// Sequence groups and non-studio models have no events to read.
+	if( ent->model->type != mod_studio )
+		return 0;
+
+	phdr = (studiohdr_t *)Mod_StudioExtradata( ent->model );
+	if( !phdr || phdr->length <= 0 )
+		return 0;
+
+	idx = Slayer_Muzzle_AttachmentForSequence( phdr, (int)phdr->length,
+		ent->curstate.sequence );
+
+	// -1 means "this animation is not a shot, or says nothing". Not an error and
+	// not a reason to move the tracer: idle and reload reach here too, on the
+	// frame after a shot, and answering anything but 0 for them would make the
+	// start point depend on how quickly the animation advanced.
+	if( idx < 0 || idx >= 4 )
+		return 0;
+
+	return idx;
+}
+
+// Variant D: try the studio muzzle. The renderer transforms the attachments to
+// the real gun tips and writes them into the global entity one frame before we
+// read them here. We trust the one this shot came from only when it sits a sane
+// distance from the origin (a model without attachments leaves them AT the
+// origin; a stale/teleport value is absurdly far). Returns true and writes `out`
+// when trusted.
+static qboolean Slayer_Tracer_MuzzleFromAttachment( cl_entity_t *ent, int idx, vec3_t out )
 {
 	vec3_t delta;
 	float  d;
@@ -958,14 +1073,99 @@ static qboolean Slayer_Tracer_MuzzleFromAttachment( cl_entity_t *ent, vec3_t out
 	if( slayer_tracer_use_attach.value == 0.0f )
 		return false;
 
-	VectorSubtract( ent->attachment[0], ent->origin, delta );
+	if( idx < 0 || idx >= 4 )
+		idx = 0;
+
+	if( idx != 0 )
+		s_muzzle_alt++;
+
+	VectorSubtract( ent->attachment[idx], ent->origin, delta );
 	d = VectorLength( delta );
 
 	if( d < slayer_tracer_attach_min.value || d > slayer_tracer_attach_max.value )
-		return false;   // degenerate (== origin) or stale -> caller approximates
+	{
+		// The chosen attachment is unusable. Fall back to [0] before giving up on
+		// attachments entirely: a model can carry a muzzle event for an attachment
+		// the renderer never filled (an edited model, or a sequence played on a
+		// model it was not authored for), and in that case attachment[0] is still
+		// the real gun tip and is much better than the origin+offset guess.
+		if( idx != 0 )
+		{
+			VectorSubtract( ent->attachment[0], ent->origin, delta );
+			d = VectorLength( delta );
 
-	VectorCopy( ent->attachment[0], out );
+			if( d >= slayer_tracer_attach_min.value
+			 && d <= slayer_tracer_attach_max.value )
+			{
+				s_muzzle_fallback++;
+				VectorCopy( ent->attachment[0], out );
+				return true;
+			}
+		}
+
+		return false;   // degenerate (== origin) or stale -> caller approximates
+	}
+
+	VectorCopy( ent->attachment[idx], out );
 	return true;
+}
+
+/*
+====================
+Slayer_Tracer_PopMuzzle
+
+Take the oldest un-consumed barrel sample, for a FIRST-PERSON shot.
+
+Stale entries are dropped rather than used: a sample older than the pairing
+window belongs to a shot whose muzzleflash echo never arrived (packet loss, or
+the player died mid-burst), and using it would attribute this shot to the wrong
+barrel for the rest of the magazine. Falling back to the live sequence is a
+one-shot error; a desynchronised queue is a permanent one.
+
+Returns the attachment index, or -1 when the queue has nothing usable.
+====================
+*/
+static int Slayer_Tracer_PopMuzzle( void )
+{
+	double window = slayer_tracer_impact_window.value * 4.0;
+	int    best = -1;
+	int    i;
+
+	if( window < 0.5 ) window = 0.5;   // a full round trip, generously
+
+	for( ;; )
+	{
+		best = -1;
+
+		// Oldest live entry, by fire order.
+		for( i = 0; i < SLAYER_MUZZLE_QUEUE; i++ )
+		{
+			if( !s_muzzleq[i].used )
+				continue;
+			if( best < 0 || s_muzzleq[i].order < s_muzzleq[best].order )
+				best = i;
+		}
+
+		if( best < 0 )
+			break;
+
+		s_muzzleq[best].used = false;
+
+		// Stale entries are dropped rather than used: a sample older than the
+		// window belongs to a shot whose muzzleflash echo never arrived (packet
+		// loss, or the player died mid-burst), and using it would attribute this
+		// shot to the wrong barrel for the rest of the magazine. Falling back to
+		// the live sequence is a one-shot error; a desynchronised queue is a
+		// permanent one. Keep dropping until something fresh turns up.
+		if( host.realtime - s_muzzleq[best].time > window )
+			continue;
+
+		s_muzzleq_hit++;
+		return s_muzzleq[best].attach;
+	}
+
+	s_muzzleq_miss++;
+	return -1;
 }
 
 static void Slayer_Tracer_SpawnVisual( const vec3_t start, const vec3_t end, qboolean is_remote )
@@ -1061,6 +1261,7 @@ static void Slayer_Tracer_Fire( cl_entity_t *ent, qboolean is_local )
 	vec3_t   start, end;
 	vec3_t   muzzle;
 	qboolean used_attach = false;
+	int      muzzle_idx;
 
 	if( slayer_tracer.value == 0.0f )
 		return;
@@ -1101,19 +1302,32 @@ static void Slayer_Tracer_Fire( cl_entity_t *ent, qboolean is_local )
 			// PARM_THIRDPERSON), so clgame.viewent.attachment[0] is stale --
 			// never trust it here. The local PLAYER entity is drawn in third
 			// person, so its attachment[0] is the live gun tip.
-			if( Slayer_Tracer_MuzzleFromAttachment( CL_GetLocalPlayer(), muzzle ))
+			//
+			// And its SEQUENCE is the right one to ask about the barrel: it comes
+			// from the same snapshot as the muzzleflash echo, so the two describe
+			// the same shot. The queue is not used here for that reason -- but it
+			// still has to be drained, or first-person shots taken before the
+			// camera flipped would pile up in it.
 			{
-				VectorCopy( muzzle, start );
-				used_attach = true;
-			}
-			else
-			{
-				// Fall back to eye + forward offset, same shape as the remote
-				// approximation, so the streak still leaves the model instead
-				// of the camera.
-				VectorCopy( eye, start );
-				VectorMA( start, slayer_tracer_fwd.value,   fwd,   start );
-				VectorMA( start, slayer_tracer_right.value, right, start );
+				cl_entity_t *lp = CL_GetLocalPlayer();
+
+				Slayer_Tracer_PopMuzzle();
+				muzzle_idx = Slayer_Tracer_MuzzleIndexFromModel( lp );
+
+				if( Slayer_Tracer_MuzzleFromAttachment( lp, muzzle_idx, muzzle ))
+				{
+					VectorCopy( muzzle, start );
+					used_attach = true;
+				}
+				else
+				{
+					// Fall back to eye + forward offset, same shape as the remote
+					// approximation, so the streak still leaves the model instead
+					// of the camera.
+					VectorCopy( eye, start );
+					VectorMA( start, slayer_tracer_fwd.value,   fwd,   start );
+					VectorMA( start, slayer_tracer_right.value, right, start );
+				}
 			}
 		}
 		else
@@ -1121,11 +1335,19 @@ static void Slayer_Tracer_Fire( cl_entity_t *ent, qboolean is_local )
 			// First person: aim is exactly the view. Start at the eye so the
 			// streak originates at screen centre and flies to the crosshair's
 			// target. The local viewmodel dispatches studio events (see
-			// R_DrawViewModel), so attachment[0] holds the real gun tip; prefer
-			// it for the START while keeping the view direction for aim.
+			// R_DrawViewModel), so its attachments hold the real gun tips; prefer
+			// them for the START while keeping the view direction for aim.
 			AngleVectors( refState.viewangles, fwd, right, up );
 
-			if( Slayer_Tracer_MuzzleFromAttachment( &clgame.viewent, muzzle ))
+			// WHICH gun tip comes from the QUEUE, not from the viewmodel's current
+			// sequence. By the time the server's muzzleflash echo reaches us the
+			// predicted animation has already advanced to the next shot, so reading
+			// it live would swap the Berettas' barrels rather than separate them.
+			muzzle_idx = Slayer_Tracer_PopMuzzle();
+			if( muzzle_idx < 0 )
+				muzzle_idx = Slayer_Tracer_MuzzleIndexFromModel( &clgame.viewent );
+
+			if( Slayer_Tracer_MuzzleFromAttachment( &clgame.viewent, muzzle_idx, muzzle ))
 			{
 				VectorCopy( muzzle, start );
 				used_attach = true;
@@ -1144,9 +1366,13 @@ static void Slayer_Tracer_Fire( cl_entity_t *ent, qboolean is_local )
 		VectorCopy( ent->angles, angles );
 		AngleVectors( angles, fwd, right, up );
 
-		// Variant D: use the real studio muzzle (attachment[0]) when the
-		// renderer has filled it; otherwise approximate from the origin.
-		if( Slayer_Tracer_MuzzleFromAttachment( ent, muzzle ))
+		// Variant D: use the real studio muzzle when the renderer has filled it;
+		// otherwise approximate from the origin. The barrel comes from the player
+		// model's own sequence, which arrives in the same snapshot as the
+		// muzzleflash that brought us here.
+		muzzle_idx = Slayer_Tracer_MuzzleIndexFromModel( ent );
+
+		if( Slayer_Tracer_MuzzleFromAttachment( ent, muzzle_idx, muzzle ))
 		{
 			VectorCopy( muzzle, start );
 			used_attach = true;
@@ -1240,6 +1466,46 @@ int Slayer_Tracer_BeginEvent( int entindex )
 
 void Slayer_Tracer_EndEvent( int prev_owner )
 {
+	// SAMPLE THE BARREL HERE, and this is the only moment in the frame when it is
+	// unambiguous.
+	//
+	// The client library's weapon event has just run. For the Berettas that means
+	// it called pfnWeaponAnim with shoot_left* or shoot_right* for THIS shot, so
+	// clgame.viewent.curstate.sequence now names the barrel that fired. A few
+	// frames later, when the server's EF_MUZZLEFLASH echo reaches us and the
+	// tracer is actually placed, the sequence has moved on to the next shot -- and
+	// reading it then would swap the two guns rather than separate them.
+	//
+	// Only the LOCAL player's own event is sampled: a remote player's barrel comes
+	// from his player entity's sequence, which is snapshot data and needs no queue.
+	if( s_event_owner == cl.playernum + 1
+	 && slayer_tracer.value != 0.0f
+	 && slayer_tracer_muzzle_seq.value != 0.0f )
+	{
+		int idx = Slayer_Tracer_MuzzleIndexFromModel( &clgame.viewent );
+		int slot = -1;
+		int i;
+
+		// A free slot, else the OLDEST entry: the newest samples are the ones the
+		// pending shots will ask for, and eight unmatched shots means the echo path
+		// has stalled, not that the eighth shot matters less than the first.
+		for( i = 0; i < SLAYER_MUZZLE_QUEUE; i++ )
+		{
+			if( !s_muzzleq[i].used )
+			{
+				slot = i;
+				break;
+			}
+			if( slot < 0 || s_muzzleq[i].order < s_muzzleq[slot].order )
+				slot = i;
+		}
+
+		s_muzzleq[slot].used   = true;
+		s_muzzleq[slot].time   = host.realtime;
+		s_muzzleq[slot].order  = ++s_muzzleq_order;
+		s_muzzleq[slot].attach = idx;
+	}
+
 	// Restore rather than zero: an event that triggers another event must not
 	// leave the outer one un-attributed for its remaining bullets.
 	s_event_owner = prev_owner;
@@ -1422,11 +1688,13 @@ void Slayer_Tracer_Frame( void )
 	{
 		Slayer_Log_Printf(
 			"tracer: 1s summary fired[L=%d R=%d] rawMF[L=%d R=%d] beams[ok=%d noModel=%d null=%d] "
-			"attach[used=%d approx=%d] impact[paired=%d back=%d fallback=%d foreign=%d] pierced=%d TE_TRACER=%d heat=%.2f model=%d "
+			"attach[used=%d approx=%d alt=%d fb=%d] muzzleq[hit=%d miss=%d] impact[paired=%d back=%d fallback=%d foreign=%d] pierced=%d TE_TRACER=%d heat=%.2f model=%d "
 			"own[render=%d peak=%d/%d tp=%d]",
 			s_fired_local, s_fired_remote, s_mf_raw_local, s_mf_raw_remote,
 			s_beam_ok, s_beam_fail_model, s_beam_fail_null,
-			s_attach_used, s_attach_reject, s_impact_paired, s_impact_back,
+			s_attach_used, s_attach_reject, s_muzzle_alt, s_muzzle_fallback,
+			s_muzzleq_hit, s_muzzleq_miss,
+			s_impact_paired, s_impact_back,
 			s_impact_fallback, s_impact_foreign, s_pierced, s_te_tracer,
 			s_heat, s_beam_model,
 			(int)slayer_tracer_render.value, s_live_peak, SLAYER_TRACER_POOL,
@@ -1436,6 +1704,8 @@ void Slayer_Tracer_Frame( void )
 		s_beam_fail_model = s_beam_fail_null = 0;
 		s_mf_raw_local = s_mf_raw_remote = s_te_tracer = 0;
 		s_attach_used = s_attach_reject = 0;
+		s_muzzle_alt = s_muzzle_fallback = 0;
+		s_muzzleq_hit = s_muzzleq_miss = 0;
 		s_impact_paired = s_impact_fallback = s_impact_foreign = s_impact_back = 0;
 		s_pierced = 0;
 		s_live_peak = 0;
