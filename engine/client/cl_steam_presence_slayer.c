@@ -108,7 +108,17 @@ static void Slayer_SPresence_CurrentServer( char *ip, size_t ip_size, int *port 
 	Q_snprintf( ip, ip_size, "%i.%i.%i.%i",
 		cls.serveradr.ip[0], cls.serveradr.ip[1],
 		cls.serveradr.ip[2], cls.serveradr.ip[3] );
-	*port = ntohs( cls.serveradr.port );
+
+	// The port is stored network byte order (big-endian). Swapped by hand rather
+	// than with ntohs(): that needs <arpa/inet.h>, which the Android NDK does not
+	// pull in through the engine headers this file includes, and the build broke
+	// on exactly that (implicit ntohs -> conflicting-types error). A two-byte swap
+	// has no header to get wrong. `unsigned int`, not `word`, so the host test
+	// harness (which does not define the engine's `word` typedef) compiles it too.
+	{
+		unsigned int p = (unsigned int)cls.serveradr.port;
+		*port = (int)(( ( p & 0xFF ) << 8 ) | ( ( p >> 8 ) & 0xFF ));
+	}
 }
 
 
