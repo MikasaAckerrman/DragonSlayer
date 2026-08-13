@@ -96,10 +96,12 @@ SB_GateActive
 
 Is the gate allowed to do anything at all right now?
 
-Two conditions, and both matter. The cvar, obviously. And OUR BOARD MUST BE OPEN:
-outside that window the client's board is the only board there is, and dropping
-it would leave the player with no scoreboard whatsoever -- which is worse than
-two boards.
+Two conditions, and both matter. The cvar, obviously. And the game would OTHERWISE
+be showing a stock board: our own board is open, OR the local player is dead and
+the client library is auto-showing its board there. That second case is the fix
+for the intermittent death board -- see Slayer_Scoreboard_ShouldGateStock. Outside
+those windows the client's board is the only board there is, and dropping it would
+leave the player with no scoreboard at all, which is worse than two.
 ====================
 */
 static qboolean SB_GateActive( void )
@@ -107,7 +109,7 @@ static qboolean SB_GateActive( void )
 	if( slayer_stockboard_gate.value == 0.0f )
 		return false;
 
-	return Slayer_Scoreboard_IsVisible();
+	return Slayer_Scoreboard_ShouldGateStock();
 }
 
 /*

@@ -156,57 +156,55 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_kd, "0", FCVAR_ARCHIVE,
 
 // Marking the LOCAL player's row.
 //
-// Fourth attempt, and the request is now explicit: "убрать жёлтую полосу,
-// вместо неё тонкая прозрачная линия через всю ячейку МОЕГО игрока".
-//
-// What was shipped and rejected: an AMBER (255 176 0) underline at alpha 200.
-// The shape was right; the colour was not. Amber at alpha 200 is a painted
-// stripe -- it adds a hue the board does not otherwise have, which is what made
-// it read as a highlight bar rather than as "this row is mine".
-//
-// The vanilla client's own answer is one call, and it adds LIGHT, not colour:
+// Fifth pass, and the request has flipped back: "тонкая полоса на ячейке вместо
+// НА ВСЮ ячейку, как раньше". The thin line shipped last build was rejected --
+// the player wants the mark to fill the WHOLE cell, exactly the way the game's
+// own client does it:
 //
 //     FillRGBABlend( xstart, ypos, xend - xstart, ScoreRowGap(),
 //                    255, 255, 255, isDead ? 7 : 15 );
 //
 // (cs16-client cl_dll/hud/scoreboard.cpp, `if( pl_info->thisplayer )`.)
 //
-//   2 - a THIN translucent WHITE line spanning the whole cell (default)
-//   1 - the full-cell translucent band, i.e. exactly the vanilla fill
+// A WHITE fill across the whole cell -- it LIGHTENS the panel rather than
+// colouring it, which is why the amber bar from two builds ago was wrong (it
+// added a hue) and why the thin line from the last build was wrong (it did not
+// cover the cell). White + full cell + low alpha is the vanilla answer, and it
+// is what "в точности как в игре" means here.
+//
+//   1 - full-cell translucent WHITE band (default, what the game does)
+//   2 - thin line through the cell
 //   3 - the old opaque-ish coloured bar
 //   0 - nothing
-//
-// Default 2 because that is what was asked for in words: a line, across the
-// whole cell, transparent. Style 1 stays one cvar away for anyone who prefers
-// the vanilla wash.
-static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_style, "2", FCVAR_ARCHIVE,
-	"Slayer3D: how your own row is marked (0 = not at all, 1 = translucent band, 2 = thin line, 3 = coloured bar)" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_style, "1", FCVAR_ARCHIVE,
+	"Slayer3D: how your own row is marked (0 = none, 1 = full-cell band, 2 = thin line, 3 = coloured bar)" );
 
 // WHITE. The mark is a lightening of the panel, not a colour applied to it;
-// anything else reads as a stripe painted over the board, which is the exact
-// complaint about the amber version.
+// anything else reads as a stripe painted over the board.
 static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_color, "255 255 255", FCVAR_ARCHIVE,
 	"Slayer3D: colour of your own row's marker (white, as in the vanilla board)" );
 
-// 70 for a LINE, where the vanilla full-cell fill uses 15. A hairline covers a
-// fraction of the pixels a full cell does, so at the fill's alpha it would be
-// invisible; the perceived weight, not the number, is what matches.
-static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_alpha, "70", FCVAR_ARCHIVE,
+// 45 for a full-cell band. The vanilla client uses 15 over its own darker panel;
+// ours is more translucent, so a touch more alpha reads the same. Still a
+// lightening, not a bar -- above ~90 it starts to look painted on.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_alpha, "45", FCVAR_ARCHIVE,
 	"Slayer3D: opacity of your own row's marker (0-255; the vanilla full-cell fill uses ~15)" );
 
 // Thickness of the line in style 2, in row-height/12 units. 1 = one hairline.
 static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_thick, "1", FCVAR_ARCHIVE,
 	"Slayer3D: thickness of the style-2 line (scaled by row height)" );
 
-// One-shot migration of the REJECTED amber marker out of an existing config.
+// One-shot migration of the REJECTED marker settings out of an existing config.
 //
-// This is not optional politeness. sel_* are FCVAR_ARCHIVE, so the amber values
-// from the previous build are already written into the player's config.cfg, and
-// `exec config.cfg` runs AFTER cvar registration (host.c) -- a new default alone
-// cannot dislodge them. Without this the yellow bar would still be there in the
-// new APK and the bug report would be identical.
+// sel_* are FCVAR_ARCHIVE and `exec config.cfg` runs AFTER cvar registration, so
+// a new default alone cannot dislodge what a previous build wrote. This flag has
+// a VERSION suffix on purpose: the amber->line migration already ran once and set
+// the old flag to 1, so a fresh flag is the only way to run the line->band move
+// on a config that has already been migrated once.
 static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_migrated, "0", FCVAR_ARCHIVE,
 	"Slayer3D internal: amber row-marker migration completed" );
+static CVAR_DEFINE_AUTO( slayer_scoreboard_sel_migrated2, "0", FCVAR_ARCHIVE,
+	"Slayer3D internal: thin-line -> full-cell band migration completed" );
 
 // Empty strip above the header row, as a fraction of the row height. Was a fixed
 // row_h/3 + 4, which read as wasted space on a phone-sized board.
@@ -1136,6 +1134,7 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_scoreboard_sel_alpha );
 	Cvar_RegisterVariable( &slayer_scoreboard_sel_thick );
 	Cvar_RegisterVariable( &slayer_scoreboard_sel_migrated );
+	Cvar_RegisterVariable( &slayer_scoreboard_sel_migrated2 );
 	Cvar_RegisterVariable( &slayer_scoreboard_toppad );
 	Cvar_RegisterVariable( &slayer_scoreboard_rowgap );
 	Cvar_RegisterVariable( &slayer_scoreboard_width );
@@ -1210,6 +1209,28 @@ void Slayer_Scoreboard_Init( void )
 		Slayer_Log_Printf( "row-marker migration: amber bar -> thin white line (style=%d colour=%s alpha=%d)",
 			(int)slayer_scoreboard_sel_style.value,
 			slayer_scoreboard_sel_color.string,
+			(int)slayer_scoreboard_sel_alpha.value );
+	}
+
+	// THE THIN LINE, now rejected in turn. The last build shipped style 2 (a thin
+	// line) as the default and its value is in the player's config.cfg, so the new
+	// default of 1 (full-cell band) cannot take effect without this. A separate
+	// flag from the amber migration above because that one already ran and wrote
+	// its own done-marker; reusing it would skip this move entirely.
+	//
+	// Only the exact rejected value is touched: a player who deliberately set
+	// style 2 or 3 keeps it, but the shipped-default 2 becomes the band. The alpha
+	// is nudged down from the line's 70 to the band's 45 only when it still holds
+	// the line's shipped value, for the same reason.
+	if( slayer_scoreboard_sel_migrated2.value == 0.0f )
+	{
+		if( slayer_scoreboard_sel_style.value == 2.0f )
+			Cvar_SetValue( "slayer_scoreboard_sel_style", 1.0f );
+		if( (int)slayer_scoreboard_sel_alpha.value == 70 )
+			Cvar_SetValue( "slayer_scoreboard_sel_alpha", 45.0f );
+		Cvar_SetValue( "slayer_scoreboard_sel_migrated2", 1.0f );
+		Slayer_Log_Printf( "row-marker migration 2: thin line -> full-cell band (style=%d alpha=%d)",
+			(int)slayer_scoreboard_sel_style.value,
 			(int)slayer_scoreboard_sel_alpha.value );
 	}
 
@@ -1749,6 +1770,44 @@ qboolean Slayer_Scoreboard_IsVisible( void )
 
 /*
 ====================
+Slayer_Scoreboard_ShouldGateStock
+
+Should the stock (game library) scoreboard be suppressed right now?
+
+This is DELIBERATELY wider than IsVisible, and that width is the fix for the
+intermittent death board. The game's own client shows its scoreboard whenever
+the local player is dead -- ShouldDrawScoreboard() ORs in `health <= 0`,
+independent of anything we do. Our pixel gate previously engaged only while OUR
+board was visible, so the moment the player dismissed the death view (a tap of
+the scoreboard button while dead sets slayer_death_dismissed), our board went
+away, the gate switched off, and the stock board -- still auto-showing on death
+-- appeared. That is the "sometimes ours, sometimes the default" the report
+describes.
+
+So the stock board is gated for the WHOLE time the game would auto-show it: the
+entire dead period while ondeath is on, plus any moment our board is up for
+another reason. When our board is dismissed while dead the gate still fires, so
+the result is no scoreboard at all -- which is what dismissing it means -- rather
+than the stock one bleeding through.
+====================
+*/
+qboolean Slayer_Scoreboard_ShouldGateStock( void )
+{
+	if( slayer_scoreboard.value == 0.0f || cls.state != ca_active )
+		return false;
+
+	if( Slayer_Scoreboard_IsVisible( ))
+		return true;
+
+	// Dead, board dismissed: the stock board would auto-show, so keep gating it.
+	if( slayer_scoreboard_ondeath.value != 0.0f && SB_LocalDeadNow( ))
+		return true;
+
+	return false;
+}
+
+/*
+====================
 Slayer_Scoreboard_StockBlockLevel
 
 How hard to suppress the game's own scoreboard while ours is up.
@@ -2119,12 +2178,14 @@ void Slayer_Scoreboard_Draw( void )
 		// content rows = players + team headers + title row + column-header row
 		int content_rows = num_players + team_headers + 1;   // 1 = merged header row
 
-		// Fixed non-row chrome. Kept GENEROUS: with tall rows (large fonts on
-		// hi-dpi phones) the per-section separators/gaps add up, and an
-		// under-estimate made the last row (often the lone spectator) hit the
-		// height-clip break and vanish. Better a little bottom padding than a
-		// dropped player.
-		int chrome_h = 30 + team_headers * 16;
+		// Fixed non-row chrome: top pad + the two thin section rules + a small
+		// bottom margin. It was 30 + 16 per header, which measured GENEROUS on
+		// purpose so a lone spectator never hit the height-clip -- but on a normal
+		// roster that generosity is exactly the empty strip under the last row the
+		// player is asking to remove. Tightened to what the extras actually take:
+		// the header separator (~8px) and each team rule (~3px), plus a few px of
+		// breathing room top and bottom.
+		int chrome_h = 16 + team_headers * 6;
 		int avail_h  = (int)( screen_h * 0.95f );
 
 		int   fidx, row_pad, row_h_full, natural_h;
@@ -2588,16 +2649,14 @@ void Slayer_Scoreboard_Draw( void )
 
 		// MARKING YOUR OWN ROW.
 		//
-		// Style 2 (default) is what was asked for: a THIN, TRANSLUCENT, WHITE
-		// line running the whole width of my cell. White because the mark has to
-		// add light rather than a hue -- the amber line that shipped before was
-		// the right shape in the wrong colour, and read as a stripe painted over
-		// the board. Vertically CENTRED in the cell, not on its bottom edge: a
-		// line on the edge reads as a separator between two rows, so it is
-		// ambiguous which of the two is mine.
+		// Style 1 (default) is the vanilla client's own answer: a full-cell white
+		// fill at low alpha (cl_dll/hud/scoreboard.cpp), which LIGHTENS the panel
+		// rather than colouring it. That is what "в точности как в игре" means and
+		// what the player asked to go back to after the thin line (style 2) was
+		// rejected for not covering the cell. The amber bar two builds ago was
+		// wrong for the opposite reason -- it added a hue.
 		//
-		// Style 1 is the vanilla client's own answer, a full-cell white fill at
-		// alpha 15 (cl_dll/hud/scoreboard.cpp). Style 3 is the original bar.
+		// Style 2 is the thin centred line; style 3 the old opaque bar.
 		//
 		// The band spans the full cell width like the reference does; the inset
 		// exists only so it never touches the rounded corners.
@@ -2607,7 +2666,7 @@ void Slayer_Scoreboard_Draw( void )
 			int sel_alpha = (int)slayer_scoreboard_sel_alpha.value;
 
 			if( style < 0 ) style = 0;
-			if( style > 3 ) style = 2;
+			if( style > 3 ) style = 1;
 			if( sel_alpha < 0 ) sel_alpha = 0;
 			if( sel_alpha > 255 ) sel_alpha = 255;
 

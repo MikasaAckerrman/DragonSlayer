@@ -31,6 +31,12 @@ void Slayer_Scoreboard_Draw( void );
 // the frame.
 qboolean Slayer_Scoreboard_IsVisible( void );
 
+// Whether the game library's OWN scoreboard should be suppressed this frame.
+// Wider than IsVisible: it also covers the dead period when the client library
+// auto-shows its board but ours is dismissed, so the stock board cannot bleed
+// through. Drives the pixel gate in cl_stockboard_gate_slayer.c.
+qboolean Slayer_Scoreboard_ShouldGateStock( void );
+
 // How hard to suppress the game's own scoreboard this frame:
 // 0 = not at all, 1 = skip VGui_Paint, 2 = also skip the client HUD redraw.
 // Driven by slayer_scoreboard_block_stock and only non-zero while ours is up.
