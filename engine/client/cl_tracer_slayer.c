@@ -452,6 +452,13 @@ static slayer_tracer_t s_pool[SLAYER_TRACER_POOL];
 static int             s_pool_next = 0;
 static int             s_live_peak = 0;   // diagnostics: high-water mark
 
+// Was the pool draw hook even called? "No tracers on the server" is consistent
+// with the hook never running (the renderer's translucent pass not reaching
+// CL_DrawEFX) and with it running over an invisible pool, and the old summary
+// reported the same thing in both cases.
+static int             s_pool_draw_calls = 0;
+static int             s_pool_draw_gated = 0;   // returned on the cvar gate
+
 // Rolling seed for the flicker phase, so two tracers spawned in the same frame
 // do not pulse in sync. Deterministic on purpose (no RNG state to sync).
 static float s_seed_walk = 0.0f;
@@ -572,8 +579,18 @@ void Slayer_TracerPool_Draw( void )
 	float dt, fov_y;
 	int   i, live = 0;
 
+	// The pool draw hook ran. Counted separately from the tracers it draws,
+	// because "no tracers on servers" has two very different explanations and the
+	// old summary could not tell them apart: the hook not being called at all
+	// (the renderer never reaches CL_DrawEFX in the translucent pass), versus the
+	// hook running over an empty or invisible pool.
+	s_pool_draw_calls++;
+
 	if( slayer_tracer.value == 0.0f || slayer_tracer_render.value == 0.0f )
+	{
+		s_pool_draw_gated++;
 		return;
+	}
 
 	dt = (float)( cl.time - cl.oldtime );
 	if( dt < 0.0f ) dt = 0.0f;
@@ -1686,6 +1703,10 @@ void Slayer_Tracer_Frame( void )
 		  s_mf_raw_local || s_mf_raw_remote || s_te_tracer ) &&
 		( now - s_last_summary ) >= 1.0 )
 	{
+		slayer_tracer_debug_t dbg;
+
+		Slayer_TracerRender_DebugSnapshot( &dbg );
+
 		Slayer_Log_Printf(
 			"tracer: 1s summary fired[L=%d R=%d] rawMF[L=%d R=%d] beams[ok=%d noModel=%d null=%d] "
 			"attach[used=%d approx=%d alt=%d fb=%d] muzzleq[hit=%d miss=%d] impact[paired=%d back=%d fallback=%d foreign=%d] pierced=%d TE_TRACER=%d heat=%.2f model=%d "
@@ -1699,6 +1720,28 @@ void Slayer_Tracer_Frame( void )
 			s_heat, s_beam_model,
 			(int)slayer_tracer_render.value, s_live_peak, SLAYER_TRACER_POOL,
 			( V_IsSlayerThirdPerson() || CL_IsThirdPerson()) ? 1 : 0 );
+
+		// SECOND line, from the drawing side. The first line can read
+		// "peak=2/48" while nothing whatsoever reached the screen -- the report
+		// "трассеры не отображаются на серверах" is consistent with every one of
+		// these counters, and they disagree with each other:
+		//   draw=0                  -> the draw hook is not being called at all
+		//   draw>0 ribbons=0        -> every tracer returned early; early_* says which
+		//   ribbons>0 tex=0         -> untextured, so the profile is the default checkerboard
+		//   ribbons>0 px<1          -> drawn thinner than a pixel
+		//   ribbons>0 gain*dim ~ 0  -> drawn black on black (additive)
+		Slayer_Log_Printf(
+			"tracer: 1s draw pool[calls=%d gated=%d] draw=%d early[life=%d len=%d gain=%d] "
+			"ribbons=%d verts=%d "
+			"last[px=%.2f gain=%.2f dim=%.2f dist=%.0f tex=%d] tex[core=%d halo=%d]",
+			s_pool_draw_calls, s_pool_draw_gated,
+			dbg.draw_calls, dbg.early_life, dbg.early_len, dbg.early_gain,
+			dbg.ribbons, dbg.verts,
+			dbg.last_px, dbg.last_gain, dbg.last_dim, dbg.last_dist, dbg.last_tex,
+			dbg.tex_core, dbg.tex_halo );
+
+		s_pool_draw_calls = s_pool_draw_gated = 0;
+		Slayer_TracerRender_DebugReset();
 
 		s_fired_local = s_fired_remote = s_beam_ok = 0;
 		s_beam_fail_model = s_beam_fail_null = 0;

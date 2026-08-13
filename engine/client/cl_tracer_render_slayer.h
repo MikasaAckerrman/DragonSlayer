@@ -134,4 +134,30 @@ void Slayer_TracerRender_FreeTextures( void );
 // restart, where the old handles may already be invalid.
 void Slayer_TracerRender_Invalidate( void );
 
+// What the DRAWING side did, as opposed to what the pool contains.
+//
+// The pool's own[peak=N] counter says a tracer is alive, and that is where the
+// diagnosis used to stop: every remaining step (early returns, a missing texture,
+// a width that rounds to nothing, a colour multiplied to zero) produces exactly
+// the same log line and a blank screen. These counters separate them.
+typedef struct
+{
+	int   draw_calls;    // Draw() entered
+	int   early_life;    // returned early: age outside life
+	int   early_len;     // returned early: head and tail collapsed
+	int   early_gain;    // returned early: brightness reached zero
+	int   ribbons;       // Begin/End pairs actually emitted
+	int   verts;         // vertices pushed
+	float last_px;       // core width of the last ribbon, in PIXELS
+	float last_gain;
+	float last_dim;      // distance-dimming factor applied
+	float last_dist;     // camera distance of the last tracer
+	int   last_tex;      // texnum bound (0 = none, renderer substitutes default)
+	int   tex_core;      // cached profile textures, 0 = never built
+	int   tex_halo;
+} slayer_tracer_debug_t;
+
+void Slayer_TracerRender_DebugSnapshot( slayer_tracer_debug_t *out );
+void Slayer_TracerRender_DebugReset( void );
+
 #endif // CL_TRACER_RENDER_SLAYER_H

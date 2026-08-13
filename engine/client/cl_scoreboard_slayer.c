@@ -117,6 +117,22 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_block_migrated, "0", FCVAR_ARCHIVE,
 
 static CVAR_DEFINE_AUTO( slayer_scoreboard_ondeath, "1", FCVAR_ARCHIVE, "Slayer3D: show the scoreboard automatically while dead (0 = only when held)" );
 
+// How long the death board stays up before it takes itself away, in seconds.
+//
+// WHY THIS EXISTS: "когда после смерти открывается скорборд, через время он сам
+// не убирается". It did not, by construction -- the auto-show lasted the WHOLE
+// dead period, and on a jailbreak or deathmatch server that is most of a round
+// spent looking at a table instead of the game. CS gets away with the same rule
+// because a dead player there respawns next round; a mod that keeps you dead for
+// three minutes turns it into a wall.
+//
+// A timeout rather than "hide on any input": the board is information, and it is
+// wanted for the few seconds after dying (who killed me, what is the score). 6 s
+// is long enough to read a full table and short enough not to be in the way. 0
+// restores the old behaviour for anyone who wants it.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_ondeath_time, "6", FCVAR_ARCHIVE,
+	"Slayer3D: seconds the death scoreboard stays up before hiding itself (0 = until respawn)" );
+
 // Colours from the game's own VGUI scheme. Read as DEFAULTS: a cvar that still
 // holds its built-in value yields to the file, a cvar the player set wins. See
 // Slayer_SB_ApplyScheme for why that comparison is against def_string.
@@ -265,6 +281,12 @@ static qboolean        slayer_death_prev = false;       // previous frame's dead
 // -- needed because the ScoreAttrib dead bit is a CS convention that some servers
 // never send, and on those the death board simply never appeared.
 static qboolean        slayer_local_died_at_hp1 = false;
+
+// host.realtime when the current death was first seen, or 0 when alive. Drives
+// the auto-hide timeout (slayer_scoreboard_ondeath_time): the board is wanted for
+// the first seconds after dying, not for the whole three minutes a jailbreak
+// server keeps you dead.
+static double          slayer_death_shown_at = 0.0;
 
 // Avatar state: SteamID64 per player slot and cached texture handles
 static uint64_t        slayer_steamid64[MAX_CLIENTS];
@@ -1088,6 +1110,11 @@ static void Cmd_ScoreboardDown_f( void )
 	slayer_scoreboard_active = true;
 	slayer_death_dismissed = false;   // explicit open re-arms the death view
 
+	// ...and restarts the auto-hide clock, so a board the player deliberately
+	// opened gets a full period rather than whatever was left of the last one.
+	if( SB_LocalDeadNow( ))
+		slayer_death_shown_at = host.realtime;
+
 	// Opening the board is also a hint that the player wants fresh data, so ask
 	// again — the throttle keeps this from hammering the server on key mashing.
 	Slayer_RequestStatus( 30.0 );
@@ -1155,6 +1182,7 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_scoreboard_colordot_migrated );
 
 	Cvar_RegisterVariable( &slayer_scoreboard_ondeath );
+	Cvar_RegisterVariable( &slayer_scoreboard_ondeath_time );
 	Cvar_RegisterVariable( &slayer_scoreboard_scheme );
 	Cvar_RegisterVariable( &slayer_scoreboard_scheme_file );
 	Cvar_RegisterVariable( &slayer_scoreboard_kd );
@@ -1314,6 +1342,7 @@ void Slayer_Scoreboard_Reset( void )
 	slayer_death_dismissed = false;
 	slayer_death_prev = false;   // a new map is not "just respawned"
 	slayer_local_died_at_hp1 = false;   // nor is it "just died"
+	slayer_death_shown_at = 0.0;
 	slayer_status_pending = false;
 	slayer_status_next_time = 0.0;   // allow immediate re-fetch on next connect
 	slayer_status_deadline = 0.0;
@@ -1909,7 +1938,8 @@ static qboolean SB_LocalDeadNow( void )
 ====================
 SB_UpdateDeathLatch
 
-Re-arm the dismissible death view on the dead -> alive EDGE, and only there.
+Re-arm the dismissible death view on the dead -> alive EDGE, and only there, and
+stamp when the current death began.
 
 The old code cleared `slayer_death_dismissed` on every frame that read "not
 dead". With the flag-based test that included the 1-3 frame holes described
@@ -1917,6 +1947,10 @@ above, so a board the player had just dismissed came BACK on its own the moment
 one of those frames went by -- the "мигание / самопроизвольное возвращение" in
 the report. An edge cannot do that: dismissal survives until the player actually
 respawns or presses the button again.
+
+The timestamp is taken on the alive -> dead edge for the same reason it is not
+taken per frame: the auto-hide must measure from the moment of death, and only an
+edge knows that moment.
 
 Idempotent, so calling it from several places in one frame is safe.
 ====================
@@ -1926,9 +1960,48 @@ static void SB_UpdateDeathLatch( void )
 	qboolean dead = SB_LocalDeadNow();
 
 	if( slayer_death_prev && !dead )
+	{
 		slayer_death_dismissed = false;   // respawned: arm the next death view
+		slayer_death_shown_at = 0.0;
+	}
+
+	if( !slayer_death_prev && dead )
+		slayer_death_shown_at = host.realtime;   // this death starts now
 
 	slayer_death_prev = dead;
+}
+
+/*
+====================
+SB_DeathViewExpired
+
+Has the death board been up long enough to take itself away?
+
+Separate from the dismissal flag on purpose: dismissal is the player's decision
+and survives until he respawns, while this is a timeout that must NOT be
+remembered -- if the player presses the button again the board comes back, and
+comes back for another full period, which is what pressing it means.
+====================
+*/
+static qboolean SB_DeathViewExpired( void )
+{
+	double limit = slayer_scoreboard_ondeath_time.value;
+
+	if( limit <= 0.0 )              // 0 = old behaviour, up until respawn
+		return false;
+
+	if( slayer_death_shown_at == 0.0 )
+		return false;
+
+	// A clock that went backwards (map change resets host.realtime) must not
+	// leave the board hidden forever.
+	if( host.realtime < slayer_death_shown_at )
+	{
+		slayer_death_shown_at = host.realtime;
+		return false;
+	}
+
+	return ( host.realtime - slayer_death_shown_at ) > limit;
 }
 
 /*
@@ -1952,6 +2025,7 @@ qboolean Slayer_Scoreboard_IsVisible( void )
 		return true;
 
 	if( slayer_scoreboard_ondeath.value != 0.0f && !slayer_death_dismissed
+	 && !SB_DeathViewExpired()
 	 && SB_LocalDeadNow( ))
 		return true;   // dead: CS shows its board here, and so do we
 
@@ -1989,7 +2063,12 @@ qboolean Slayer_Scoreboard_ShouldGateStock( void )
 	if( Slayer_Scoreboard_IsVisible( ))
 		return true;
 
-	// Dead, board dismissed: the stock board would auto-show, so keep gating it.
+	// Dead, and our board is NOT up -- either dismissed or timed out. The stock
+	// board auto-shows on death regardless of us, so keep gating it: "our board
+	// went away" must mean no scoreboard, not the default one taking over. This
+	// is deliberately independent of WHY ours is hidden, which is what makes the
+	// auto-hide timeout leave a clear screen instead of revealing the stock table
+	// six seconds after death.
 	if( slayer_scoreboard_ondeath.value != 0.0f && SB_LocalDeadNow( ))
 		return true;
 

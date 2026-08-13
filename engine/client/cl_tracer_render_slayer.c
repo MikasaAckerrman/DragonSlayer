@@ -333,6 +333,39 @@ float Slayer_SoftWidth( float half_world, float wpp, float min_px, float max_px,
 }
 
 // ===========================================================================
+// Draw accounting -- the answer to "the tracer is in the pool but I see nothing"
+// ===========================================================================
+//
+// The pool tells us a tracer is ALIVE (own[peak=N] in the summary), and that
+// number is computed by walking the pool and calling Draw on each live entry --
+// so a non-zero peak already proves the draw path runs. It says nothing about
+// whether anything reached the screen: every one of the steps below can silently
+// produce nothing, and from a log line that only counts tracers they are
+// indistinguishable.
+//
+//   * an early return (age outside life, head and tail collapsed, gain 0)
+//   * a texture that never got created (texnum 0)
+//   * a ribbon whose width rounds to nothing, or whose colour is ~0
+//
+// So the drawing side keeps its own tally, reported once a second next to the
+// pool's. "live=2 emitted=0" and "live=2 emitted=4 px=0.03" are different bugs.
+//
+// Declared HERE, above the emitters that write them, because C needs it: the
+// first version put the block next to Draw() and the ribbon emitter (300 lines
+// earlier) failed to compile.
+static int   s_dbg_draw_calls;      // Draw() entered
+static int   s_dbg_early_life;      // returned: age outside life
+static int   s_dbg_early_len;       // returned: head/tail collapsed
+static int   s_dbg_early_gain;      // returned: gain <= 0
+static int   s_dbg_ribbons;         // Begin/End pairs actually emitted
+static int   s_dbg_verts;           // vertices pushed
+static float s_dbg_last_px;         // core width of the last ribbon, in pixels
+static float s_dbg_last_gain;
+static float s_dbg_last_dim;
+static float s_dbg_last_dist;       // camera distance of the last tracer
+static int   s_dbg_last_tex;
+
+// ===========================================================================
 // Ribbon emission
 // ===========================================================================
 
@@ -371,6 +404,13 @@ static void Slayer_EmitRibbon( const vec3_t origin, const vec3_t dir,
 	len = head - tail;
 	if( len < 0.5f || segments < 2 )
 		return;
+
+	// A texnum of 0 is the renderer's "no texture": GL_Bind substitutes the
+	// default checkerboard, so the streak would be drawn but with the wrong
+	// profile -- worth telling apart from not drawing at all.
+	s_dbg_last_tex = texnum;
+	s_dbg_ribbons++;
+	s_dbg_verts += ( segments + 1 ) * 2;
 
 	ref.dllFuncs.GL_Bind( XASH_TEXTURE0, texnum );
 	ref.dllFuncs.Begin( TRI_TRIANGLE_STRIP );
@@ -461,6 +501,36 @@ static void Slayer_EmitSpark( const vec3_t pos, float half, const vec3_t vieworg
 // Public: draw one tracer
 // ===========================================================================
 
+// ===========================================================================
+// Draw accounting -- see the declarations above Slayer_EmitRibbon
+// ===========================================================================
+
+void Slayer_TracerRender_DebugSnapshot( slayer_tracer_debug_t *out )
+{
+	if( !out )
+		return;
+
+	out->draw_calls  = s_dbg_draw_calls;
+	out->early_life  = s_dbg_early_life;
+	out->early_len   = s_dbg_early_len;
+	out->early_gain  = s_dbg_early_gain;
+	out->ribbons     = s_dbg_ribbons;
+	out->verts       = s_dbg_verts;
+	out->last_px     = s_dbg_last_px;
+	out->last_gain   = s_dbg_last_gain;
+	out->last_dim    = s_dbg_last_dim;
+	out->last_dist   = s_dbg_last_dist;
+	out->last_tex    = s_dbg_last_tex;
+	out->tex_core    = s_tex_core;
+	out->tex_halo    = s_tex_halo;
+}
+
+void Slayer_TracerRender_DebugReset( void )
+{
+	s_dbg_draw_calls = s_dbg_early_life = s_dbg_early_len = s_dbg_early_gain = 0;
+	s_dbg_ribbons = s_dbg_verts = 0;
+}
+
 void Slayer_TracerRender_Draw( const slayer_tracer_t *tr, const slayer_tracer_style_t *st,
 	const vec3_t vieworg, float fov_y, int screen_h )
 {
@@ -470,12 +540,20 @@ void Slayer_TracerRender_Draw( const slayer_tracer_t *tr, const slayer_tracer_st
 	float  cam_dist, wpp, dim, core_half, halo_half;
 	float  head_col[3];
 
+	s_dbg_draw_calls++;
+
 	if( !tr->active || tr->life <= 0.0f )
+	{
+		s_dbg_early_life++;
 		return;
+	}
 
 	nt = tr->age / tr->life;
 	if( nt < 0.0f || nt >= 1.0f )
+	{
+		s_dbg_early_life++;
 		return;
+	}
 
 	// Head flies out and stops at the impact point; the tail keeps coming and
 	// folds into it. No sudden disappearance.
@@ -485,7 +563,10 @@ void Slayer_TracerRender_Draw( const slayer_tracer_t *tr, const slayer_tracer_st
 	tail_d = travelled - tr->length;
 	if( tail_d < 0.0f ) tail_d = 0.0f;
 	if(( head_d - tail_d ) < 0.5f )
+	{
+		s_dbg_early_len++;
 		return;
+	}
 
 	VectorMA( tr->start, head_d, tr->dir, pos );
 
@@ -520,7 +601,10 @@ void Slayer_TracerRender_Draw( const slayer_tracer_t *tr, const slayer_tracer_st
 
 	gain = st->brightness * tr->gain * fade_in * fade_out * flick;
 	if( gain <= 0.0f )
+	{
+		s_dbg_early_gain++;
 		return;
+	}
 
 	cam_dist = 0.0f;
 	{
@@ -534,6 +618,13 @@ void Slayer_TracerRender_Draw( const slayer_tracer_t *tr, const slayer_tracer_st
 	core_half = Slayer_SoftWidth( tr->radius * 0.5f, wpp, st->min_px, st->max_px,
 		st->soft_px, &dim );
 	halo_half = core_half * st->halo_scale;
+
+	// Snapshot for the diagnostic line: these four numbers say whether a tracer
+	// that "exists" could possibly be seen.
+	s_dbg_last_px   = ( wpp > 0.0f ) ? ( core_half * 2.0f ) / wpp : 0.0f;
+	s_dbg_last_gain = gain;
+	s_dbg_last_dim  = dim;
+	s_dbg_last_dist = cam_dist;
 
 	ref.dllFuncs.TriRenderMode( kRenderTransAdd );
 	ref.dllFuncs.CullFace( TRI_NONE );

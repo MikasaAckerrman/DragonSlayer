@@ -229,6 +229,63 @@ void Slayer_SteamAPI_Reset( void )
 	sapi_result = SAPI_RESULT_IDLE;
 }
 
+/*
+====================
+SAPI_KeyLooksValid
+
+Is the configured key even the right SHAPE?
+
+A Steam Web API key is exactly 32 hex characters. The key on the reporting
+device is 63, and every batch spent a request to be told HTTP 403 -- forever,
+because the rejection path re-arms as soon as the key changes and the key never
+changed. Checking the length costs nothing and turns an endless silent 403 into
+one actionable line.
+
+Says so ONCE per distinct key, not per batch: this is asked several times a
+minute and a wall of identical warnings is its own bug. Returns false and marks
+the Web API disabled, exactly like a server-side rejection, so the XML fallback
+takes over untouched.
+====================
+*/
+static qboolean SAPI_KeyLooksValid( void )
+{
+	int  keylen = (int)Q_strlen( slayer_steam_apikey.string );
+	int  i;
+
+	if( keylen == 32 )
+	{
+		for( i = 0; i < 32; i++ )
+		{
+			char c = slayer_steam_apikey.string[i];
+
+			if( !(( c >= '0' && c <= '9' ) || ( c >= 'a' && c <= 'f' )
+				|| ( c >= 'A' && c <= 'F' )))
+				break;
+		}
+
+		if( i == 32 )
+			return true;
+
+		Con_Printf( S_WARN "SteamAPI: the Web API key contains a non-hex character at position %d.\n", i + 1 );
+	}
+	else
+	{
+		Con_Printf( S_WARN "SteamAPI: the Web API key is %d characters, expected 32.\n", keylen );
+	}
+
+	Con_Printf( "  Steam will refuse it (HTTP 403). Avatars still load from public profiles,\n" );
+	Con_Printf( "  so nothing else is affected. Fix or clear it in Settings -> Steam Web API key;\n" );
+	Con_Printf( "  a valid key is 32 hex characters from steamcommunity.com/dev/apikey\n" );
+	Slayer_Log_Printf( "batch: refusing a malformed API key (%d chars, expected 32 hex) — "
+		"XML fallback only, no request spent", keylen );
+
+	// Same state a real rejection leaves behind, so editing the key re-enables
+	// the Web API through the existing path rather than a second mechanism.
+	sapi_batch_disabled = true;
+	Q_strncpy( sapi_last_apikey, slayer_steam_apikey.string, sizeof( sapi_last_apikey ));
+	return false;
+}
+
 void Slayer_SteamAPI_RequestBatch( const uint64_t *steamids, int count )
 {
 	sapi_work_t *work;
@@ -266,6 +323,10 @@ void Slayer_SteamAPI_RequestBatch( const uint64_t *steamids, int count )
 	}
 
 	if( !steamids || count <= 0 )
+		return;
+
+	// Shape check before the network: a malformed key can only earn a 403.
+	if( !SAPI_KeyLooksValid( ))
 		return;
 
 	// Remember the key we are about to try, so a later rejection can be told
@@ -372,8 +433,16 @@ qboolean Slayer_SteamAPI_Frame( void )
 
 	if( sapi_result == SAPI_RESULT_BADKEY )
 	{
-		Con_Printf( S_WARN "SteamAPI: API key rejected — Web API disabled until the key is changed\n" );
-		Slayer_Log_Printf( "batch: API key rejected (401/403) — Web API disabled, falling back to XML" );
+		// Say what to DO, not just what happened. A rejected key is almost always
+		// a typo or a revoked key, and the feature is optional: avatars still load
+		// from public profiles, so the message must not read like a failure the
+		// player has to fix before anything works.
+		Con_Printf( S_WARN "SteamAPI: Steam rejected the Web API key (HTTP 403).\n" );
+		Con_Printf( "  Avatars still load from public profiles — the key only speeds up bulk loading.\n" );
+		Con_Printf( "  Check it in Settings -> Steam Web API key, or clear it to stop retrying:\n" );
+		Con_Printf( "  a valid key is 32 hex characters from steamcommunity.com/dev/apikey\n" );
+		Slayer_Log_Printf( "batch: API key rejected (401/403) — Web API disabled, falling back to XML (key length=%d, expected 32)",
+			(int)Q_strlen( slayer_steam_apikey.string ));
 		sapi_batch_disabled = true;
 		sapi_batch_in_progress = false;
 		sapi_batch_count = 0;
