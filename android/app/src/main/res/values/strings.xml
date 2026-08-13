@@ -126,6 +126,12 @@
 	<string name="steam_auth_enter_email_code">Steam emailed you a code. Enter it below.</string>
 	<string name="steam_auth_enter_app_code">Enter the Steam Guard code from your authenticator.</string>
 	<string name="steam_auth_submit_code">Submit code</string>
+	<string name="steam_auth_intro">Enter your Steam account name and password. The password is encrypted with a key from Steam and is never stored in the app.</string>
+	<string name="steam_auth_app_route">Approve in the Steam app instead</string>
+	<string name="steam_auth_code_or_approve">Enter the Steam Guard code — or simply approve the sign-in in the Steam app if you got a notification. Either one works.</string>
+	<string name="steam_auth_checking_code">Checking the code…</string>
+	<string name="steam_auth_code_accepted">Code accepted, finishing sign-in…</string>
+	<string name="steam_auth_code_rejected">Code refused: %1$s\nEnter a fresh code and try again.</string>
 	<string name="steam_auth_signed_in">Signed in to Steam — SteamID %1$s</string>
 	<string name="steam_auth_failed">Sign-in failed: %1$s</string>
 	<string name="steam_auth_cancelled">Sign-in cancelled.</string>

@@ -122,7 +122,13 @@
 	<string name="steam_auth_app_code">Код из приложения Steam</string>
 	<string name="steam_auth_enter_email_code">Steam прислал код на почту. Введите его ниже.</string>
 	<string name="steam_auth_enter_app_code">Введите код Steam Guard из приложения-аутентификатора.</string>
-	<string name="steam_auth_submit_code">Отправить код</string>
+	<string name="steam_auth_submit_code">Отправить код</string>
+	<string name="steam_auth_intro">Введите имя аккаунта и пароль Steam. Пароль шифруется ключом Steam и не сохраняется в приложении.</string>
+	<string name="steam_auth_app_route">Вместо этого подтвердить в приложении Steam</string>
+	<string name="steam_auth_code_or_approve">Введите код Steam Guard — или просто подтвердите вход в приложении Steam, если пришло уведомление. Сработает любой способ.</string>
+	<string name="steam_auth_checking_code">Проверка кода…</string>
+	<string name="steam_auth_code_accepted">Код принят, завершаем вход…</string>
+	<string name="steam_auth_code_rejected">Код не принят: %1$s\nВведите новый код и попробуйте снова.</string>
 	<string name="steam_auth_signed_in">Вход в Steam выполнен — SteamID %1$s</string>
 	<string name="steam_auth_failed">Не удалось войти: %1$s</string>
 	<string name="steam_auth_cancelled">Вход отменён.</string>

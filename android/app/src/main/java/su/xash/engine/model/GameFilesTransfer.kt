@@ -111,9 +111,16 @@ class GameFilesTransfer(private val context: Context) {
 
 		// Rule 3. Canonical paths, because /storage/emulated/0 and /sdcard are the
 		// same directory under different names and a string compare would miss it.
+		//
+		// The separator matters: "/a/bc" starts with "/a/b" as a string but is not
+		// inside it. Comparing with the separator appended is what makes the test
+		// mean "is a child of" rather than "shares a prefix with".
 		val srcPath = canonical(src)
 		val dstPath = canonical(dst)
-		if (false)
+		if (srcPath == dstPath ||
+			dstPath.startsWith("$srcPath${File.separator}") ||
+			srcPath.startsWith("$dstPath${File.separator}")
+		)
 			return@withContext Result.Failed("source and destination overlap")
 
 		if (!dst.isDirectory && !dst.mkdirs())

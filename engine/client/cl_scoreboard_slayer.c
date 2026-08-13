@@ -260,6 +260,12 @@ static qboolean        slayer_scoreboard_active = false;
 static qboolean        slayer_death_dismissed = false;  // hid the death auto-show until respawn/re-press
 static qboolean        slayer_death_prev = false;       // previous frame's dead state, for the edge
 
+// DeathMsg said we died, and health has not left the ambiguous 1 since. This is
+// the second death signal used to break the health == 1 tie (see SB_LocalDeadNow)
+// -- needed because the ScoreAttrib dead bit is a CS convention that some servers
+// never send, and on those the death board simply never appeared.
+static qboolean        slayer_local_died_at_hp1 = false;
+
 // Avatar state: SteamID64 per player slot and cached texture handles
 static uint64_t        slayer_steamid64[MAX_CLIENTS];
 static int             slayer_avatar_tex[MAX_CLIENTS]; // 0 = not tried, >0 = loaded, -1 = failed
@@ -472,6 +478,11 @@ static void Slayer_ParseColorString( const char *str, rgba_t out )
 // ===========================================================================
 
 static void Slayer_LoadAvatarTexture( int slot );
+
+// Defined further down, next to the visibility query it belongs with, but needed
+// up here by the scoreboard-button commands: whether a release dismisses the
+// death view depends on whether the player is dead at that moment.
+static qboolean SB_LocalDeadNow( void );
 
 void Slayer_ParseStatusLine( const char *line )
 {
@@ -1088,7 +1099,21 @@ static void Cmd_ScoreboardDown_f( void )
 static void Cmd_ScoreboardUp_f( void )
 {
 	slayer_scoreboard_active = false;
-	slayer_death_dismissed = true;   // releasing while dead hides the auto-show
+
+	// Dismiss the auto-show ONLY if the player is dead right now.
+	//
+	// THIS IS THE "через раз" BUG. The release used to set the flag
+	// unconditionally, and nothing cleared it until a dead -> alive edge. So a
+	// player who peeked at the board WHILE ALIVE (the normal thing to do between
+	// rounds) left dismissed = true behind: he was never dead, so no respawn edge
+	// followed to re-arm it, and his NEXT death showed no board at all. Peek
+	// again -- no board again. Exactly every other death, or every death after a
+	// peek, which is what "через раз" describes.
+	//
+	// Dismissing means "I have seen the death board, take it away". Pressing and
+	// releasing the button while alive says nothing about that.
+	if( SB_LocalDeadNow( ))
+		slayer_death_dismissed = true;
 }
 
 // ===========================================================================
@@ -1288,6 +1313,7 @@ void Slayer_Scoreboard_Reset( void )
 	slayer_scoreboard_active = false;
 	slayer_death_dismissed = false;
 	slayer_death_prev = false;   // a new map is not "just respawned"
+	slayer_local_died_at_hp1 = false;   // nor is it "just died"
 	slayer_status_pending = false;
 	slayer_status_next_time = 0.0;   // allow immediate re-fetch on next connect
 	slayer_status_deadline = 0.0;
@@ -1310,6 +1336,30 @@ void Slayer_OnHealthUpdate( int hp )
 {
 	if( cl.playernum >= 0 && cl.playernum < MAX_CLIENTS )
 		slayer_scores[cl.playernum].health = hp;
+
+	// The DeathMsg mark is only meaningful while health sits at the ambiguous 1.
+	// Clearing it here rather than on a timer is what keeps it honest: a respawn
+	// arrives as a health update (100), so the mark is gone before anything asks
+	// again, and a stale mark can never keep the board up over a live player.
+	if( hp != 1 )
+		slayer_local_died_at_hp1 = false;
+}
+
+/*
+====================
+Slayer_Scoreboard_OnLocalDeath
+
+DeathMsg named us as the victim.
+
+Kept as a mark rather than acted on directly because a death message is an event
+and "am I dead" is a state -- and the state has to survive the ~1-3 frames before
+any other signal confirms it, on servers where no other signal ever comes. See
+SB_LocalDeadNow for why ScoreAttrib is not sufficient on its own.
+====================
+*/
+void Slayer_Scoreboard_OnLocalDeath( void )
+{
+	slayer_local_died_at_hp1 = true;
 }
 
 // ===========================================================================
@@ -1826,14 +1876,33 @@ static qboolean SB_LocalDeadNow( void )
 	//               watching the round has health 1, not 0 -- and a health-only
 	//               test reads him as alive, which is exactly "при смерти
 	//               скорборд вовсе не отображается". A player genuinely on 1 HP
-	//               also exists, so the tie is broken by the server's flag, which
-	//               by this point has long arrived.
+	//               also exists, so the tie is broken by TWO independent death
+	//               signals, either of which is enough:
+	//
+	//                 * DeathMsg naming us as the victim. Authoritative, arrives
+	//                   on the death frame itself, and EVERY mod sends it -- it
+	//                   is what draws the kill feed.
+	//                 * the ScoreAttrib dead bit. Also authoritative, but it
+	//                   lags, and a server that never sets bit 0 exists (the bit
+	//                   is a CS convention, not a protocol guarantee).
+	//
+	//               Relying on ScoreAttrib alone is the remaining half of "через
+	//               раз": on such a server the observer's health of 1 read as
+	//               alive and no board appeared, while on a server that does send
+	//               it the same death worked.
 	if( hp <= 0 )
 		return true;
 	if( hp >= 2 )
 		return false;
 
-	return ( slayer_scores[cl.playernum].flags & 1 ) ? true : false;
+	if( slayer_scores[cl.playernum].flags & 1 )
+		return true;
+
+	// DeathMsg fallback for the hp == 1 tie. Cleared the moment health leaves 1
+	// (see Slayer_OnHealthUpdate), so it cannot outlive the death it describes:
+	// a respawn arrives as health 100 and clears the mark before this is asked
+	// again.
+	return slayer_local_died_at_hp1;
 }
 
 /*

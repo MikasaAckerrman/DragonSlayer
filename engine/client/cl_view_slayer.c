@@ -564,6 +564,15 @@ void Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 	killer = pbuf[0];
 	victim = pbuf[1];
 
+	// Tell the scoreboard we died. It needs this as a death signal independent of
+	// the server's ScoreAttrib flag: a dead player watching the round reads
+	// health == 1 (StartObserver), and on a server that never sets the dead bit
+	// that was indistinguishable from a live player on his last hit point -- so
+	// the death board did not appear. DeathMsg is sent by every mod, it draws the
+	// kill feed. Slot ids here are 1-based.
+	if( victim == cl.playernum + 1 && victim != 0 )
+		Slayer_Scoreboard_OnLocalDeath();
+
 	// Headshot detection. In CS/CSCZ the DeathMsg layout is:
 	//   byte killer, byte victim, byte headshot(0/1), string weapon
 	// In vanilla HL/DM it's:

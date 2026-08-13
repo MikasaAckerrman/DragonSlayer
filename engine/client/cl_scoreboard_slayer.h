@@ -60,6 +60,12 @@ void Slayer_OnScoreAttrib( const byte *pbuf, int iSize );
 // Stores HP for the local/spectated player row in the scoreboard.
 void Slayer_OnHealthUpdate( int hp );
 
+// DeathMsg named the local player as the victim.
+// Second death signal for the ambiguous health == 1 case (a spectating dead
+// player), because the ScoreAttrib dead bit is a CS convention some servers
+// never send. Called from Slayer_OnDeathMsg.
+void Slayer_Scoreboard_OnLocalDeath( void );
+
 // Hook for server-sent "HealthInfo" user message.
 // Some servers (ReGameDLL) broadcast per-player HP this way.
 //   pbuf  - raw payload bytes (byte slot, byte health)
