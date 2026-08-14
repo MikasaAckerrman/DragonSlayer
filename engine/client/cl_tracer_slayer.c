@@ -271,6 +271,28 @@ static CVAR_DEFINE_AUTO( slayer_tracer_tp_muzzle, "1", FCVAR_ARCHIVE,
 static CVAR_DEFINE_AUTO( slayer_tracer_impact_window, "0.35", FCVAR_ARCHIVE,
 	"Slayer3D: seconds a recorded bullet impact waits for its shot (must exceed ping)" );
 
+// INSTANT LOCAL TRACERS. This is the answer to "трассеры будто зависят от пинга".
+//
+// They did, and it was structural rather than a bug in the timing constants. A
+// local tracer was placed on the rising edge of EF_MUZZLEFLASH, and the flag we
+// can observe is the SERVER'S ECHO: the locally predicted flag is set and cleared
+// inside a single frame, before the edge test in CL_LinkPlayers ever sees it
+// (see the s_impacts comment). So every one of our own tracers appeared one full
+// round trip after the shot -- 60 ms on a good server, 130 on the one in the
+// report. The gun fires, and the streak follows visibly later.
+//
+// The client already knows everything needed, immediately: it PREDICTS its own
+// weapon event, and that event computes the spread and reports the exact impact
+// through R_BulletImpactParticles -> Slayer_Tracer_NoteImpact, with no server
+// involved. So the tracer is spawned there, in the same frame as the shot, and
+// the echo that arrives later is credited against it instead of drawing a second
+// streak.
+//
+// Remote players are untouched: their shots are only knowable from the snapshot,
+// so their tracers legitimately arrive with the snapshot.
+static CVAR_DEFINE_AUTO( slayer_tracer_instant, "1", FCVAR_ARCHIVE,
+	"Slayer3D: draw your own tracer from the predicted weapon event, without waiting for the server echo (0 = old behaviour)" );
+
 // How long a DETECTED shot waits for an impact that has not happened yet. Kept
 // SHORT and separate from the window above, because the two directions are not
 // symmetric: the impact normally happens first (see s_impacts), so if we already
@@ -388,6 +410,29 @@ typedef struct
 
 static slayer_impact_rec_t s_impacts[SLAYER_IMPACT_RING];
 static int s_impacts_next;
+
+// INSTANT LOCAL SHOTS -- tracers already drawn from the predicted weapon event.
+//
+// The echo of EF_MUZZLEFLASH still arrives a round trip later for a shot we have
+// already drawn, and it must not draw a second streak. So each instant tracer
+// leaves a credit here, and the echo consumes one instead of firing.
+//
+// A credit is not just a counter: it must EXPIRE, or a burst that outruns the
+// ring would silently suppress later, legitimate echoes. And the count has to be
+// per-shot rather than a single flag, because a full-auto rifle has several shots
+// in flight between the muzzle and the echo.
+#define SLAYER_INSTANT_CREDITS 8
+typedef struct
+{
+	qboolean used;
+	double   time;
+} slayer_instant_rec_t;
+
+static slayer_instant_rec_t s_instant[SLAYER_INSTANT_CREDITS];
+static int s_instant_next;
+static int s_instant_drawn;     // diagnostics: tracers drawn without the server
+static int s_instant_echo_used; // echoes credited against an instant tracer
+static int s_instant_expired;   // credits that timed out unused
 
 // Which player's weapon event is executing right now, 0 = none. Set by
 // CL_FireEvent around the client DLL callback. This is the ONLY reliable way to
@@ -739,6 +784,7 @@ void Slayer_Tracer_Init( void )
 	Cvar_RegisterVariable( &slayer_tracer_max_px );
 	Cvar_RegisterVariable( &slayer_tracer_tp_muzzle );
 	Cvar_RegisterVariable( &slayer_tracer_impact_window );
+	Cvar_RegisterVariable( &slayer_tracer_instant );
 	Cvar_RegisterVariable( &slayer_tracer_impact_grace );
 	Cvar_RegisterVariable( &slayer_tracer_smooth );
 	Cvar_RegisterVariable( &slayer_tracer_soft_px );
@@ -789,6 +835,12 @@ void Slayer_Tracer_Reset( void )
 	memset( s_pool, 0, sizeof( s_pool ));
 	s_pool_next = 0;
 	s_live_peak = 0;
+
+	// Instant-tracer credits describe shots on the OLD map. A credit surviving a
+	// map change would swallow the first echo on the new one.
+	memset( s_instant, 0, sizeof( s_instant ));
+	s_instant_next = 0;
+	s_instant_drawn = s_instant_echo_used = s_instant_expired = 0;
 	s_seed_walk = 0.0f;
 
 	// The texture table is rebuilt on map change, so the cached texnums are
@@ -1193,6 +1245,126 @@ static void Slayer_Tracer_SpawnVisual( const vec3_t start, const vec3_t end, qbo
 		Slayer_Tracer_SpawnBeam( start, end, 1.0f );
 }
 
+/*
+====================
+Slayer_Tracer_LocalMuzzleNow
+
+The local gun tip, RIGHT NOW, for a shot the client is predicting this frame.
+
+Only correct inside the weapon event, and that is the whole point: at that moment
+the client library has just called pfnWeaponAnim for THIS shot, so the
+viewmodel's sequence names the barrel that fired and the renderer's attachment
+for it is the live muzzle. (The same reasoning as Slayer_Tracer_EndEvent, which
+samples the barrel index there for exactly this reason.)
+
+Returns false when there is no trustworthy muzzle -- the caller then has nothing
+better than the echo path, so it should not draw early.
+====================
+*/
+static qboolean Slayer_Tracer_LocalMuzzleNow( vec3_t out )
+{
+	cl_entity_t *src;
+	int          idx;
+
+	// Third person draws the PLAYER, not the viewmodel, and R_RunViewmodelEvents
+	// bails out there -- so the viewmodel's attachments are stale. Same split as
+	// the echo path makes for the same reason.
+	if( V_IsSlayerThirdPerson() || CL_IsThirdPerson( ))
+	{
+		if( slayer_tracer_tp_muzzle.value == 0.0f )
+			return false;
+
+		src = CL_GetLocalPlayer();
+	}
+	else
+	{
+		src = &clgame.viewent;
+	}
+
+	if( !src )
+		return false;
+
+	idx = Slayer_Tracer_MuzzleIndexFromModel( src );
+
+	return Slayer_Tracer_MuzzleFromAttachment( src, idx, out );
+}
+
+/*
+====================
+Slayer_Tracer_InstantCredit / Slayer_Tracer_TakeInstantCredit
+
+Bookkeeping between the two halves of a local shot.
+
+A tracer drawn from the predicted event leaves a credit; the server's
+EF_MUZZLEFLASH echo for that same shot arrives a round trip later and consumes
+it instead of drawing a second streak.
+
+Credits EXPIRE, and that is not a detail: without it, a burst that overflowed the
+ring would leave stale credits behind and silently swallow later, legitimate
+echoes -- which would look exactly like the tracers being broken again.
+====================
+*/
+static void Slayer_Tracer_InstantCredit( void )
+{
+	int i;
+
+	// Prefer a free slot; otherwise take the oldest, which is the one whose echo
+	// is least likely to still be in flight.
+	int oldest = 0;
+
+	for( i = 0; i < SLAYER_INSTANT_CREDITS; i++ )
+	{
+		if( !s_instant[i].used )
+		{
+			s_instant[i].used = true;
+			s_instant[i].time = host.realtime;
+			return;
+		}
+
+		if( s_instant[i].time < s_instant[oldest].time )
+			oldest = i;
+	}
+
+	s_instant[oldest].used = true;
+	s_instant[oldest].time = host.realtime;
+}
+
+static qboolean Slayer_Tracer_TakeInstantCredit( void )
+{
+	double window = slayer_tracer_impact_window.value;
+	int    best = -1;
+	int    i;
+
+	// The echo is one round trip behind, so the credit must outlive the ping.
+	// Same bound as the impact pairing window, for the same reason.
+	if( window < 0.1 ) window = 0.1;
+	if( window > 0.5 ) window = 0.5;
+
+	for( i = 0; i < SLAYER_INSTANT_CREDITS; i++ )
+	{
+		if( !s_instant[i].used )
+			continue;
+
+		if( host.realtime - s_instant[i].time > window )
+		{
+			s_instant[i].used = false;   // stale: the echo never came
+			s_instant_expired++;
+			continue;
+		}
+
+		// Oldest first: shots are echoed in the order they were fired.
+		if( best < 0 || s_instant[i].time < s_instant[best].time )
+			best = i;
+	}
+
+	if( best < 0 )
+		return false;
+
+	s_instant[best].used = false;
+	s_instant_echo_used++;
+	return true;
+}
+
 static void Slayer_Tracer_QueueLocal( const vec3_t start, const vec3_t fallback )
 {
 	slayer_pending_shot_t *p;
@@ -1285,6 +1457,22 @@ static void Slayer_Tracer_Fire( cl_entity_t *ent, qboolean is_local )
 
 	// Register the shot for barrel-heat colouring (colour computed per frame).
 	s_last_shot = host.realtime;
+
+	// THE ECHO OF A SHOT WE ALREADY DREW.
+	//
+	// With slayer_tracer_instant on, a local shot is drawn from the predicted
+	// weapon event (see Slayer_Tracer_NoteImpact), and this muzzleflash is the
+	// server echoing that same shot back a round trip later. Drawing again would
+	// double every one of the player's own tracers.
+	//
+	// The barrel sample still has to be drained, or the queue would fill with
+	// entries no detector consumes and later shots would read a stale barrel.
+	if( is_local && slayer_tracer_instant.value != 0.0f
+	 && Slayer_Tracer_TakeInstantCredit( ))
+	{
+		Slayer_Tracer_PopMuzzle();
+		return;
+	}
 
 	if( is_local )
 	{
@@ -1539,7 +1727,6 @@ void Slayer_Tracer_NoteImpact( const vec3_t pos )
 		return;
 
 	// OWNERSHIP GATE, checked first and cheapest.
-	//
 	// This is the answer to "can another player's shot steal my tracer while we
 	// stand point-blank?". At contact range the geometric tests are useless: his
 	// bullet hole is within a metre of mine and lands in the same frame, so both
@@ -1557,6 +1744,48 @@ void Slayer_Tracer_NoteImpact( const vec3_t pos )
 	{
 		s_impact_foreign++;
 		return;
+	}
+
+	// INSTANT PATH -- the fix for "трассеры будто зависят от пинга".
+	//
+	// Everything needed is already known HERE, in the same frame as the shot: this
+	// callback runs inside the client's own PREDICTED weapon event, `pos` is the
+	// exact impact that event computed (spread included), and the muzzle is on the
+	// viewmodel whose animation the event just started. Nothing about that came
+	// from the server.
+	//
+	// The old code instead recorded this impact and waited for the server's
+	// EF_MUZZLEFLASH echo to place the tracer, which is one full round trip later
+	// -- 60 ms on a good server, 130 on the one in the report. That IS the reported
+	// dependence on ping, and no tuning of the windows could have removed it.
+	//
+	// So draw now, and leave a credit: the echo for this shot will arrive later and
+	// must not draw a second streak.
+	//
+	// A muzzle we cannot trust means falling through to the old path rather than
+	// drawing from the eye -- a streak starting in the middle of the screen is
+	// worse than a slightly late one.
+	if( slayer_tracer_instant.value != 0.0f )
+	{
+		vec3_t muzzle;
+
+		if( Slayer_Tracer_LocalMuzzleNow( muzzle ))
+		{
+			vec3_t delta;
+
+			VectorSubtract( pos, muzzle, delta );
+
+			// A degenerate pair (impact essentially at the muzzle: a wall pressed
+			// against the barrel) has no direction to draw along; let the echo path
+			// deal with it.
+			if( VectorLength( delta ) >= 1.0f )
+			{
+				Slayer_Tracer_SpawnVisual( muzzle, pos, false );
+				Slayer_Tracer_InstantCredit();
+				s_instant_drawn++;
+				return;
+			}
+		}
 	}
 
 	if( window < 0.0 ) window = 0.0;
@@ -1733,14 +1962,18 @@ void Slayer_Tracer_Frame( void )
 		Slayer_Log_Printf(
 			"tracer: 1s draw pool[calls=%d gated=%d] draw=%d early[life=%d len=%d gain=%d] "
 			"ribbons=%d verts=%d "
-			"last[px=%.2f gain=%.2f dim=%.2f dist=%.0f tex=%d] tex[core=%d halo=%d]",
+			"last[px=%.2f gain=%.2f dim=%.2f dist=%.0f tex=%d] tex[core=%d halo=%d] "
+			"instant[on=%d drawn=%d echo=%d stale=%d]",
 			s_pool_draw_calls, s_pool_draw_gated,
 			dbg.draw_calls, dbg.early_life, dbg.early_len, dbg.early_gain,
 			dbg.ribbons, dbg.verts,
 			dbg.last_px, dbg.last_gain, dbg.last_dim, dbg.last_dist, dbg.last_tex,
-			dbg.tex_core, dbg.tex_halo );
+			dbg.tex_core, dbg.tex_halo,
+			(int)slayer_tracer_instant.value,
+			s_instant_drawn, s_instant_echo_used, s_instant_expired );
 
 		s_pool_draw_calls = s_pool_draw_gated = 0;
+		s_instant_drawn = s_instant_echo_used = s_instant_expired = 0;
 		Slayer_TracerRender_DebugReset();
 
 		s_fired_local = s_fired_remote = s_beam_ok = 0;

@@ -46,8 +46,22 @@ GNU General Public License for more details.
 // Cvars
 // =============================================================================
 
-static CVAR_DEFINE_AUTO( slayer_item_phys, "1", FCVAR_ARCHIVE,
-	"Slayer3D: physical pose for dropped weapons and props (0 = server pose)" );
+static CVAR_DEFINE_AUTO( slayer_item_phys, "0", FCVAR_ARCHIVE,
+	"Slayer3D: physical pose for dropped weapons and props (0 = vanilla server pose)" );
+
+// One-shot migration of the archived value. The feature shipped ON and its
+// value is in the player's config.cfg, so a new default of 0 cannot take effect
+// on its own -- cvars are registered inside CL_Init and `exec config.cfg` runs
+// afterwards, re-applying the stored 1.
+//
+// WHY IT IS OFF NOW: asked for directly -- "давай сделаем выбрасывание оружия
+// ванильным без нашей неудачной физики". Three passes went into toppling, edge
+// resting and a placement solver, and the result still reads as wrong more often
+// than the plain server pose does. The code stays, behind the cvar: the parts
+// that were measured (mesh extents, the placement solver) are useful and the
+// device is the only place the two can be compared.
+static CVAR_DEFINE_AUTO( slayer_item_phys_migrated, "0", FCVAR_ARCHIVE,
+	"Slayer3D internal: dropped-item physics default migration completed" );
 
 static CVAR_DEFINE_AUTO( slayer_item_settle, "1", FCVAR_ARCHIVE,
 	"Slayer3D: lay a resting item against the surface under it (0 = keep it upright)" );
@@ -739,6 +753,7 @@ void Slayer_ItemPhys_Init( void )
 	int i;
 
 	Cvar_RegisterVariable( &slayer_item_phys );
+	Cvar_RegisterVariable( &slayer_item_phys_migrated );
 	Cvar_RegisterVariable( &slayer_item_settle );
 	Cvar_RegisterVariable( &slayer_item_settle_mode );
 	Cvar_RegisterVariable( &slayer_item_settle_rate );
@@ -757,6 +772,27 @@ void Slayer_ItemPhys_Init( void )
 	Cvar_RegisterVariable( &slayer_shield_spin );
 	Cvar_RegisterVariable( &slayer_item_lean_probes );
 	Cvar_RegisterVariable( &slayer_item_diag );
+
+	// TURN THE DROPPED-ITEM PHYSICS OFF ON AN EXISTING CONFIG.
+	//
+	// The feature shipped with slayer_item_phys 1, so that value is archived in
+	// the player's config.cfg. Changing the default alone does nothing: cvars are
+	// registered here, inside CL_Init, and `exec config.cfg` runs AFTERWARDS and
+	// puts the stored 1 back. (Same trap as the scoreboard's block-level and K/D
+	// migrations -- see cl_scoreboard_slayer.c.)
+	//
+	// Only the exact shipped default is touched. Someone who deliberately set it
+	// to 0 already gets 0; someone who turns it back on after this migration ran
+	// keeps it, because the migration flag is archived too and never runs twice.
+	if( slayer_item_phys_migrated.value == 0.0f )
+	{
+		if( slayer_item_phys.value != 0.0f )
+			Cvar_SetValue( "slayer_item_phys", 0.0f );
+
+		Cvar_SetValue( "slayer_item_phys_migrated", 1.0f );
+		Slayer_Log_Printf( "item phys migration: dropped-item physics OFF by default "
+			"(vanilla server pose); set slayer_item_phys 1 to compare" );
+	}
 
 	for( i = 0; i < IP_MAX_SLOTS; i++ )
 	{

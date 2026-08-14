@@ -51,6 +51,12 @@ public final class SteamCM
 	private static final int EMSG_CLIENT_LOGGED_OFF = 757;
 	private static final int EMSG_CLIENT_HEARTBEAT = 703;
 	private static final int EMSG_CLIENT_GAMES_PLAYED = 742;
+	// ClientChangeStatus carries the persona state. Sending it is what makes the
+	// session VISIBLE: see announceOnline().
+	private static final int EMSG_CLIENT_CHANGE_STATUS = 716;
+
+	// EPersonaState
+	private static final int PERSONA_ONLINE = 1;
 
 	private static final int PROTO_MASK = 0x80000000;
 
@@ -387,6 +393,39 @@ public final class SteamCM
 	// -----------------------------------------------------------------------
 	// The actual point of all this
 	// -----------------------------------------------------------------------
+
+	/**
+	 * Announce the session as ONLINE.
+	 *
+	 * WHY THIS IS SEPARATE FROM setGamePlayed, and why it is the missing piece:
+	 * the user reported "аватарка отображается, но в стиме был по-прежнему 3 часа
+	 * 46 минут назад" -- i.e. the friends list still showed him offline, so
+	 * "playing Counter-Strike" had nowhere to appear either. A logged-on session
+	 * whose persona state is still Offline is exactly that: Steam accepts the
+	 * games_played message and shows it to nobody.
+	 *
+	 * A real client sends ClientChangeStatus after logon; we never did, because
+	 * the games_played message alone was enough in testing against an account
+	 * that was already online from another device.
+	 *
+	 * Sent once per session, right after logon, and NOT tied to the game status:
+	 * clearing the game must not drop the session to Offline while the player is
+	 * still in the launcher.
+	 */
+	public void announceOnline() throws IOException
+	{
+		// CMsgClientChangeStatus: persona_state is field 1. Only that field is
+		// sent -- the first version also wrote a bool at field 3, which in that
+		// message is is_auto_generated_name, not the persona flags (those are a
+		// uint32 at field 6). Sending a field means something different from
+		// leaving it out, so the minimum that expresses "I am online" is the
+		// correct thing to send.
+		send( EMSG_CLIENT_CHANGE_STATUS, new SteamWire.Writer()
+			.uint32( 1, PERSONA_ONLINE )      // persona_state
+			.toBytes() );
+
+		log( "cm: persona state -> Online" );
+	}
 
 	/**
 	 * Announce a game as being played.

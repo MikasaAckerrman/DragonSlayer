@@ -126,6 +126,22 @@ public final class SteamPresence
 	// -----------------------------------------------------------------------
 
 	/**
+	 * Everything worth knowing about a presence session goes through here, to
+	 * BOTH logcat and the on-device log file.
+	 *
+	 * The file half is what makes this feature diagnosable at all. The status has
+	 * now failed twice on the user's phone with nothing to look at: logcat needs a
+	 * cable, and every problem in this project that actually got solved was solved
+	 * from cstrike/logs/. A background network session with no durable log is a
+	 * session whose failures can only be guessed at.
+	 */
+	private static void note( String message )
+	{
+		Log.i( TAG, message );
+		su.xash.engine.SlayerLog.log( "presence", message );
+	}
+
+	/**
 	 * Announce a game. Returns immediately; the network happens elsewhere.
 	 *
 	 * @param appid      Steam app id, 10 for Counter-Strike
@@ -137,7 +153,17 @@ public final class SteamPresence
 	{
 		if( !isAvailable() )
 		{
-			Log.i( TAG, "start ignored: no Steam token stored" );
+			// SAY WHICH of the two reasons it is. "No token stored" covered both
+			// "never signed in" and "signed in, but the switch is off", and those
+			// need opposite actions from the user.
+			SharedPreferences p = prefs();
+			String token = p.getString( KEY_TOKEN, null );
+
+			if( token == null || token.length() == 0 )
+				note( "start ignored: not signed in to Steam (no refresh token stored)" );
+			else
+				note( "start ignored: sign-in is fine, but 'Show what I'm playing' is OFF" );
+
 			return;
 		}
 
@@ -298,14 +324,14 @@ public final class SteamPresence
 							if( playing )
 							{
 								cm.setGamePlayed( appid, extra, ip, port );
-								Log.i( TAG, "status set: appid " + appid
+								note( "status set: appid " + appid
 									+ ( extra != null ? " \"" + extra + "\"" : "" )
 									+ ( ip != 0 ? " @ " + port : "" ));
 							}
 							else
 							{
 								cm.clearGamePlayed();
-								Log.i( TAG, "status cleared" );
+								note( "status cleared" );
 							}
 
 							sentPlaying = playing;
@@ -321,7 +347,7 @@ public final class SteamPresence
 						// which doubles as the loop's pacing.
 						if( !cm.pump( 1000 ))
 						{
-							Log.w( TAG, "CM session ended" );
+							note( "CM session ended" );
 							cm.close();
 							cm = null;
 
@@ -343,7 +369,7 @@ public final class SteamPresence
 					// Steam refused the credential itself. Retrying cannot fix
 					// that, and hammering the auth endpoint is how accounts get
 					// rate-limited, so give up until new credentials arrive.
-					Log.e( TAG, "logon refused, giving up: " + e.getMessage() );
+					note( "logon refused, giving up: " + e.getMessage() );
 
 					if( cm != null )
 					{
@@ -361,7 +387,7 @@ public final class SteamPresence
 				}
 				catch( IOException e )
 				{
-					Log.w( TAG, "network error: " + e.getMessage() );
+					note( "network error: " + e.getMessage() );
 
 					if( cm != null )
 					{
@@ -410,7 +436,7 @@ public final class SteamPresence
 				worker = null;
 			}
 
-			Log.i( TAG, "worker stopped" );
+			note( "worker stopped" );
 		}
 	}
 
@@ -440,11 +466,18 @@ public final class SteamPresence
 		{
 			public void log( String message )
 			{
-				Log.i( TAG, message );
+				note( message );
 			}
 		});
 
 		cm.logon( account, token, steamid );
+
+		// ONLINE FIRST, then the game. A session whose persona state is still
+		// Offline shows nothing to anyone -- Steam accepts the games_played
+		// message and no friend ever sees it. That was the "в стиме был по-прежнему
+		// 3 часа 46 минут назад": logged on, invisible.
+		cm.announceOnline();
+
 		return cm;
 	}
 
