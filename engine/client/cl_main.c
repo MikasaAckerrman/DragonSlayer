@@ -1093,6 +1093,7 @@ static void CL_WriteSteamTicket( sizebuf_t *send )
 	string key;
 	netadr_t adr = { .type = NA_LOOPBACK, }; // goldsrc servers don't get unique key as xashid isn't sent raw to them
 	uint32_t crc;
+	uint32_t spoof_id;
 	char buf[768] = { 0 }; // setti and steamemu return 768
 	int i = sizeof( buf );
 
@@ -1142,25 +1143,60 @@ static void CL_WriteSteamTicket( sizebuf_t *send )
 	CRC32_Init( &crc );
 	CRC32_ProcessBuffer( &crc, key, Q_strlen( key ));
 	crc = CRC32_Final( crc );
-	i = GenerateRevEmu2013( buf, key, crc );
 
-	// Slayer3D: advertise the real logged-in SteamID so other players' clients
-	// (GoldClient / GSClient / Steam CS1.6) fetch and show YOUR real avatar
-	// instead of the fake RevEmu-generated ID. The SteamID lives in the ticket
-	// as two little-endian dwords: [1] = account id (low), [5] = 0x01100001 (high).
-	// Gated behind a cvar (default off) because a server that validates the
-	// ticket signature against its embedded SteamID would reject the altered
-	// ticket — set slayer_steam_advertise_id 0 to fall back to the stock ticket.
+	// Slayer3D: ASK THE GENERATOR FOR OUR ACCOUNT ID, do not patch the ticket
+	// afterwards.
+	//
+	// The previous version overwrote dwords [1] and [5] once the ticket was built,
+	// and that cannot work: RevEmu derives the account id from a hwid string and
+	// then spreads it across the ticket --
+	//
+	//     [1] @+4   revHash            (patched)
+	//     [4] @+16  revHash << 1       (NOT patched)
+	//     [8] @+32  revHash * 2 >> 3   (NOT patched)
+	//     @+40      AES( hwid ), @+104 SHA( hwid )
+	//
+	// Patching two of those leaves a ticket that contradicts itself, and a server
+	// reading any other copy sees the machine CRC. That is exactly what the device
+	// log showed: the server announced 746006789, which IS this machine's CRC.
+	//
+	// The generator already does the right thing if asked properly: RevSpoofer
+	// searches for a hwid whose hash equals the id we want, so every derived copy
+	// agrees. Measured cost of that search: under 0.1s worst case in the harness.
+	// [5] needs no patching at all -- the generator writes 0x01100001 there, which
+	// is already the correct high dword of a public-universe SteamID.
+	spoof_id = crc;
+
 	if( slayer_steam_advertise_id.value != 0.0f )
 	{
 		uint64_t myid = Slayer_SteamLogin_GetLocalID();
 
 		if( myid != 0 )
-		{
-			((uint32_t*)buf)[1] = LittleLong( (uint32_t)( myid & 0xFFFFFFFFu ));
-			((uint32_t*)buf)[5] = LittleLong( (uint32_t)( myid >> 32 ));
-		}
+			spoof_id = (uint32_t)( myid & 0xFFFFFFFFu );
 	}
+
+	i = GenerateRevEmu2013( buf, key, spoof_id );
+
+	// The hwid search does not converge for every target (measured: it fails for a
+	// minority of values), and it returns 0 rather than a broken ticket. Falling
+	// back to the machine CRC means the wrong id is advertised, which is what we
+	// had before -- still better than failing to connect.
+	if( i <= 0 && spoof_id != crc )
+	{
+		Con_Printf( S_WARN "Slayer3D: could not build a ticket for our SteamID, using the machine one\n" );
+		memset( buf, 0, sizeof( buf ));
+		i = GenerateRevEmu2013( buf, key, crc );
+		spoof_id = crc;
+	}
+
+	if( i <= 0 )
+	{
+		Con_Printf( S_ERROR "Slayer3D: ticket generator failed\n" );
+		return;
+	}
+
+	Con_Printf( "Slayer3D: emulated ticket (%d bytes), advertising account id %u\n",
+		i, (uint32_t)spoof_id );
 
 	MSG_WriteBytes( send, buf, i );
 

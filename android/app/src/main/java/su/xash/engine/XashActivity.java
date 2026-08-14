@@ -302,155 +302,21 @@ public class XashActivity extends SDLActivity {
 		}
 	}
 
-	public static int downloadAvatar( String steamid64, String savePath )
+	/**
+	 * Download, decode and cache one avatar image.
+	 *
+	 * Split out because there are now two ways to learn the URL -- the Steam
+	 * session (fast, unmetered) and the profile page (rate-limited) -- and both end
+	 * in exactly the same work. Duplicating it would mean the sidecar caching, the
+	 * PNG re-encode and the throttle codes drifting apart between the two paths.
+	 */
+	private static int fetchAvatarImage( String steamid64, String avatarUrl,
+		String savePath, int MAX_IMAGE_SIZE )
 	{
-		final int MAX_XML_SIZE = 262144;   // 256 KB limit for profile XML
-		final int MAX_IMAGE_SIZE = 524288; // 512 KB limit for avatar image
-
-		// Hoisted so catch blocks can clean up a partial/corrupt file if
-		// fos.flush()/fos.close() throws after a successful bitmap.compress.
 		File outFile = null;
 
 		try
 		{
-			SlayerLog.deriveFrom( savePath );
-			SlayerLog.log( "downloadAvatar", steamid64 + " -> " + savePath );
-
-			// Phase 1 - Fetch Steam profile XML
-			URL profileUrl = new URL( "https://steamcommunity.com/profiles/" + steamid64 + "/?xml=1" );
-			HttpURLConnection conn = (HttpURLConnection) profileUrl.openConnection();
-			conn.setConnectTimeout( 15000 );
-			conn.setReadTimeout( 15000 );
-			conn.setRequestProperty( "User-Agent", "Mozilla/5.0" );
-			conn.setInstanceFollowRedirects( true );
-
-			// A missing profile answers 404. On a Steam-emulator server
-			// (jailbreak, RevEmu and the like) the players' SteamIDs are made
-			// up, so their profiles do not exist and never will. Reading the
-			// body would throw FileNotFoundException, indistinguishable from a
-			// transient network error, which armed a 60s retry that ran forever.
-			// Check the status first and report GONE so the engine stops asking.
-			// THE STATUS CODE IS ALWAYS LOGGED, even on success.
-			//
-			// This is the fix for a diagnosis that went wrong twice: the old code
-			// tested for 404/410 and let every other failure fall through to
-			// getInputStream(), which on Android throws FileNotFoundException for
-			// ANY status >= 400 -- OkHttp sits underneath HttpURLConnection and
-			// does not restrict that exception to 404 the way desktop JDK does.
-			// So a 403 or a 429 arrived as "FAIL network: FileNotFoundException"
-			// and got read as "this profile does not exist". The number that would
-			// have settled it was in hand the whole time and never written down.
-			int httpCode = conn.getResponseCode();
-
-			// 404/410: no such profile. On an emulator server the ids are made up,
-			// so this is permanent -- GONE stops the 60 s retry that otherwise ran
-			// for the rest of the session.
-			if( httpCode == 404 || httpCode == 410 )
-			{
-				conn.disconnect();
-				SlayerLog.log( "downloadAvatar", steamid64 + " GONE, no Steam profile (HTTP " + httpCode + ")" );
-				return 5;   // AVD_RESULT_GONE: do not retry this session
-			}
-
-			// Anything else >= 400 is NOT about this profile: rate limiting,
-			// blocking, an outage. Retryable, and the body plus a couple of headers
-			// go into the log because they are what names the cause.
-			if( httpCode >= 400 )
-			{
-				String detail = readErrorBody( conn );
-				String retryAfter = conn.getHeaderField( "Retry-After" );
-				String server = conn.getHeaderField( "Server" );
-
-				conn.disconnect();
-				SlayerLog.log( "downloadAvatar", steamid64 + " FAIL HTTP " + httpCode
-					+ ( retryAfter != null ? " Retry-After=" + retryAfter : "" )
-					+ ( server != null ? " server=" + server : "" )
-					+ ( detail.length() > 0 ? " body=" + detail : "" ));
-				// 429/503 is a statement about US, not about this profile: we asked too
-				// often. The device log is unambiguous -- every id got 429 from nginx,
-				// including ids whose profiles load fine in a browser. Backing off this
-				// one slot is not enough, because the limit counts the CLIENT, so this
-				// returns a distinct code and the engine stands every slot down.
-				if( httpCode == 429 || httpCode == 503 )
-					return 6;   // AVD_RESULT_THROTTLED: hold ALL slots back
-
-				return 1;   // AVD_RESULT_FAIL: transient, worth retrying
-			}
-
-			if( httpCode != 200 )
-				SlayerLog.log( "downloadAvatar", steamid64 + " HTTP " + httpCode + " (unusual, continuing)" );
-
-			String xml;
-			InputStream is = null;
-			try
-			{
-				is = conn.getInputStream();
-				ByteArrayOutputStream baos = new ByteArrayOutputStream();
-				byte[] buf = new byte[4096];
-				int n;
-				int totalRead = 0;
-				while( ( n = is.read( buf ) ) != -1 )
-				{
-					totalRead += n;
-					if( totalRead > MAX_XML_SIZE )
-					{
-						SlayerLog.log( "downloadAvatar", steamid64 + " FAIL xml too large (>" + MAX_XML_SIZE + " bytes)" );
-						return 1;
-					}
-					baos.write( buf, 0, n );
-				}
-				xml = baos.toString( "UTF-8" );
-			}
-			finally
-			{
-				if( is != null )
-					is.close();
-				conn.disconnect();
-			}
-
-			// Check for private profile
-			if( xml.indexOf( "<privacyState>private</privacyState>" ) != -1 )
-			{
-				SlayerLog.log( "downloadAvatar", steamid64 + " FAIL profile is private" );
-				return 2;
-			}
-
-			// A profile that was never SET UP. Steam answers HTTP 200 with a short
-			// XML carrying only steamID64 and a privacyMessage -- no avatar tags at
-			// all, and no privacyState either. MEASURED against the reporting
-			// device's own session: of the 8 players in the last map, 4 answered
-			// exactly this way.
-			//
-			// WHY IT NEEDS ITS OWN ANSWER: falling through to the "no avatar URL"
-			// return below reports an ordinary failure, which arms the 60-second
-			// retry -- and this player will never grow an avatar, so the retry runs
-			// for the rest of the session. That is a large part of the download
-			// storm in the log (63 requests, 30 workers, 30 failures in one map).
-			// GONE means "not again this session", which here is simply true.
-			if( xml.indexOf( "<privacyMessage>" ) != -1
-			 && xml.indexOf( "<avatarFull>" ) == -1
-			 && xml.indexOf( "<avatarMedium>" ) == -1 )
-			{
-				SlayerLog.log( "downloadAvatar",
-					steamid64 + " GONE, profile never set up (no avatar in XML, "
-					+ xml.length() + " chars)" );
-				return 5;   // AVD_RESULT_GONE
-			}
-
-			// Phase 2 - Parse XML for avatar URL.
-			// Prefer avatarFull (184x184): the scoreboard now draws icons at
-			// roughly three glyph heights, and avatarMedium is only 64x64, so it
-			// was being upscaled and looked soft.
-			String avatarUrl = extractTagContent( xml, "avatarFull" );
-			if( avatarUrl == null )
-				avatarUrl = extractTagContent( xml, "avatarMedium" );
-
-			if( avatarUrl == null || avatarUrl.isEmpty() )
-			{
-				SlayerLog.log( "downloadAvatar", steamid64 + " FAIL no avatar URL in XML (" + xml.length() + " chars)" );
-				return 2;
-			}
-
 			// Steam avatar filenames are a content hash, so the URL changes the
 			// moment the user changes their picture — and only then. Compare it
 			// against the one saved next to the cached PNG: unchanged means we
@@ -603,15 +469,245 @@ public class XashActivity extends SDLActivity {
 		catch( IOException e )
 		{
 			SlayerLog.log( "downloadAvatar", steamid64 + " FAIL network: " + e );
+
 			if( outFile != null && outFile.exists() )
 				outFile.delete();
+
+			return 1;
+		}
+		catch( Exception e )
+		{
+			SlayerLog.log( "downloadAvatar", steamid64 + " FAIL image: " + e );
+
+			if( outFile != null && outFile.exists() )
+				outFile.delete();
+
+			return 3;
+		}
+	}
+
+	/**
+	 * Ask the open Steam session for this account's avatar hash.
+	 *
+	 * THE PROFILE PAGE IS THE WRONG DOOR. Scraping
+	 * steamcommunity.com/profiles/<id>/?xml=1 took HTTP 429 on 24 of 24 requests on
+	 * the device, including ids whose pages open fine in a browser: it is a
+	 * per-client rate limit, and a scoreboard asks about everyone at once. The CM
+	 * session is already open and already authenticated, and it answers with
+	 * avatar_hash directly -- no page, no Web API key, no limit.
+	 *
+	 * Returns null when there is no session, when Steam does not answer, or when
+	 * the account has no avatar set; the caller then falls back to the old path
+	 * rather than showing nothing.
+	 */
+	private static String avatarUrlFromSession( String steamid64 )
+	{
+		try
+		{
+			su.xash.engine.steam.SteamPresence p = su.xash.engine.steam.SteamPresence.peek();
+
+			if( p == null )
+				return null;
+
+			su.xash.engine.steam.SteamCM cm = p.openSession();
+
+			if( cm == null )
+				return null;
+
+			try
+			{
+				java.util.Map<Long,String> hashes = cm.requestAvatarHashes(
+					new long[] { Long.parseLong( steamid64 ) }, 8000 );
+				String hash = hashes.get( Long.valueOf( Long.parseLong( steamid64 )));
+
+				if( hash == null )
+					return null;
+
+				// The CDN spells it out of the hash. avatars.steamstatic.com is the
+				// canonical host -- measured: it serves hashes that the per-region
+				// hosts in profile XML (akamai/fastly) also serve.
+				return "https://avatars.steamstatic.com/" + hash + "_full.jpg";
+			}
+			finally
+			{
+				cm.close();
+			}
+		}
+		catch( Throwable e )
+		{
+			// Never let this break the download: it is the fast path, not the only
+			// one. Anything at all wrong here means using the profile page instead.
+			SlayerLog.log( "downloadAvatar", steamid64 + " session lookup failed: " + e );
+			return null;
+		}
+	}
+
+	public static int downloadAvatar( String steamid64, String savePath )
+	{
+		final int MAX_XML_SIZE = 262144;   // 256 KB limit for profile XML
+		final int MAX_IMAGE_SIZE = 524288; // 512 KB limit for avatar image
+
+		try
+		{
+			SlayerLog.deriveFrom( savePath );
+			SlayerLog.log( "downloadAvatar", steamid64 + " -> " + savePath );
+
+			// THE FAST PATH: ask Steam over the session we already hold. This skips
+			// the rate-limited profile page entirely; only if it comes back empty do
+			// we go scraping.
+			String sessionUrl = avatarUrlFromSession( steamid64 );
+
+			if( sessionUrl != null )
+			{
+				SlayerLog.log( "downloadAvatar", steamid64 + " avatar via Steam session" );
+				return fetchAvatarImage( steamid64, sessionUrl, savePath, MAX_IMAGE_SIZE );
+			}
+
+			// Phase 1 - Fetch Steam profile XML
+			URL profileUrl = new URL( "https://steamcommunity.com/profiles/" + steamid64 + "/?xml=1" );
+			HttpURLConnection conn = (HttpURLConnection) profileUrl.openConnection();
+			conn.setConnectTimeout( 15000 );
+			conn.setReadTimeout( 15000 );
+			conn.setRequestProperty( "User-Agent", "Mozilla/5.0" );
+			conn.setInstanceFollowRedirects( true );
+
+			// A missing profile answers 404. On a Steam-emulator server
+			// (jailbreak, RevEmu and the like) the players' SteamIDs are made
+			// up, so their profiles do not exist and never will. Reading the
+			// body would throw FileNotFoundException, indistinguishable from a
+			// transient network error, which armed a 60s retry that ran forever.
+			// Check the status first and report GONE so the engine stops asking.
+			// THE STATUS CODE IS ALWAYS LOGGED, even on success.
+			//
+			// This is the fix for a diagnosis that went wrong twice: the old code
+			// tested for 404/410 and let every other failure fall through to
+			// getInputStream(), which on Android throws FileNotFoundException for
+			// ANY status >= 400 -- OkHttp sits underneath HttpURLConnection and
+			// does not restrict that exception to 404 the way desktop JDK does.
+			// So a 403 or a 429 arrived as "FAIL network: FileNotFoundException"
+			// and got read as "this profile does not exist". The number that would
+			// have settled it was in hand the whole time and never written down.
+			int httpCode = conn.getResponseCode();
+
+			// 404/410: no such profile. On an emulator server the ids are made up,
+			// so this is permanent -- GONE stops the 60 s retry that otherwise ran
+			// for the rest of the session.
+			if( httpCode == 404 || httpCode == 410 )
+			{
+				conn.disconnect();
+				SlayerLog.log( "downloadAvatar", steamid64 + " GONE, no Steam profile (HTTP " + httpCode + ")" );
+				return 5;   // AVD_RESULT_GONE: do not retry this session
+			}
+
+			// Anything else >= 400 is NOT about this profile: rate limiting,
+			// blocking, an outage. Retryable, and the body plus a couple of headers
+			// go into the log because they are what names the cause.
+			if( httpCode >= 400 )
+			{
+				String detail = readErrorBody( conn );
+				String retryAfter = conn.getHeaderField( "Retry-After" );
+				String server = conn.getHeaderField( "Server" );
+
+				conn.disconnect();
+				SlayerLog.log( "downloadAvatar", steamid64 + " FAIL HTTP " + httpCode
+					+ ( retryAfter != null ? " Retry-After=" + retryAfter : "" )
+					+ ( server != null ? " server=" + server : "" )
+					+ ( detail.length() > 0 ? " body=" + detail : "" ));
+				// 429/503 is a statement about US, not about this profile: we asked too
+				// often. The device log is unambiguous -- every id got 429 from nginx,
+				// including ids whose profiles load fine in a browser. Backing off this
+				// one slot is not enough, because the limit counts the CLIENT, so this
+				// returns a distinct code and the engine stands every slot down.
+				if( httpCode == 429 || httpCode == 503 )
+					return 6;   // AVD_RESULT_THROTTLED: hold ALL slots back
+
+				return 1;   // AVD_RESULT_FAIL: transient, worth retrying
+			}
+
+			if( httpCode != 200 )
+				SlayerLog.log( "downloadAvatar", steamid64 + " HTTP " + httpCode + " (unusual, continuing)" );
+
+			String xml;
+			InputStream is = null;
+			try
+			{
+				is = conn.getInputStream();
+				ByteArrayOutputStream baos = new ByteArrayOutputStream();
+				byte[] buf = new byte[4096];
+				int n;
+				int totalRead = 0;
+				while( ( n = is.read( buf ) ) != -1 )
+				{
+					totalRead += n;
+					if( totalRead > MAX_XML_SIZE )
+					{
+						SlayerLog.log( "downloadAvatar", steamid64 + " FAIL xml too large (>" + MAX_XML_SIZE + " bytes)" );
+						return 1;
+					}
+					baos.write( buf, 0, n );
+				}
+				xml = baos.toString( "UTF-8" );
+			}
+			finally
+			{
+				if( is != null )
+					is.close();
+				conn.disconnect();
+			}
+
+			// Check for private profile
+			if( xml.indexOf( "<privacyState>private</privacyState>" ) != -1 )
+			{
+				SlayerLog.log( "downloadAvatar", steamid64 + " FAIL profile is private" );
+				return 2;
+			}
+
+			// A profile that was never SET UP. Steam answers HTTP 200 with a short
+			// XML carrying only steamID64 and a privacyMessage -- no avatar tags at
+			// all, and no privacyState either. MEASURED against the reporting
+			// device's own session: of the 8 players in the last map, 4 answered
+			// exactly this way.
+			//
+			// WHY IT NEEDS ITS OWN ANSWER: falling through to the "no avatar URL"
+			// return below reports an ordinary failure, which arms the 60-second
+			// retry -- and this player will never grow an avatar, so the retry runs
+			// for the rest of the session. That is a large part of the download
+			// storm in the log (63 requests, 30 workers, 30 failures in one map).
+			// GONE means "not again this session", which here is simply true.
+			if( xml.indexOf( "<privacyMessage>" ) != -1
+			 && xml.indexOf( "<avatarFull>" ) == -1
+			 && xml.indexOf( "<avatarMedium>" ) == -1 )
+			{
+				SlayerLog.log( "downloadAvatar",
+					steamid64 + " GONE, profile never set up (no avatar in XML, "
+					+ xml.length() + " chars)" );
+				return 5;   // AVD_RESULT_GONE
+			}
+
+			// Phase 2 - Parse XML for avatar URL.
+			// Prefer avatarFull (184x184): the scoreboard now draws icons at
+			// roughly three glyph heights, and avatarMedium is only 64x64, so it
+			// was being upscaled and looked soft.
+			String avatarUrl = extractTagContent( xml, "avatarFull" );
+			if( avatarUrl == null )
+				avatarUrl = extractTagContent( xml, "avatarMedium" );
+
+			if( avatarUrl == null || avatarUrl.isEmpty() )
+			{
+				SlayerLog.log( "downloadAvatar", steamid64 + " FAIL no avatar URL in XML (" + xml.length() + " chars)" );
+				return 2;
+			}
+
+			return fetchAvatarImage( steamid64, avatarUrl, savePath, MAX_IMAGE_SIZE );
+		}
+		catch( IOException e )
+		{
+			SlayerLog.log( "downloadAvatar", steamid64 + " FAIL network: " + e );
 			return 1;
 		}
 		catch( Exception e )
 		{
 			SlayerLog.log( "downloadAvatar", steamid64 + " FAIL parse: " + e );
-			if( outFile != null && outFile.exists() )
-				outFile.delete();
 			return 3;
 		}
 	}

@@ -81,6 +81,21 @@ public final class SteamCM
 	private static final int EMSG_CLIENT_AUTH_LIST = 5432;
 	private static final int EMSG_CLIENT_AUTH_LIST_ACK = 5575;
 
+	// ClientRequestFriendData / ClientPersonaState. THE AVATAR PATH THAT DOES NOT
+	// GO THROUGH A WEB PAGE.
+	//
+	// Avatars were being scraped off steamcommunity.com profile pages, and Steam
+	// answered 429 to every one of them (measured: 24 of 24, including ids whose
+	// pages open fine in a browser). But the CM session already open here can be
+	// asked directly, and CMsgClientPersonaState carries avatar_hash -- 20 raw
+	// bytes that name the image on the CDN. No web page, no API key, no rate limit.
+	private static final int EMSG_CLIENT_REQUEST_FRIEND_DATA = 815;
+	private static final int EMSG_CLIENT_PERSONA_STATE = 766;
+
+	// EClientPersonaStateFlag: Status | PlayerName. Nothing else is needed for an
+	// avatar, and asking for less means Steam sends less.
+	private static final int PERSONA_FLAGS_BASIC = 1 | 2;
+
 	// EPersonaState
 	private static final int PERSONA_ONLINE = 1;
 
@@ -987,6 +1002,166 @@ public final class SteamCM
 		buf[off + 1] = (byte)(( v >>> 8 ) & 0xFF );
 		buf[off + 2] = (byte)(( v >>> 16 ) & 0xFF );
 		buf[off + 3] = (byte)(( v >>> 24 ) & 0xFF );
+	}
+
+	/**
+	 * Ask Steam for the avatar hashes of a batch of accounts.
+	 *
+	 * WHY THIS EXISTS AT ALL. Avatars were fetched by scraping
+	 * steamcommunity.com/profiles/<id>/?xml=1, and the device log is unambiguous
+	 * about how that ended: HTTP 429 on 24 of 24 requests, including ids whose
+	 * pages load fine in a browser. That endpoint is rate-limited per client, and
+	 * a scoreboard asks about everyone at once, so it is the wrong door.
+	 *
+	 * This is the right one. The session is already open and already authenticated,
+	 * CMsgClientPersonaState carries avatar_hash for each account, and 20 raw bytes
+	 * of hash are all the CDN needs:
+	 *
+	 *     https://avatars.steamstatic.com/<hex>_full.jpg
+	 *
+	 * No web page, no Web API key (the configured one is 64 chars where Steam
+	 * issues 32, so that path was dead too), and no per-page limit.
+	 *
+	 * Returns a map of steamid64 -> 40-char lowercase hex hash, containing only the
+	 * accounts Steam actually answered for. An account with no avatar set yields an
+	 * all-zero hash, which is reported as absent rather than as a broken URL.
+	 *
+	 * Blocking, like the ticket request, and called from the presence worker.
+	 */
+	public java.util.Map<Long,String> requestAvatarHashes( long[] steamIds, int timeoutMs )
+		throws IOException
+	{
+		java.util.HashMap<Long,String> out = new java.util.HashMap<Long,String>();
+
+		if( steamIds == null || steamIds.length == 0 )
+			return out;
+
+		SteamWire.Writer w = new SteamWire.Writer()
+			.uint32( 1, PERSONA_FLAGS_BASIC );
+
+		// friends is a repeated fixed64. Not packed: this message predates packed
+		// repeated fields being the default, and Steam's parser expects one tagged
+		// entry per id.
+		for( int i = 0; i < steamIds.length; i++ )
+			w.fixed64( 2, steamIds[i] );
+
+		send( EMSG_CLIENT_REQUEST_FRIEND_DATA, w.toBytes(), nextJobId() );
+		log( "cm: requested persona data for " + steamIds.length + " account(s)" );
+
+		// Steam answers in as many ClientPersonaState messages as it feels like, so
+		// this waits for the whole batch rather than for one reply -- but returns
+		// early once every id has been seen.
+		java.util.HashSet<Long> pending = new java.util.HashSet<Long>();
+
+		for( int i = 0; i < steamIds.length; i++ )
+			pending.add( Long.valueOf( steamIds[i] ));
+
+		long deadline = System.currentTimeMillis() + ( timeoutMs > 0 ? timeoutMs : 10000 );
+
+		while( System.currentTimeMillis() < deadline && !pending.isEmpty() )
+		{
+			Message m;
+
+			ws.setReadTimeout( 1000 );
+
+			try
+			{
+				m = nextMessage();
+			}
+			catch( InterruptedIOException timeout )
+			{
+				heartbeatIfDue();
+				continue;
+			}
+			finally
+			{
+				ws.setReadTimeout( READ_TIMEOUT_MS );
+			}
+
+			if( m == null )
+			{
+				log( "cm: connection closed while waiting for persona data" );
+				break;
+			}
+
+			// Same rule as everywhere else in this class: keep servicing the
+			// unsolicited traffic, or a token pushed during this window is lost.
+			if( m.emsg == EMSG_CLIENT_GAME_CONNECT_TOKENS )
+			{
+				storeConnectTokens( m.body );
+				continue;
+			}
+
+			if( m.emsg == EMSG_CLIENT_LOGGED_OFF )
+			{
+				log( "cm: logged off while waiting for persona data" );
+				break;
+			}
+
+			if( m.emsg != EMSG_CLIENT_PERSONA_STATE )
+				continue;
+
+			SteamWire.Reader r = new SteamWire.Reader( m.body );
+
+			while( r.next() )
+			{
+				if( r.field() != 2 )        // friends
+				{
+					r.skip();
+					continue;
+				}
+
+				SteamWire.Reader f = r.message();
+				long id = 0;
+				String hash = null;
+
+				while( f.next() )
+				{
+					if( f.field() == 1 )            // friendid, fixed64
+						id = f.fixed64();
+					else if( f.field() == 31 )      // avatar_hash, bytes
+						hash = toHex( f.bytes() );
+					else
+						f.skip();
+				}
+
+				if( id == 0 )
+					continue;
+
+				pending.remove( Long.valueOf( id ));
+
+				// An account with no avatar set reports twenty zero bytes. Treating
+				// that as a hash would build a URL that 404s on every retry.
+				if( hash != null && hash.length() == 40
+				 && !hash.equals( "0000000000000000000000000000000000000000" ))
+					out.put( Long.valueOf( id ), hash );
+			}
+		}
+
+		log( "cm: persona data for " + out.size() + " of " + steamIds.length
+			+ " account(s)" + ( pending.isEmpty() ? "" : ", " + pending.size() + " unanswered" ));
+		return out;
+	}
+
+	/** Lowercase hex, as the avatar CDN spells its paths. */
+	private static String toHex( byte[] b )
+	{
+		if( b == null )
+			return null;
+
+		StringBuilder sb = new StringBuilder( b.length * 2 );
+
+		for( int i = 0; i < b.length; i++ )
+		{
+			int v = b[i] & 0xFF;
+
+			if( v < 16 )
+				sb.append( '0' );
+
+			sb.append( Integer.toHexString( v ));
+		}
+
+		return sb.toString();
 	}
 
 	/** CRC32 of a buffer, as Steam computes it for a ticket. */
