@@ -260,6 +260,48 @@ public class XashActivity extends SDLActivity {
 	 * @param savePath  Absolute path to save the avatar image
 	 * @return 0=success, 1=network error, 2=profile private/not found, 3=parse error
 	 */
+	/**
+	 * First line of an error response body, for the log.
+	 *
+	 * getInputStream() throws once the status is >= 400; getErrorStream() is the
+	 * only way to see what the server actually said. Truncated hard, because
+	 * Steam's error page is ~23 KB of HTML and the point is a readable log line.
+	 */
+	private static String readErrorBody( HttpURLConnection conn )
+	{
+		InputStream es = null;
+
+		try
+		{
+			es = conn.getErrorStream();
+
+			if( es == null )
+				return "";
+
+			byte[] buf = new byte[512];
+			int n = es.read( buf );
+
+			if( n <= 0 )
+				return "";
+
+			// Collapse whitespace so a multi-line HTML page stays one log line.
+			String body = new String( buf, 0, n, "UTF-8" ).replaceAll( "\\s+", " " ).trim();
+
+			if( body.length() > 180 )
+				body = body.substring( 0, 180 ) + "...";
+
+			return body;
+		}
+		catch( Throwable ignored )
+		{
+			return "";
+		}
+		finally
+		{
+			try { if( es != null ) es.close(); } catch( Throwable ignored ) {}
+		}
+	}
+
 	public static int downloadAvatar( String steamid64, String savePath )
 	{
 		final int MAX_XML_SIZE = 262144;   // 256 KB limit for profile XML
@@ -288,13 +330,47 @@ public class XashActivity extends SDLActivity {
 			// body would throw FileNotFoundException, indistinguishable from a
 			// transient network error, which armed a 60s retry that ran forever.
 			// Check the status first and report GONE so the engine stops asking.
+			// THE STATUS CODE IS ALWAYS LOGGED, even on success.
+			//
+			// This is the fix for a diagnosis that went wrong twice: the old code
+			// tested for 404/410 and let every other failure fall through to
+			// getInputStream(), which on Android throws FileNotFoundException for
+			// ANY status >= 400 -- OkHttp sits underneath HttpURLConnection and
+			// does not restrict that exception to 404 the way desktop JDK does.
+			// So a 403 or a 429 arrived as "FAIL network: FileNotFoundException"
+			// and got read as "this profile does not exist". The number that would
+			// have settled it was in hand the whole time and never written down.
 			int httpCode = conn.getResponseCode();
+
+			// 404/410: no such profile. On an emulator server the ids are made up,
+			// so this is permanent -- GONE stops the 60 s retry that otherwise ran
+			// for the rest of the session.
 			if( httpCode == 404 || httpCode == 410 )
 			{
 				conn.disconnect();
 				SlayerLog.log( "downloadAvatar", steamid64 + " GONE, no Steam profile (HTTP " + httpCode + ")" );
 				return 5;   // AVD_RESULT_GONE: do not retry this session
 			}
+
+			// Anything else >= 400 is NOT about this profile: rate limiting,
+			// blocking, an outage. Retryable, and the body plus a couple of headers
+			// go into the log because they are what names the cause.
+			if( httpCode >= 400 )
+			{
+				String detail = readErrorBody( conn );
+				String retryAfter = conn.getHeaderField( "Retry-After" );
+				String server = conn.getHeaderField( "Server" );
+
+				conn.disconnect();
+				SlayerLog.log( "downloadAvatar", steamid64 + " FAIL HTTP " + httpCode
+					+ ( retryAfter != null ? " Retry-After=" + retryAfter : "" )
+					+ ( server != null ? " server=" + server : "" )
+					+ ( detail.length() > 0 ? " body=" + detail : "" ));
+				return 1;   // AVD_RESULT_FAIL: transient, worth retrying
+			}
+
+			if( httpCode != 200 )
+				SlayerLog.log( "downloadAvatar", steamid64 + " HTTP " + httpCode + " (unusual, continuing)" );
 
 			String xml;
 			InputStream is = null;
@@ -409,6 +485,20 @@ public class XashActivity extends SDLActivity {
 			InputStream imgIs = null;
 			try
 			{
+				// Same reasoning as the profile fetch above: log the code, and tell a
+				// throttled CDN apart from a missing image. Different host, so this
+				// can fail while the profile request succeeds.
+				// No disconnect() in this branch: the finally block below owns the
+				// connection, and closing it twice is not behaviour to rely on.
+				int imgCode = imgConn.getResponseCode();
+				if( imgCode != 200 )
+				{
+					String detail = readErrorBody( imgConn );
+					SlayerLog.log( "downloadAvatar", steamid64 + " FAIL image HTTP " + imgCode
+						+ ( detail.length() > 0 ? " body=" + detail : "" ));
+					return 1;
+				}
+
 				imgIs = imgConn.getInputStream();
 				ByteArrayOutputStream imgBaos = new ByteArrayOutputStream();
 				byte[] buf = new byte[4096];

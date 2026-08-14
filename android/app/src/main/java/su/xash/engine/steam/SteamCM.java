@@ -74,6 +74,13 @@ public final class SteamCM
 	// so they are the second half. Nothing requests them; they just arrive.
 	private static final int EMSG_CLIENT_GAME_CONNECT_TOKENS = 779;
 
+	// ClientAuthList / its ack. REGISTERING the ticket with Steam, which is the
+	// step whose absence made the first attempt useless: a server asked to
+	// validate a ticket asks Steam, and Steam only knows about tickets it was
+	// told about. The ack echoes the CRC32 of every ticket Steam accepted.
+	private static final int EMSG_CLIENT_AUTH_LIST = 5432;
+	private static final int EMSG_CLIENT_AUTH_LIST_ACK = 5575;
+
 	// EPersonaState
 	private static final int PERSONA_ONLINE = 1;
 
@@ -105,6 +112,14 @@ public final class SteamCM
 	// Game-connect tokens, as pushed by Steam. Kept newest-last; one is consumed
 	// per server connect and never reused, which is why they arrive in batches.
 	private final List<byte[]> connectTokens = new ArrayList<byte[]>();
+
+	// Sequence for the session part of an auth ticket. Steam wants it to move;
+	// a repeated value looks like a replayed ticket.
+	private int ticketSequence;
+
+	// CRCs Steam confirmed in the last ClientAuthListAck. A ticket whose CRC is
+	// not in here was NOT registered, and a server validating it will be told no.
+	private final List<Long> acceptedTicketCrcs = new ArrayList<Long>();
 
 	public interface Logger
 	{
@@ -738,6 +753,226 @@ public final class SteamCM
 
 		log( "cm: got " + added + " game-connect token(s), pool=" + connectTokens.size()
 			+ " (max_to_keep=" + keep + ")" );
+	}
+
+	/**
+	 * Build and register a full Steam AUTH SESSION ticket for a server connect.
+	 *
+	 * THE MISSING PIECE, and worth spelling out because the first attempt shipped
+	 * the wrong thing entirely. Steam has two tickets:
+	 *
+	 *   * app OWNERSHIP ticket -- "this account owns app N". 178 bytes on the
+	 *     reporting device. That is what the previous build sent, and a GoldSrc
+	 *     server has no idea what to do with it.
+	 *   * auth SESSION ticket -- "this player is connecting right now". It
+	 *     CONTAINS the ownership ticket, prefixed by a game-connect token and a
+	 *     small session block.
+	 *
+	 * Layout, from the protocol:
+	 *
+	 *   [4] token length        [n] game connect token
+	 *   [4] session size = 24
+	 *   [4] always 1            [4] ticket type (2 = auth session)
+	 *   [8] random             [4] timestamp           [4] sequence
+	 *   [4] ownership length   [m] ownership ticket
+	 *
+	 * And then it must be REGISTERED with Steam (ClientAuthList), because a
+	 * server checks a ticket by asking Steam about it. An unregistered ticket is
+	 * a well-formed blob that Steam disowns -- which is indistinguishable, from
+	 * the outside, from the emulated ticket we were sending before.
+	 *
+	 * Returns null when anything is missing; the caller falls back.
+	 */
+	public byte[] buildAuthSessionTicket( int appId, int timeoutMs ) throws IOException
+	{
+		byte[] ownership = requestAppOwnershipTicket( appId, timeoutMs );
+
+		if( ownership == null )
+			return null;
+
+		byte[] token = takeConnectToken();
+
+		if( token == null )
+		{
+			// Steam pushes these after logon; none in the pool means the session
+			// is too young or Steam is withholding them. Not an error, but there
+			// is nothing to build with.
+			log( "cm: no game-connect token available, cannot build a session ticket" );
+			return null;
+		}
+
+		byte[] session = buildSessionBlock( token );
+		byte[] ticket = new byte[session.length + 4 + ownership.length];
+
+		System.arraycopy( session, 0, ticket, 0, session.length );
+		writeLE32( ticket, session.length, ownership.length );
+		System.arraycopy( ownership, 0, ticket, session.length + 4, ownership.length );
+
+		long crc = crc32( session );
+
+		log( "cm: built a session ticket, " + ticket.length + " bytes"
+			+ " (token " + token.length + " + session " + session.length
+			+ " + ownership " + ownership.length + "), crc=" + crc );
+
+		if( !registerTicket( appId, session, crc, timeoutMs ))
+		{
+			log( "cm: Steam did not confirm the ticket; a server would be told it is invalid" );
+			return null;
+		}
+
+		return ticket;
+	}
+
+	/**
+	 * The token + session part, which is what gets CRC'd and registered.
+	 *
+	 * Note the CRC covers THIS, not the combined ticket: Steam is told about the
+	 * session part, and the ownership ticket is appended afterwards for the
+	 * server's benefit. Getting that wrong means a CRC Steam never confirms.
+	 */
+	private byte[] buildSessionBlock( byte[] token )
+	{
+		final int SESSION_SIZE = 24;    // 1 + type + 8 random + timestamp + seq
+		final int TICKET_TYPE_AUTH_SESSION = 2;
+
+		byte[] out = new byte[4 + token.length + 4 + SESSION_SIZE];
+		int p = 0;
+
+		writeLE32( out, p, token.length );
+		p += 4;
+		System.arraycopy( token, 0, out, p, token.length );
+		p += token.length;
+
+		writeLE32( out, p, SESSION_SIZE );
+		p += 4;
+		writeLE32( out, p, 1 );
+		p += 4;
+		writeLE32( out, p, TICKET_TYPE_AUTH_SESSION );
+		p += 4;
+
+		// 8 bytes that only have to be unpredictable.
+		byte[] rnd = new byte[8];
+		new java.security.SecureRandom().nextBytes( rnd );
+		System.arraycopy( rnd, 0, out, p, 8 );
+		p += 8;
+
+		writeLE32( out, p, (int)( System.nanoTime() & 0xFFFFFFFFL ));
+		p += 4;
+		writeLE32( out, p, ++ticketSequence );
+
+		return out;
+	}
+
+	/**
+	 * Tell Steam about the ticket and wait for it to confirm the CRC.
+	 *
+	 * Confirmation is the whole point: without it the ticket is a blob Steam does
+	 * not recognise. The ack lists every accepted CRC, so a match is proof rather
+	 * than an assumption.
+	 */
+	private boolean registerTicket( int appId, byte[] sessionBlock, long crc, int timeoutMs )
+		throws IOException
+	{
+		SteamWire.Writer ticketMsg = new SteamWire.Writer()
+			.uint32( 4, appId )                      // gameid, as a varint field
+			.bytes( 7, sessionBlock )
+			.uint32( 6, (int)crc );
+
+		byte[] body = new SteamWire.Writer()
+			.uint32( 1, connectTokens.size() )       // tokens_left
+			.message( 4, ticketMsg )                 // tickets[0]
+			.uint32( 5, appId )                      // app_ids[0]
+			.uint32( 6, ++ticketSequence )           // message_sequence
+			.toBytes();
+
+		send( EMSG_CLIENT_AUTH_LIST, body );
+		log( "cm: registered the ticket with Steam, waiting for the ack" );
+
+		synchronized( this )
+		{
+			acceptedTicketCrcs.clear();
+		}
+
+		long deadline = System.currentTimeMillis() + ( timeoutMs > 0 ? timeoutMs : 15000 );
+
+		while( System.currentTimeMillis() < deadline )
+		{
+			Message m;
+
+			ws.setReadTimeout( 1000 );
+
+			try
+			{
+				m = nextMessage();
+			}
+			catch( InterruptedIOException timeout )
+			{
+				heartbeatIfDue();
+				continue;
+			}
+			finally
+			{
+				ws.setReadTimeout( READ_TIMEOUT_MS );
+			}
+
+			if( m == null )
+				return false;
+
+			if( m.emsg == EMSG_CLIENT_GAME_CONNECT_TOKENS )
+			{
+				storeConnectTokens( m.body );
+				continue;
+			}
+
+			if( m.emsg == EMSG_CLIENT_LOGGED_OFF )
+				return false;
+
+			if( m.emsg != EMSG_CLIENT_AUTH_LIST_ACK )
+				continue;
+
+			SteamWire.Reader r = new SteamWire.Reader( m.body );
+			boolean found = false;
+
+			while( r.next() )
+			{
+				if( r.field() == 1 )
+				{
+					long ack = r.varint() & 0xFFFFFFFFL;
+
+					synchronized( this )
+					{
+						acceptedTicketCrcs.add( Long.valueOf( ack ));
+					}
+
+					if( ack == crc )
+						found = true;
+				}
+				else r.skip();
+			}
+
+			log( "cm: auth list ack, our crc " + ( found ? "CONFIRMED" : "absent" ));
+			return found;
+		}
+
+		log( "cm: no auth list ack within the timeout" );
+		return false;
+	}
+
+	private static void writeLE32( byte[] buf, int off, int v )
+	{
+		buf[off] = (byte)( v & 0xFF );
+		buf[off + 1] = (byte)(( v >>> 8 ) & 0xFF );
+		buf[off + 2] = (byte)(( v >>> 16 ) & 0xFF );
+		buf[off + 3] = (byte)(( v >>> 24 ) & 0xFF );
+	}
+
+	/** CRC32 of a buffer, as Steam computes it for a ticket. */
+	private static long crc32( byte[] data )
+	{
+		java.util.zip.CRC32 c = new java.util.zip.CRC32();
+
+		c.update( data, 0, data.length );
+		return c.getValue();
 	}
 
 	/**

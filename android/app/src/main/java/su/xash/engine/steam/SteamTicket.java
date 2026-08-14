@@ -95,10 +95,21 @@ public final class SteamTicket
 			if( cm == null )
 				return null;
 
-			byte[] ticket = cm.requestAppOwnershipTicket( APPID_CS16, timeoutMs );
+			// A FULL SESSION TICKET, not the ownership ticket alone.
+			//
+			// The first version sent just the ownership ticket, and the device
+			// measurement was unambiguous: the server announced the same made-up
+			// SteamID as before, so it had made no sense of what we sent. A GoldSrc
+			// server wants the auth SESSION ticket -- ownership ticket plus a
+			// game-connect token plus a session block -- and it wants one Steam has
+			// been told about, because the server validates by asking Steam.
+			byte[] ticket = cm.buildAuthSessionTicket( APPID_CS16, timeoutMs );
 
 			if( ticket == null )
 				return null;
+
+			su.xash.engine.SlayerLog.log( "ticket",
+				"session ticket ready, " + ticket.length + " bytes, SteamID " + cm.getSteamId() );
 
 			return new Result( ticket, cm.getSteamId() );
 		}
