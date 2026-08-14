@@ -1206,6 +1206,45 @@ static void CL_WriteSteamTicket( sizebuf_t *send )
 			spoof_id = (uint32_t)( myid & 0xFFFFFFFFu );
 	}
 
+	// FORMAT CHOICE, NOT JUST CONTENT: revemu CANNOT carry an odd account id.
+	//
+	// Every revemu-family generator writes the id as
+	//
+	//     [4] @+16 = hash << 1        (the low dword of the SteamID)
+	//
+	// which is ALWAYS EVEN. A server reconstructing accountID from that dword can
+	// therefore never see an odd one -- and an odd account id is exactly what
+	// STEAM_0:1:z means, i.e. half of all Steam accounts, including ours
+	// (1269056997). Asking RevSpoofer for our id does not help: it gets shifted
+	// left on the way in, so the harness measured 1269056997 going in and
+	// 2538113994 coming out. That is why the announced id was never ours no matter
+	// what we did to the content -- the field cannot hold the value.
+	//
+	// steamemu keeps the whole account id in one dword at +84, with a -1 marker at
+	// +80 that tells dproto/reunion to trust it, so nothing is shifted and an odd
+	// id survives. Verified against the real generators in
+	// tests/ticket_format_test.c: steamemu and avsmp reproduce our SteamID64
+	// exactly, revemu2013 cannot.
+	if( spoof_id != crc )
+	{
+		i = GenerateSteamEmu( buf, (int)spoof_id );
+
+		if( i > 0 )
+		{
+			Con_Printf( "Slayer3D: steamemu ticket (%d bytes), advertising account id %u"
+				" (revemu cannot carry an odd id)\n", i, (uint32_t)spoof_id );
+			MSG_WriteBytes( send, buf, i );
+
+			// cls.steamid is a byte[8], and the rest of the engine reads it as two
+			// little-endian dwords -- same layout the revemu path fills in below.
+			*(uint32_t *)cls.steamid = LittleLong( spoof_id );
+			*(uint32_t *)( cls.steamid + 4 ) = LittleLong( 0x01100001 );
+			return;
+		}
+
+		Con_Printf( S_WARN "Slayer3D: steamemu generator failed, falling back\n" );
+	}
+
 	i = GenerateRevEmu2013( buf, key, spoof_id );
 
 	// The hwid search does not converge for every target (measured: it fails for a
