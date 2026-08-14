@@ -143,6 +143,8 @@
 #   startSteamLogin -> cl_steam_login.c
 #   getSteamId      -> cl_steam_login.c (launcher owns the account)
 #   nativeSteamLoginResult -> native callback, bound by name
+#   steamFetchAuthTicket   -> cl_main.c (real ticket for the connect packet)
+#   steamAuthTicketSteamId -> cl_main.c (the account that ticket proves)
 -keep class su.xash.engine.XashActivity {
     public static *;
 }
@@ -168,6 +170,16 @@
 #     bridge must survive.
 # ---------------------------------------------------------------------------
 -keep class su.xash.engine.SteamAuthActivity { *; }
+
+# SteamTicket is reached from XashActivity.steamFetchAuthTicket, and the engine
+# reads Result.ticket / Result.steamid straight after. Field names are not
+# reflected on, but the nested class and its fields must survive shrinking.
+-keep class su.xash.engine.steam.SteamTicket {
+    public *;
+}
+-keep class su.xash.engine.steam.SteamTicket$Result {
+    public *;
+}
 
 -keep class su.xash.engine.steam.SteamPresence {
     public *;                                   # XashActivity + settings screen

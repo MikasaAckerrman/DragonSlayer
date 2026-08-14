@@ -62,6 +62,18 @@ public final class SteamCM
 	// friends list; see uploadRichPresence().
 	private static final int EMSG_CLIENT_RICH_PRESENCE_UPLOAD = 7501;
 
+	// ClientGetAppOwnershipTicket / its response. This is the first half of
+	// "let servers see my real SteamID": Steam issues a signed blob proving the
+	// logged-in account owns an app, and it does so over THIS session -- no Steam
+	// client and no PC involved, which is the whole reason this is worth trying.
+	private static final int EMSG_CLIENT_GET_APP_OWNERSHIP_TICKET = 857;
+	private static final int EMSG_CLIENT_GET_APP_OWNERSHIP_TICKET_RESPONSE = 858;
+
+	// ClientGameConnectTokens: Steam PUSHES these unsolicited, shortly after a
+	// real logon. A GoldSrc server wants one of them inside the connect ticket,
+	// so they are the second half. Nothing requests them; they just arrive.
+	private static final int EMSG_CLIENT_GAME_CONNECT_TOKENS = 779;
+
 	// EPersonaState
 	private static final int PERSONA_ONLINE = 1;
 
@@ -84,6 +96,15 @@ public final class SteamCM
 	private int sessionId;
 	private int heartbeatSeconds = 9;
 	private long lastHeartbeat;
+
+	// Job sequence for request/response messages. Steam matches a reply to its
+	// request by jobid_source in the header, and a request sent with jobid 0 is
+	// simply dropped -- MEASURED: the CM answered nothing until this was added.
+	private int jobSeq;
+
+	// Game-connect tokens, as pushed by Steam. Kept newest-last; one is consumed
+	// per server connect and never reused, which is why they arrive in batches.
+	private final List<byte[]> connectTokens = new ArrayList<byte[]>();
 
 	public interface Logger
 	{
@@ -653,7 +674,167 @@ public final class SteamCM
 			return false;
 		}
 
+		// Connect tokens arrive UNSOLICITED, so the only place that can catch them
+		// is the loop that reads everything. Missing them means falling back to a
+		// fabricated ticket, so this must not be gated on anything.
+		if( m.emsg == EMSG_CLIENT_GAME_CONNECT_TOKENS )
+			storeConnectTokens( m.body );
+
 		return true;
+	}
+
+	/**
+	 * Take one game-connect token, oldest first, removing it.
+	 *
+	 * ONE USE EACH: Steam issues these in batches and a server rejects a reused
+	 * token, which is why the batch exists at all. Returns null when the pool is
+	 * empty -- the caller then has nothing to build a real ticket from and must
+	 * fall back rather than send a token twice.
+	 */
+	public synchronized byte[] takeConnectToken()
+	{
+		if( connectTokens.isEmpty() )
+			return null;
+
+		return connectTokens.remove( 0 );
+	}
+
+	public synchronized int connectTokenCount()
+	{
+		return connectTokens.size();
+	}
+
+	private synchronized void storeConnectTokens( byte[] body )
+	{
+		SteamWire.Reader r = new SteamWire.Reader( body );
+		int keep = 0;
+		int added = 0;
+
+		while( r.next() )
+		{
+			switch( r.field() )
+			{
+			case 1:
+				keep = r.int32();
+				break;
+			case 2:
+				connectTokens.add( r.bytes() );
+				added++;
+				break;
+			default:
+				r.skip();
+				break;
+			}
+		}
+
+		// Steam says how many to keep; honour it from the OLD end, because the
+		// oldest token is the next one to be used and dropping that would waste a
+		// still-valid token while keeping a newer one we may never reach.
+		if( keep > 0 )
+		{
+			while( connectTokens.size() > keep )
+				connectTokens.remove( 0 );
+		}
+
+		log( "cm: got " + added + " game-connect token(s), pool=" + connectTokens.size()
+			+ " (max_to_keep=" + keep + ")" );
+	}
+
+	/**
+	 * Ask Steam for an app-ownership ticket, blocking until it answers.
+	 *
+	 * This proves the logged-in account owns the app, and it is issued over the
+	 * same session that already sets the "playing" status -- no Steam client, no
+	 * PC. Returns null if Steam refuses (an account that does not own the app) or
+	 * does not answer in time; the caller falls back to the emulated ticket, which
+	 * is what every build so far has used.
+	 *
+	 * Blocking on purpose: it is called from the presence worker thread, off the
+	 * engine's frame loop, and a ticket is only wanted at the moment of connecting.
+	 */
+	public byte[] requestAppOwnershipTicket( int appId, int timeoutMs ) throws IOException
+	{
+		long jobid = nextJobId();
+
+		send( EMSG_CLIENT_GET_APP_OWNERSHIP_TICKET,
+			new SteamWire.Writer().uint32( 1, appId ).toBytes(), jobid );
+		log( "cm: requested ownership ticket for app " + appId );
+
+		long deadline = System.currentTimeMillis() + ( timeoutMs > 0 ? timeoutMs : 15000 );
+
+		while( System.currentTimeMillis() < deadline )
+		{
+			Message m;
+
+			// A short read so the heartbeat below still happens: Steam drops a
+			// silent session after about a minute (measured), and a long wait for
+			// one reply must not cost the session.
+			ws.setReadTimeout( 1000 );
+
+			try
+			{
+				m = nextMessage();
+			}
+			catch( InterruptedIOException timeout )
+			{
+				heartbeatIfDue();
+				continue;
+			}
+			finally
+			{
+				ws.setReadTimeout( READ_TIMEOUT_MS );
+			}
+
+			if( m == null )
+			{
+				log( "cm: connection closed while waiting for the ownership ticket" );
+				return null;
+			}
+
+			// Keep servicing the unsolicited traffic while we wait, or a token
+			// pushed during this window would be thrown away.
+			if( m.emsg == EMSG_CLIENT_GAME_CONNECT_TOKENS )
+			{
+				storeConnectTokens( m.body );
+				continue;
+			}
+
+			if( m.emsg == EMSG_CLIENT_LOGGED_OFF )
+			{
+				log( "cm: logged off while waiting for the ownership ticket" );
+				return null;
+			}
+
+			if( m.emsg != EMSG_CLIENT_GET_APP_OWNERSHIP_TICKET_RESPONSE )
+				continue;
+
+			int eresult = 0;
+			byte[] ticket = null;
+			SteamWire.Reader r = new SteamWire.Reader( m.body );
+
+			while( r.next() )
+			{
+				switch( r.field() )
+				{
+				case 1: eresult = r.int32(); break;
+				case 2: r.int32(); break;          // app_id, echoed back
+				case 3: ticket = r.bytes(); break;
+				default: r.skip(); break;
+				}
+			}
+
+			if( eresult != ERESULT_OK || ticket == null )
+			{
+				log( "cm: Steam refused the ownership ticket, eresult " + eresult );
+				return null;
+			}
+
+			log( "cm: got an ownership ticket, " + ticket.length + " bytes" );
+			return ticket;
+		}
+
+		log( "cm: no ownership ticket within the timeout" );
+		return null;
 	}
 
 	public boolean isConnected()
@@ -700,6 +881,20 @@ public final class SteamCM
 
 	private void send( int emsg, byte[] body ) throws IOException
 	{
+		send( emsg, body, 0 );
+	}
+
+	/**
+	 * Send with an optional jobid_source.
+	 *
+	 * WHY THE PARAMETER EXISTS: the six original messages are fire-and-forget, so
+	 * a header with just steamid and session was enough. A request that expects an
+	 * answer must carry jobid_source (header field 10) -- Steam uses it to address
+	 * the reply, and a request with jobid 0 gets no reply at all. Measured against
+	 * a live CM: silence before, an answer after.
+	 */
+	private void send( int emsg, byte[] body, long jobid ) throws IOException
+	{
 		if( ws == null )
 			throw new IOException( "not connected" );
 
@@ -711,6 +906,9 @@ public final class SteamCM
 		if( sessionId != 0 )
 			header.int32( 2, sessionId );
 
+		if( jobid != 0 )
+			header.fixed64( 10, jobid );
+
 		byte[] hdr = header.toBytes();
 		ByteArrayOutputStream frame = new ByteArrayOutputStream( 8 + hdr.length + body.length );
 		writeLE32( frame, emsg | PROTO_MASK );
@@ -719,6 +917,24 @@ public final class SteamCM
 		frame.write( body, 0, body.length );
 
 		ws.sendBinary( frame.toByteArray() );
+	}
+
+	/**
+	 * Build a jobid the way Steam expects one.
+	 *
+	 * NOT a counter and not a random 64-bit value: the field is packed --
+	 * bits 0..19 a sequence, bits 20..49 seconds since 2005-01-01 (SteamKit's
+	 * GlobalID). A number outside that layout lands in the wrong fields and the
+	 * reply never comes back.
+	 */
+	private long nextJobId()
+	{
+		long startTime = ( System.currentTimeMillis() / 1000L ) - 1104537600L;
+
+		if( ++jobSeq > 0xFFFFF )
+			jobSeq = 1;
+
+		return ( jobSeq & 0xFFFFFL ) | (( startTime & 0x3FFFFFFFL ) << 20 );
 	}
 
 	/** Next single message, unwrapping Multi containers as needed. */

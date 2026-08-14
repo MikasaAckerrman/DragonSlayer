@@ -490,6 +490,30 @@ public final class SteamPresence
 		}
 	}
 
+	/**
+	 * Open a fresh, logged-on CM session for something other than presence.
+	 *
+	 * Exposed for SteamTicket, which needs a session of its own: the presence
+	 * worker owns its socket and reads replies on its own schedule, so a second
+	 * consumer reading from the same session would steal messages the worker is
+	 * waiting for and the status would start missing updates.
+	 *
+	 * Returns null when no credentials are stored, which is the ordinary case for
+	 * an account signed in the old OpenID way. The caller must close the session.
+	 */
+	public SteamCM openSession()
+	{
+		try
+		{
+			return connect();
+		}
+		catch( Throwable e )
+		{
+			note( "openSession failed: " + e );
+			return null;
+		}
+	}
+
 	private SteamCM connect() throws IOException
 	{
 		SharedPreferences p = prefs();

@@ -713,4 +713,72 @@ public class XashActivity extends SDLActivity {
 			return 0;
 		}
 	}
+
+	// -----------------------------------------------------------------------
+	// Real Steam auth ticket, for the connect packet.
+	// -----------------------------------------------------------------------
+	//
+	// WHY THIS IS SEPARATE FROM steamPresence*: presence is fire-and-forget and
+	// must never block a frame, so it hands the work to a background thread. A
+	// ticket is the opposite -- the engine cannot build the connect packet
+	// without it, so this one BLOCKS, and it is called from the connect path
+	// rather than from the frame loop.
+	//
+	// The two-call shape (fetch, then read the id) is because JNI cannot hand
+	// back a byte array and a long together without an object, and an object is
+	// one more thing for R8 to strip. The id is kept from the last fetch.
+
+	private static long steamTicketId;
+
+	/**
+	 * Ask Steam for an app-ownership ticket for CS 1.6. Called from native C.
+	 *
+	 * @param timeoutMs how long to wait for Steam to answer
+	 * @return ticket bytes, or null when unavailable (no credentials stored, the
+	 *         account does not own the game, or Steam refused) -- the engine then
+	 *         falls back to the emulated ticket it has always used
+	 */
+	public static byte[] steamFetchAuthTicket( int timeoutMs )
+	{
+		android.content.Context ctx = SDLActivity.getContext();
+
+		steamTicketId = 0;
+
+		if( ctx == null )
+		{
+			Log.e( TAG, "steamFetchAuthTicket: no context" );
+			return null;
+		}
+
+		try
+		{
+			su.xash.engine.steam.SteamTicket.Result r =
+				su.xash.engine.steam.SteamTicket.fetch( ctx, timeoutMs );
+
+			if( r == null )
+				return null;
+
+			steamTicketId = r.steamid;
+			return r.ticket;
+		}
+		catch( Throwable e )
+		{
+			// A nicer ticket is an improvement, never a requirement: anything going
+			// wrong here must still leave the player able to join a server.
+			Log.e( TAG, "steamFetchAuthTicket: " + e );
+			return null;
+		}
+	}
+
+	/**
+	 * SteamID64 the last successful steamFetchAuthTicket() belongs to.
+	 *
+	 * Read straight after the fetch. It comes from the session that obtained the
+	 * ticket rather than from stored preferences, because a ticket only proves
+	 * the account that was logged on when Steam issued it.
+	 */
+	public static long steamAuthTicketSteamId()
+	{
+		return steamTicketId;
+	}
 }

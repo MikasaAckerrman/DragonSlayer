@@ -28,6 +28,7 @@ GNU General Public License for more details.
 #include "cl_steam_presence_slayer.h"
 #include "cl_slayer_toast.h"
 #include "cl_slayer_conspy.h"   // Slayer3D: periodic console-spam table into the log
+#include "cl_steam_ticket_slayer.h"   // Slayer3D: real Steam ticket for the connect packet
 #include "vid_common.h"
 #include "pm_local.h"
 #include "multi_emulator.h"
@@ -103,6 +104,14 @@ static CVAR_DEFINE_AUTO( bottomcolor, "0", FCVAR_USERINFO|FCVAR_ARCHIVE|FCVAR_FI
 CVAR_DEFINE_AUTO( rate, "25000", FCVAR_USERINFO|FCVAR_ARCHIVE|FCVAR_FILTERABLE, "player network rate" );
 
 CVAR_DEFINE_AUTO( cl_ticket_generator, "revemu2013", FCVAR_ARCHIVE, "you wouldn't steal a car" );
+
+// How long to wait for Steam to issue a real ticket, in seconds.
+//
+// Bounded because this BLOCKS the connect: a silent wait looks like the game
+// hanging, and a server's own connect timeout is not generous. 8 s is past the
+// measured answer time with room for a slow mobile network; on timeout the
+// emulated ticket is used and the player still joins.
+CVAR_DEFINE_AUTO( slayer_steam_ticket_timeout, "8", FCVAR_ARCHIVE, "Slayer3D: seconds to wait for a real Steam auth ticket before falling back to the emulated one" );
 CVAR_DEFINE_AUTO( slayer_steam_advertise_id, "0", FCVAR_ARCHIVE, "Slayer3D: advertise your logged-in real SteamID to servers so other clients show your Steam avatar (0=off; disable if a server rejects the connection)" );
 static CVAR_DEFINE_AUTO( cl_advertise_engine_in_name, "1", FCVAR_ARCHIVE|FCVAR_PRIVILEGED, "add [Slayer3D] to the nickname when connecting to GoldSrc servers" );
 static CVAR_DEFINE_AUTO( cl_log_outofband, "0", FCVAR_ARCHIVE, "log out of band messages, can be useful for server admins and for engine debugging" );
@@ -1091,6 +1100,42 @@ static void CL_WriteSteamTicket( sizebuf_t *send )
 	{
 		MSG_WriteBytes( send, buf, 512 ); // specifically 512 bytes of zeros
 		return;
+	}
+
+	// A REAL Steam ticket, when asked for and available.
+	//
+	// This is the only thing that can make other players see your actual account:
+	// the server announces whatever the ticket says, and every build until now sent
+	// a fabricated id (see cl_steam_ticket_slayer.h for the measurement). Steam
+	// issues the genuine article over the session the launcher already holds -- no
+	// Steam client, no PC.
+	//
+	// OPT-IN, and it falls back rather than failing: a server running an emulator
+	// may refuse a genuine ticket, and being refused means not playing at all.
+	if( !Q_stricmp( cl_ticket_generator.string, "steamcm" ))
+	{
+		uint64_t real_id = 0;
+		int      real_len = Slayer_SteamTicket_Fetch( (byte *)buf, sizeof( buf ),
+			(int)( slayer_steam_ticket_timeout.value * 1000.0f ), &real_id );
+
+		if( real_len > 0 )
+		{
+			MSG_WriteBytes( send, buf, real_len );
+
+			// cls.steamid must match what we just proved, not what RevEmu would
+			// have hashed: the scoreboard and everything else downstream reads it.
+			*(uint32_t *)cls.steamid = LittleLong( (uint32_t)( real_id & 0xFFFFFFFFu ));
+			*(uint32_t *)( cls.steamid + 4 ) = LittleLong( (uint32_t)( real_id >> 32 ));
+
+			Con_Printf( "Slayer3D: connecting with a real Steam ticket (%d bytes)\n",
+				real_len );
+			return;
+		}
+
+		// Fall through to the emulated ticket. buf may hold a partial answer, so
+		// it is zeroed again before the generator writes into it.
+		memset( buf, 0, sizeof( buf ));
+		Con_Printf( S_WARN "Slayer3D: no real Steam ticket, using the emulated one\n" );
 	}
 
 	ID_GetMD5ForAddress( key, adr, sizeof( key ));
@@ -3462,6 +3507,7 @@ static void CL_InitLocal( void )
 	cl.resourcesonhand.pNext = cl.resourcesonhand.pPrev = &cl.resourcesonhand;
 
 	Cvar_RegisterVariable( &cl_ticket_generator );
+	Cvar_RegisterVariable( &slayer_steam_ticket_timeout );
 	Cvar_RegisterVariable( &slayer_steam_advertise_id );
 	Cvar_RegisterVariable( &cl_advertise_engine_in_name );
 	Cvar_RegisterVariable( &cl_log_outofband );
