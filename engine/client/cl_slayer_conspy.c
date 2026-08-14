@@ -646,20 +646,47 @@ void Slayer_ConSpy_Init( void )
 	Cvar_RegisterVariable( &slayer_console_quiet_status );
 	Cvar_RegisterVariable( &slayer_console_mute );
 
-	// Counting shipped off, so an archived config still says 0 and the new
-	// default would reach nobody who has already played -- which is exactly the
-	// player reporting the spam. Turn it on once; an explicit later 0 is kept.
-	if( slayer_conspy_migrated.value == 0.0f )
-	{
-		if( slayer_conspy.value == 0.0f )
-			Cvar_SetValue( "slayer_conspy", 1.0f );
-		Cvar_SetValue( "slayer_conspy_migrated", 1.0f );
-	}
+	// NO MIGRATION HERE. It used to be, and it did nothing: `exec config.cfg`
+	// runs after CL_Init, so the archived value overwrote whatever this set.
+	// See Slayer_ConSpy_AfterConfig, which runs at the right moment.
 
 	Cmd_AddCommand( "slayer_conspy_report", Cmd_ConSpyReport_f,
 		"Slayer3D: print the most frequent console messages (optional line limit)" );
 	Cmd_AddCommand( "slayer_conspy_reset", Cmd_ConSpyReset_f,
 		"Slayer3D: clear the console spam counters" );
+}
+
+/*
+====================
+Slayer_ConSpy_AfterConfig
+
+Re-apply the one-shot defaults AFTER config.cfg has been executed.
+
+WHY THIS EXISTS AND WHY IT IS NOT IN Init: cvars are registered inside CL_Init,
+but `exec config.cfg` runs afterwards (host.c: CL_Init at ~1226, the exec at
+~1268). So a migration done at init is undone moments later by the archived
+value -- MEASURED: after shipping the migration, the device's config still read
+slayer_conspy "0" and the counter was still off for the session that mattered.
+
+The same trap is documented in cl_scoreboard_slayer.c for the stock-board block
+level, where it was solved by capping at the point of use. A counter has no point
+of use to cap, so the honest fix is to run the migration at the right time.
+
+Called once from the first client frame after host.config_executed goes true.
+====================
+*/
+void Slayer_ConSpy_AfterConfig( void )
+{
+	if( slayer_conspy_migrated.value == 0.0f )
+	{
+		if( slayer_conspy.value == 0.0f )
+		{
+			Cvar_SetValue( "slayer_conspy", 1.0f );
+			Slayer_Log_Printf( "conspy migration: counting enabled (archived 0 -> 1); "
+				"set slayer_conspy 0 to turn it back off" );
+		}
+		Cvar_SetValue( "slayer_conspy_migrated", 1.0f );
+	}
 }
 
 /*
@@ -676,6 +703,17 @@ question. Every 180 s, and only when something was actually counted.
 */
 void Slayer_ConSpy_Frame( void )
 {
+	static qboolean migrated_after_config;
+
+	// The migration point. host.config_executed is set by Cmd_Exec_f, so the
+	// first frame that sees it true is the first moment an archived value can no
+	// longer overwrite ours.
+	if( !migrated_after_config && host.config_executed )
+	{
+		migrated_after_config = true;
+		Slayer_ConSpy_AfterConfig();
+	}
+
 	if( slayer_conspy.value == 0.0f )
 		return;
 

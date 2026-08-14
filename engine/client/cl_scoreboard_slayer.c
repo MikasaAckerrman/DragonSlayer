@@ -328,6 +328,10 @@ static qboolean        slayer_spawned_since_team = false;
 // a change and arms the gate above.
 static int             slayer_local_team_seen = -1;
 
+// Have the one-shot cvar migrations run yet? They cannot run at init -- see the
+// comment at the top of Slayer_Scoreboard_Draw.
+static qboolean        slayer_migrations_done = false;
+
 // Avatar state: SteamID64 per player slot and cached texture handles
 static uint64_t        slayer_steamid64[MAX_CLIENTS];
 static int             slayer_avatar_tex[MAX_CLIENTS]; // 0 = not tried, >0 = loaded, -1 = failed
@@ -1288,18 +1292,9 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_scoreboard_block_migrated );
 	Cvar_RegisterVariable( &slayer_scoreboard_ondeath_migrated );
 
-	// The death board shipped enabled, so an archived config still says 1 and the
-	// new default of 0 would not reach anyone who has already played. Turn it off
-	// once; an explicit later `slayer_scoreboard_ondeath 1` is preserved.
-	if( slayer_scoreboard_ondeath_migrated.value == 0.0f )
-	{
-		if( slayer_scoreboard_ondeath.value != 0.0f )
-		{
-			Cvar_SetValue( "slayer_scoreboard_ondeath", 0.0f );
-			Slayer_Log_Printf( "death-board migration: auto-show on death turned off; open it with the scoreboard button" );
-		}
-		Cvar_SetValue( "slayer_scoreboard_ondeath_migrated", 1.0f );
-	}
+	// NO ondeath MIGRATION HERE. It was here, and it did nothing: `exec config.cfg`
+	// runs after CL_Init, so the archived 1 was re-applied right after this set it
+	// to 0. It now runs from the frame function, once host.config_executed is true.
 
 	// `FCVAR_ARCHIVE` preserves the old value across APK updates. Users who had
 	// level 2 therefore still lost health/ammo/radar despite the newer default
@@ -2344,6 +2339,34 @@ void Slayer_Scoreboard_Draw( void )
 	if( cls.state != ca_active )
 	{
 		return;
+	}
+
+	// ARCHIVED-VALUE MIGRATIONS, applied here rather than in Init.
+	//
+	// Init runs inside CL_Init, and `exec config.cfg` runs AFTER it (host.c), so a
+	// migration done at init is undone moments later by the stored value. MEASURED:
+	// the death-board migration shipped in 4422402b, and the device's config still
+	// read slayer_scoreboard_ondeath "1" afterwards -- the board kept auto-showing
+	// exactly as before, which is what the player reported.
+	//
+	// The same trap is described for the stock-board block level further down,
+	// where it was solved by capping at the point of use. A default that the player
+	// may legitimately want to change back has no such point, so the migration has
+	// to run at the right moment instead.
+	if( !slayer_migrations_done && host.config_executed )
+	{
+		slayer_migrations_done = true;
+
+		if( slayer_scoreboard_ondeath_migrated.value == 0.0f )
+		{
+			if( slayer_scoreboard_ondeath.value != 0.0f )
+			{
+				Cvar_SetValue( "slayer_scoreboard_ondeath", 0.0f );
+				Slayer_Log_Printf( "death-board migration: auto-show on death turned off "
+					"(archived 1 -> 0); set slayer_scoreboard_ondeath 1 to restore it" );
+			}
+			Cvar_SetValue( "slayer_scoreboard_ondeath_migrated", 1.0f );
+		}
 	}
 
 	// Always request the LOCAL player's own avatar by the REAL logged-in

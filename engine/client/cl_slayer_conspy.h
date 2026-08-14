@@ -46,13 +46,18 @@ qboolean Slayer_ConSpy_Filter( const char *msg );
 // alone, which is why this is a window rather than a pattern.
 void Slayer_ConSpy_QuietStatus( double seconds );
 
-// Write the spam table into the file log every few minutes. Called once per
-// client frame.
+// Write the spam table into the file log every few minutes, and apply the
+// one-shot cvar migrations once config.cfg has run. Called once per client frame.
 //
 // WHY AUTOMATIC: the on-demand report only happens if the player types a command,
 // and the reports that arrive here come as "спам в консоли" attached to a log
 // with no table in it. A periodic dump means the next log already answers the
 // question without anyone having to know the command exists.
 void Slayer_ConSpy_Frame( void );
+
+// Re-apply archived-value migrations AFTER `exec config.cfg`. Registering a new
+// default in Init is not enough: the exec runs later and puts the old value back.
+// Called from Slayer_ConSpy_Frame on the first frame that sees the config done.
+void Slayer_ConSpy_AfterConfig( void );
 
 #endif // CL_SLAYER_CONSPY_H
