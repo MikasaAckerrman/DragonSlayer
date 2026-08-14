@@ -115,7 +115,27 @@ static CVAR_DEFINE_AUTO( slayer_scoreboard_block_hud, "0", FCVAR_ARCHIVE,
 static CVAR_DEFINE_AUTO( slayer_scoreboard_block_migrated, "0", FCVAR_ARCHIVE,
 	"Slayer3D internal: archived scoreboard block level migration completed" );
 
-static CVAR_DEFINE_AUTO( slayer_scoreboard_ondeath, "1", FCVAR_ARCHIVE, "Slayer3D: show the scoreboard automatically while dead (0 = only when held)" );
+// Auto-show while dead: OFF, asked for directly ("убрать после смерти скорборд,
+// я сам открою когда нужно, перед сменой карты можно оставить").
+//
+// This shipped as 1 because CS does it, and CS gets away with it: there you
+// respawn next round, so the board is a few seconds of downtime reading. On the
+// jailbreak and deathmatch servers actually being played, death lasts most of a
+// round -- the board became a wall in front of the game, and the auto-hide
+// timeout below was the first attempt at that problem. The player asking to open
+// it himself is the better answer: a timeout still steals the first seconds after
+// every death, and those are the seconds you want to watch your killer.
+//
+// The intermission board is a SEPARATE condition (cl.intermission in
+// Slayer_Scoreboard_IsVisible) and is deliberately untouched -- end of map still
+// shows the table, which is the "перед сменой карты можно оставить" half.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_ondeath, "0", FCVAR_ARCHIVE, "Slayer3D: show the scoreboard automatically while dead (0 = only when held, default; 1 = auto-show like CS)" );
+
+// Migration for configs written before 2026-08-14, which archived the old
+// default of 1. Same reason as the block-level migration below: FCVAR_ARCHIVE
+// means a new default alone changes nothing for anyone who already played.
+static CVAR_DEFINE_AUTO( slayer_scoreboard_ondeath_migrated, "0", FCVAR_ARCHIVE,
+	"Slayer3D internal: archived death-scoreboard default migration completed" );
 
 // How long the death board stays up before it takes itself away, in seconds.
 //
@@ -1211,6 +1231,20 @@ void Slayer_Scoreboard_Init( void )
 	Cvar_RegisterVariable( &slayer_scoreboard_block_stock );
 	Cvar_RegisterVariable( &slayer_scoreboard_block_hud );
 	Cvar_RegisterVariable( &slayer_scoreboard_block_migrated );
+	Cvar_RegisterVariable( &slayer_scoreboard_ondeath_migrated );
+
+	// The death board shipped enabled, so an archived config still says 1 and the
+	// new default of 0 would not reach anyone who has already played. Turn it off
+	// once; an explicit later `slayer_scoreboard_ondeath 1` is preserved.
+	if( slayer_scoreboard_ondeath_migrated.value == 0.0f )
+	{
+		if( slayer_scoreboard_ondeath.value != 0.0f )
+		{
+			Cvar_SetValue( "slayer_scoreboard_ondeath", 0.0f );
+			Slayer_Log_Printf( "death-board migration: auto-show on death turned off; open it with the scoreboard button" );
+		}
+		Cvar_SetValue( "slayer_scoreboard_ondeath_migrated", 1.0f );
+	}
 
 	// `FCVAR_ARCHIVE` preserves the old value across APK updates. Users who had
 	// level 2 therefore still lost health/ammo/radar despite the newer default
@@ -2048,11 +2082,15 @@ away, the gate switched off, and the stock board -- still auto-showing on death
 -- appeared. That is the "sometimes ours, sometimes the default" the report
 describes.
 
-So the stock board is gated for the WHOLE time the game would auto-show it: the
-entire dead period while ondeath is on, plus any moment our board is up for
-another reason. When our board is dismissed while dead the gate still fires, so
-the result is no scoreboard at all -- which is what dismissing it means -- rather
-than the stock one bleeding through.
+So the stock board is gated for the WHOLE dead period, no matter what our own
+board is doing: auto-shown, opened by hand, dismissed, timed out, or (since
+2026-08-14) not shown at all because slayer_scoreboard_ondeath defaults to 0.
+
+That last case is why the ondeath cvar is NOT consulted here, and getting this
+wrong would have silently undone the whole change: the client library ORs
+`health <= 0` into its own ShouldDrawScoreboard, so "ours stays away after death"
+without this gate means "the vanilla table appears after death" -- a different
+board, not no board. The player asked for no board.
 ====================
 */
 qboolean Slayer_Scoreboard_ShouldGateStock( void )
@@ -2063,13 +2101,16 @@ qboolean Slayer_Scoreboard_ShouldGateStock( void )
 	if( Slayer_Scoreboard_IsVisible( ))
 		return true;
 
-	// Dead, and our board is NOT up -- either dismissed or timed out. The stock
-	// board auto-shows on death regardless of us, so keep gating it: "our board
-	// went away" must mean no scoreboard, not the default one taking over. This
-	// is deliberately independent of WHY ours is hidden, which is what makes the
-	// auto-hide timeout leave a clear screen instead of revealing the stock table
-	// six seconds after death.
-	if( slayer_scoreboard_ondeath.value != 0.0f && SB_LocalDeadNow( ))
+	// Dead, and our board is NOT up: dismissed, timed out, or -- the default
+	// since 2026-08-14 -- never auto-shown at all. The client library shows its
+	// own board on death regardless of us, so keep gating: "no board of ours"
+	// must mean no board, not the vanilla one taking over.
+	//
+	// Deliberately independent of WHY ours is hidden, and deliberately NOT gated
+	// on slayer_scoreboard_ondeath. Reading the cvar here would mean that turning
+	// the death board off hands the death screen to the vanilla table, which is
+	// the opposite of what turning it off is for.
+	if( SB_LocalDeadNow( ))
 		return true;
 
 	return false;
