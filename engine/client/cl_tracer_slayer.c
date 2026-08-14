@@ -1257,36 +1257,73 @@ viewmodel's sequence names the barrel that fired and the renderer's attachment
 for it is the live muzzle. (The same reasoning as Slayer_Tracer_EndEvent, which
 samples the barrel index there for exactly this reason.)
 
-Returns false when there is no trustworthy muzzle -- the caller then has nothing
-better than the echo path, so it should not draw early.
+ALWAYS RETURNS A POINT, and that is the fix for "трассеры через раз" in third
+person. The first version returned false when the studio attachment was not
+trustworthy, and the device log says that is the COMMON case, not the rare one:
+across 13 one-second intervals with local shots, attach[used] was 0 every single
+time and approx=1 -- the renderer had not filled the attachment the sequence
+named. So the instant path declined most shots, they fell back to the server echo,
+and the player saw some tracers immediately and some a round trip late. Every
+other one, exactly as reported.
+
+The echo path has always had a fallback for this (eye + forward offset) and it
+looks right on screen. Using the same one here means the two paths agree about
+where a shot starts, which they must: whichever draws a given shot, it has to
+leave the same place.
 ====================
 */
-static qboolean Slayer_Tracer_LocalMuzzleNow( vec3_t out )
+static void Slayer_Tracer_LocalMuzzleNow( vec3_t out )
 {
 	cl_entity_t *src;
+	vec3_t       fwd, right, up;
+	vec3_t       eye;
 	int          idx;
+	qboolean     third = ( V_IsSlayerThirdPerson() || CL_IsThirdPerson( ));
 
 	// Third person draws the PLAYER, not the viewmodel, and R_RunViewmodelEvents
 	// bails out there -- so the viewmodel's attachments are stale. Same split as
-	// the echo path makes for the same reason.
-	if( V_IsSlayerThirdPerson() || CL_IsThirdPerson( ))
-	{
-		if( slayer_tracer_tp_muzzle.value == 0.0f )
-			return false;
-
+	// the echo path makes, for the same reason.
+	if( third && slayer_tracer_tp_muzzle.value != 0.0f )
 		src = CL_GetLocalPlayer();
+	else
+		src = &clgame.viewent;
+
+	if( src )
+	{
+		idx = Slayer_Tracer_MuzzleIndexFromModel( src );
+
+		if( Slayer_Tracer_MuzzleFromAttachment( src, idx, out ))
+		{
+			s_attach_used++;
+			return;
+		}
+	}
+
+	s_attach_reject++;
+
+	// Fallback: offset from the eye along the aim. In third person the aim is
+	// cl.viewangles from the player's eye (refState holds the CAMERA there, ~120
+	// units behind, and tracing from it produces a streak detached from the gun);
+	// in first person the view IS the shot line.
+	if( third )
+	{
+		AngleVectors( cl.viewangles, fwd, right, up );
+		VectorAdd( cl.simorg, cl.viewheight, eye );
 	}
 	else
 	{
-		src = &clgame.viewent;
+		AngleVectors( refState.viewangles, fwd, right, up );
+		VectorCopy( refState.vieworg, eye );
 	}
 
-	if( !src )
-		return false;
+	VectorCopy( eye, out );
+	VectorMA( out, slayer_tracer_fwd.value,   fwd,   out );
+	VectorMA( out, slayer_tracer_right.value, right, out );
 
-	idx = Slayer_Tracer_MuzzleIndexFromModel( src );
-
-	return Slayer_Tracer_MuzzleFromAttachment( src, idx, out );
+	// The up offset only makes sense away from the eye: in first person it would
+	// lift the streak above the crosshair.
+	if( third )
+		VectorMA( out, slayer_tracer_up.value, up, out );
 }
 
 /*
@@ -1768,23 +1805,20 @@ void Slayer_Tracer_NoteImpact( const vec3_t pos )
 	if( slayer_tracer_instant.value != 0.0f )
 	{
 		vec3_t muzzle;
+		vec3_t delta;
 
-		if( Slayer_Tracer_LocalMuzzleNow( muzzle ))
+		Slayer_Tracer_LocalMuzzleNow( muzzle );
+		VectorSubtract( pos, muzzle, delta );
+
+		// A degenerate pair (impact essentially at the muzzle: a wall pressed
+		// against the barrel) has no direction to draw along; let the echo path
+		// deal with it.
+		if( VectorLength( delta ) >= 1.0f )
 		{
-			vec3_t delta;
-
-			VectorSubtract( pos, muzzle, delta );
-
-			// A degenerate pair (impact essentially at the muzzle: a wall pressed
-			// against the barrel) has no direction to draw along; let the echo path
-			// deal with it.
-			if( VectorLength( delta ) >= 1.0f )
-			{
-				Slayer_Tracer_SpawnVisual( muzzle, pos, false );
-				Slayer_Tracer_InstantCredit();
-				s_instant_drawn++;
-				return;
-			}
+			Slayer_Tracer_SpawnVisual( muzzle, pos, false );
+			Slayer_Tracer_InstantCredit();
+			s_instant_drawn++;
+			return;
 		}
 	}
 

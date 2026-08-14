@@ -112,6 +112,22 @@ public final class SteamWebSocket
 		return ws;
 	}
 
+	/**
+	 * Change the read timeout for subsequent reads.
+	 *
+	 * Needed because one socket serves two very different kinds of read: a logon
+	 * exchange, where a CM legitimately takes seconds to answer, and the presence
+	 * worker's poll, which must come back promptly so a "stopped" intent can be
+	 * acted on. Before this existed, SteamCM.pump() took a timeout argument and
+	 * silently ignored it -- every poll blocked on the 45 s socket timeout, and the
+	 * status stayed on the profile for as long as the read did.
+	 */
+	public void setReadTimeout( int millis ) throws IOException
+	{
+		if( socket != null && !socket.isClosed( ))
+			socket.setSoTimeout( millis );
+	}
+
 	private void handshake( String host, int port, String path ) throws IOException
 	{
 		byte[] nonce = new byte[16];

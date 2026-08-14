@@ -609,6 +609,14 @@ public final class SteamCM
 	/**
 	 * Read and handle one pending message, if any arrives within timeoutMs.
 	 *
+	 * THE TIMEOUT IS NOW HONOURED, and it was not before -- this is the reason the
+	 * profile kept showing the game for about a minute after leaving. The socket
+	 * is created with setSoTimeout(READ_TIMEOUT_MS) = 45 s, and this method
+	 * ignored its own argument, so the presence worker's "pump(1000)" blocked for
+	 * up to 45 seconds on a quiet session. A stop arriving in that window could
+	 * not be acted on until the read returned: the engine reported the change
+	 * instantly, the worker was asleep in a socket read.
+	 *
 	 * @return false if the connection is gone
 	 */
 	public boolean pump( int timeoutMs ) throws IOException
@@ -618,6 +626,11 @@ public final class SteamCM
 
 		Message m;
 
+		// Per-call read timeout, restored afterwards: logon and framing use the
+		// long one deliberately (a CM can take seconds to answer a logon), and
+		// only this polling read wants to come back promptly.
+		ws.setReadTimeout( timeoutMs > 0 ? timeoutMs : 1 );
+
 		try
 		{
 			m = nextMessage();
@@ -625,6 +638,10 @@ public final class SteamCM
 		catch( InterruptedIOException timeout )
 		{
 			return true;    // nothing to read, connection still fine
+		}
+		finally
+		{
+			ws.setReadTimeout( READ_TIMEOUT_MS );
 		}
 
 		if( m == null )
