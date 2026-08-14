@@ -1113,7 +1113,38 @@ static void CL_WriteSteamTicket( sizebuf_t *send )
 	//
 	// OPT-IN, and it falls back rather than failing: a server running an emulator
 	// may refuse a genuine ticket, and being refused means not playing at all.
-	if( !Q_stricmp( cl_ticket_generator.string, "steamcm" ))
+	// TWO SETTINGS WANTED OPPOSITE THINGS, AND THE ONE THAT MATTERS LOST SILENTLY.
+	//
+	// Measured on the device: with cl_ticket_generator "steamcm" AND
+	// slayer_steam_advertise_id 1, the log showed three "real Steam ticket" lines
+	// and not a single "advertising account id" -- the real-ticket path returns
+	// before the generator is ever reached, so the id branch never ran at all.
+	// The player saw their own avatar (drawn locally from the logged-in id) while
+	// everyone else saw none.
+	//
+	// The two cannot both be honoured in one connect packet, and on a GoldSrc
+	// server the real ticket is the WORSE of the two:
+	//
+	//   * The server takes the id from fixed offsets. In a Steam session ticket
+	//     those bytes are the game-connect token, which Steam reissues on every
+	//     connect -- hence the announced id changed between sessions (746006789,
+	//     then 1870375173) while a real account id never does.
+	//   * This server does not ask Steam anyway: half the status rows read
+	//     STEAM_5:..., and universe 5 does not exist. It accepts anything.
+	//
+	// So when advertising our account is on and we know the account, the emulated
+	// ticket built FOR that account wins -- it is the only thing that makes other
+	// players fetch our avatar. steamcm stays reachable for a genuine Steam server
+	// (or with advertise_id 0), and the choice is logged either way, because a
+	// silent loser is what cost two days here.
+	if( !Q_stricmp( cl_ticket_generator.string, "steamcm" )
+	 && slayer_steam_advertise_id.value != 0.0f
+	 && Slayer_SteamLogin_GetLocalID() != 0 )
+	{
+		Con_Printf( "Slayer3D: advertising our own SteamID, so using the emulated "
+			"ticket (a real one carries a per-connect token where the server reads the id)\n" );
+	}
+	else if( !Q_stricmp( cl_ticket_generator.string, "steamcm" ))
 	{
 		uint64_t real_id = 0;
 		int      real_len = Slayer_SteamTicket_Fetch( (byte *)buf, sizeof( buf ),
