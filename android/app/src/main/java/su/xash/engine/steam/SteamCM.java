@@ -864,6 +864,36 @@ public final class SteamCM
 	}
 
 	/**
+	 * The ClientAuthList body, split out so its wire encoding can be decoded and
+	 * checked in a test rather than only inspected by eye.
+	 *
+	 * gameid IS A FIXED64, NOT A VARINT. This is what silenced the whole exchange.
+	 * In CMsgAuthTicket the field is declared fixed-size, so a varint is a
+	 * wire-type mismatch: Steam's parser reads a length where a 64-bit value
+	 * belongs, the message is malformed, and a malformed message is dropped with
+	 * no reply. The log said exactly that -- "no auth list ack within the timeout"
+	 * every single time, never a rejection, because there was nothing to reject.
+	 *
+	 * Only the fields the reference client sets are sent. estate, eresult and
+	 * h_steam_pipe belong to the server's side of the conversation, and
+	 * message_sequence is NOT part of CMsgClientAuthList at all -- it exists only
+	 * in the ack. Field 6 on the outer message was invented.
+	 */
+	byte[] buildAuthListBody( int appId, byte[] sessionBlock, long crc )
+	{
+		SteamWire.Writer ticketMsg = new SteamWire.Writer()
+			.fixed64( 4, appId )                     // gameid
+			.uint32( 6, (int)crc )                   // ticket_crc
+			.bytes( 7, sessionBlock );               // ticket
+
+		return new SteamWire.Writer()
+			.uint32( 1, connectTokens.size() )       // tokens_left
+			.message( 4, ticketMsg )                 // tickets[0]
+			.uint32( 5, appId )                      // app_ids[0]
+			.toBytes();
+	}
+
+	/**
 	 * Tell Steam about the ticket and wait for it to confirm the CRC.
 	 *
 	 * Confirmation is the whole point: without it the ticket is a blob Steam does
@@ -873,19 +903,12 @@ public final class SteamCM
 	private boolean registerTicket( int appId, byte[] sessionBlock, long crc, int timeoutMs )
 		throws IOException
 	{
-		SteamWire.Writer ticketMsg = new SteamWire.Writer()
-			.uint32( 4, appId )                      // gameid, as a varint field
-			.bytes( 7, sessionBlock )
-			.uint32( 6, (int)crc );
+		byte[] body = buildAuthListBody( appId, sessionBlock, crc );
 
-		byte[] body = new SteamWire.Writer()
-			.uint32( 1, connectTokens.size() )       // tokens_left
-			.message( 4, ticketMsg )                 // tickets[0]
-			.uint32( 5, appId )                      // app_ids[0]
-			.uint32( 6, ++ticketSequence )           // message_sequence
-			.toBytes();
-
-		send( EMSG_CLIENT_AUTH_LIST, body );
+		// AND IT NEEDS A JOBID. Same rule the ownership request already follows:
+		// Steam addresses a reply to jobid_source, and a request sent with 0 gets
+		// no answer at all. This one was sent without it.
+		send( EMSG_CLIENT_AUTH_LIST, body, nextJobId() );
 		log( "cm: registered the ticket with Steam, waiting for the ack" );
 
 		synchronized( this )

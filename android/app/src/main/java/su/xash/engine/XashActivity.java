@@ -366,6 +366,14 @@ public class XashActivity extends SDLActivity {
 					+ ( retryAfter != null ? " Retry-After=" + retryAfter : "" )
 					+ ( server != null ? " server=" + server : "" )
 					+ ( detail.length() > 0 ? " body=" + detail : "" ));
+				// 429/503 is a statement about US, not about this profile: we asked too
+				// often. The device log is unambiguous -- every id got 429 from nginx,
+				// including ids whose profiles load fine in a browser. Backing off this
+				// one slot is not enough, because the limit counts the CLIENT, so this
+				// returns a distinct code and the engine stands every slot down.
+				if( httpCode == 429 || httpCode == 503 )
+					return 6;   // AVD_RESULT_THROTTLED: hold ALL slots back
+
 				return 1;   // AVD_RESULT_FAIL: transient, worth retrying
 			}
 
@@ -496,6 +504,11 @@ public class XashActivity extends SDLActivity {
 					String detail = readErrorBody( imgConn );
 					SlayerLog.log( "downloadAvatar", steamid64 + " FAIL image HTTP " + imgCode
 						+ ( detail.length() > 0 ? " body=" + detail : "" ));
+
+					// Same throttle signal when the image CDN applies its own limit.
+					if( imgCode == 429 || imgCode == 503 )
+						return 6;
+
 					return 1;
 				}
 

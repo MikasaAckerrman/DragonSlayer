@@ -126,6 +126,16 @@ void Slayer_AvatarDownload_MigrateCache( void )
 #define AVD_MAX_CONCURRENT  6      // parallel avatar downloads (was 2 — too slow)
 #define AVD_RETRY_DELAY     60.0
 
+// Backoff for a rate-limited profile fetch.
+//
+// WHY: steamcommunity.com answered 429 to every retry, and the retry arrived 17
+// seconds later each time because the cooldown never applied -- Frame() moved the
+// slot to IDLE and the cooldown only checked slots still marked FAIL, so the test
+// could never be true. Hammering a throttle is what keeps it closed, so the delay
+// now doubles per consecutive failure and the state it is checked against
+// survives the reset to IDLE.
+#define AVD_BACKOFF_MAX     600.0  // cap: 10 minutes between attempts
+
 // Slot result values (written by worker thread, read by Frame)
 #define AVD_RESULT_IDLE        0
 #define AVD_RESULT_IN_PROGRESS 1
@@ -133,6 +143,7 @@ void Slayer_AvatarDownload_MigrateCache( void )
 #define AVD_RESULT_FAIL        3
 #define AVD_RESULT_DONE        4
 #define AVD_RESULT_GONE        5      // no Steam profile (404): never retry this session
+#define AVD_RESULT_THROTTLED   6      // 429/503: WE asked too often, hold every slot
 
 // ---------------------------------------------------------------------------
 // Static state
@@ -147,6 +158,12 @@ static volatile int avd_slot_entered[MAX_CLIENTS]; // worker thread actually sta
 static volatile int avd_slot_result[MAX_CLIENTS];  // thread-safe via volatile + barriers
 static uint64_t     avd_slot_id[MAX_CLIENTS];
 static double       avd_slot_fail_time[MAX_CLIENTS];
+static int          avd_slot_fail_count[MAX_CLIENTS];  // consecutive failures, for backoff
+
+// A 429 counts the CLIENT, not the profile, so it has to hold every slot -- 25
+// slots each backing off separately still add up to a burst the host refuses.
+static double       avd_throttle_until;
+static int          avd_throttle_count;
 static int          avd_active_count;              // number of in-progress downloads
 
 static CVAR_DEFINE_AUTO( slayer_avatar_download, "1", FCVAR_ARCHIVE,
@@ -327,6 +344,9 @@ void Slayer_AvatarDownload_Init( void )
 	memset( (void *)avd_slot_result, 0, sizeof( avd_slot_result ) );
 	memset( avd_slot_id, 0, sizeof( avd_slot_id ) );
 	memset( avd_slot_fail_time, 0, sizeof( avd_slot_fail_time ) );
+	memset( avd_slot_fail_count, 0, sizeof( avd_slot_fail_count ) );
+	avd_throttle_until = 0.0;
+	avd_throttle_count = 0;
 	avd_active_count = 0;
 	avd_jvm = NULL;
 	avd_activity_class = NULL;
@@ -440,6 +460,12 @@ void Slayer_AvatarDownload_Reset( void )
 	memset( (void *)avd_slot_result, 0, sizeof( avd_slot_result ) );
 	memset( avd_slot_id, 0, sizeof( avd_slot_id ) );
 	memset( avd_slot_fail_time, 0, sizeof( avd_slot_fail_time ) );
+	memset( avd_slot_fail_count, 0, sizeof( avd_slot_fail_count ) );
+
+	// avd_throttle_until is deliberately NOT cleared here. Reset() runs on every
+	// map change, and Steam's opinion of how often we ask does not reset with the
+	// map -- clearing it would let a map change fire another burst at a host that
+	// just refused one. Only Init() (a fresh process) starts from zero.
 	memset( (void *)avd_slot_started, 0, sizeof( avd_slot_started ) );
 	memset( (void *)avd_slot_entered, 0, sizeof( avd_slot_entered ) );
 }
@@ -461,8 +487,15 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 
 	// A new player took this slot: clear any terminal state left by the
 	// previous occupant, whose fabricated ID may have been marked GONE.
-	if( avd_slot_id[slot] != steamid64 && avd_slot_result[slot] == AVD_RESULT_GONE )
-		avd_slot_result[slot] = AVD_RESULT_IDLE;
+	if( avd_slot_id[slot] != steamid64 )
+	{
+		// A different player: the previous occupant's failures say nothing about
+		// this one, and a fabricated ID marked GONE must not stick to a real one.
+		if( avd_slot_result[slot] == AVD_RESULT_GONE )
+			avd_slot_result[slot] = AVD_RESULT_IDLE;
+
+		avd_slot_fail_count[slot] = 0;
+	}
 
 	if( !avd_download_method )
 	{
@@ -485,12 +518,39 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 	if( avd_slot_result[slot] == AVD_RESULT_GONE )
 		return;
 
-	// Recently failed - wait for retry delay
-	if( avd_slot_result[slot] == AVD_RESULT_FAIL &&
-	    host.realtime - avd_slot_fail_time[slot] < AVD_RETRY_DELAY )
+	// A client-wide throttle outranks everything else: the host is counting our
+	// requests, not this slot's, so nothing goes out until the hold expires.
+	if( host.realtime < avd_throttle_until )
 	{
-		Slayer_Log_Printf( "avatar Request slot %d: SKIP (cooldown after fail)", slot );
+		Slayer_Log_Printf( "avatar Request slot %d: SKIP (throttled, %.0fs left)",
+			slot, avd_throttle_until - host.realtime );
 		return;
+	}
+
+	// Recently failed - wait for the backoff to expire.
+	//
+	// The state tested here is the fail COUNT, not AVD_RESULT_FAIL: Frame() clears
+	// the result to IDLE the moment it observes the failure, so a condition on
+	// FAIL was dead code and every retry went out immediately. That is how a
+	// throttled host got asked again 17 seconds later, forever.
+	if( avd_slot_fail_count[slot] > 0 )
+	{
+		double wait = AVD_RETRY_DELAY;
+		int i;
+
+		for( i = 1; i < avd_slot_fail_count[slot] && wait < AVD_BACKOFF_MAX; i++ )
+			wait *= 2.0;
+
+		if( wait > AVD_BACKOFF_MAX )
+			wait = AVD_BACKOFF_MAX;
+
+		if( host.realtime - avd_slot_fail_time[slot] < wait )
+		{
+			Slayer_Log_Printf( "avatar Request slot %d: SKIP (backoff %.0fs after %d fail(s), %.0fs left)",
+				slot, wait, avd_slot_fail_count[slot],
+				wait - ( host.realtime - avd_slot_fail_time[slot] ));
+			return;
+		}
 	}
 
 	// Max concurrent check
@@ -529,6 +589,7 @@ void Slayer_AvatarDownload_Request( uint64_t steamid64, int slot )
 		free( work );
 		avd_slot_result[slot] = AVD_RESULT_FAIL;
 		avd_slot_fail_time[slot] = host.realtime;
+		avd_slot_fail_count[slot]++;
 		avd_active_count--;
 		Slayer_Log_Printf( "avatar Request slot %d: pthread_create FAILED", slot );
 		return;
@@ -568,6 +629,8 @@ qboolean Slayer_AvatarDownload_Frame( void )
 		if( avd_slot_result[i] == AVD_RESULT_SUCCESS )
 		{
 			avd_slot_result[i] = AVD_RESULT_DONE;
+			avd_slot_fail_count[i] = 0;   // a success ends the backoff
+			avd_throttle_count = 0;       // and proves the throttle has lifted
 			if( avd_active_count > 0 )
 				avd_active_count--;
 			any_completed = true;
@@ -576,10 +639,55 @@ qboolean Slayer_AvatarDownload_Frame( void )
 				"AvatarDL: download complete for slot %d", i );
 			Con_DPrintf( "AvatarDL: download complete for slot %d\n", i );
 		}
+		else if( avd_slot_result[i] == AVD_RESULT_THROTTLED )
+		{
+			double hold = AVD_RETRY_DELAY;
+			int k;
+
+			// ONE BURST IS ONE EVENT.
+			//
+			// Up to AVD_MAX_CONCURRENT fetches are in flight, so a single throttle
+			// produces several 429s within the same frame or two. Counting each of
+			// them would jump straight to the 600s cap on the first refusal --
+			// found by the harness, which fires 25 slots at once. While a hold is
+			// already in force the extra refusals are that same event, so only the
+			// first one lengthens it.
+			if( host.realtime < avd_throttle_until )
+			{
+				avd_slot_result[i] = AVD_RESULT_IDLE;
+
+				if( avd_active_count > 0 )
+					avd_active_count--;
+
+				continue;
+			}
+
+			avd_throttle_count++;
+
+			for( k = 1; k < avd_throttle_count && hold < AVD_BACKOFF_MAX; k++ )
+				hold *= 2.0;
+
+			if( hold > AVD_BACKOFF_MAX )
+				hold = AVD_BACKOFF_MAX;
+
+			avd_throttle_until = host.realtime + hold;
+
+			// IDLE, not FAIL: being throttled says nothing about this slot, and the
+			// slot must stay eligible the moment the hold lifts.
+			avd_slot_result[i] = AVD_RESULT_IDLE;
+
+			if( avd_active_count > 0 )
+				avd_active_count--;
+
+			Con_DPrintf( S_WARN "Slayer3D: Steam is rate-limiting us, holding avatar fetches for %.0fs\n", hold );
+			Slayer_Log_Printf( "avatar Frame slot %d: THROTTLED, all slots held %.0fs (event %d)",
+				i, hold, avd_throttle_count );
+		}
 		else if( avd_slot_result[i] == AVD_RESULT_FAIL )
 		{
 			avd_slot_result[i] = AVD_RESULT_IDLE;
 			avd_slot_fail_time[i] = host.realtime;
+			avd_slot_fail_count[i]++;   // arms (and lengthens) the backoff
 			if( avd_active_count > 0 )
 				avd_active_count--;
 			Slayer_Log_Printf( "avatar worker: slot %d download FAILED "
