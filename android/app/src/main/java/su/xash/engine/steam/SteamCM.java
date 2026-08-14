@@ -54,6 +54,13 @@ public final class SteamCM
 	// ClientChangeStatus carries the persona state. Sending it is what makes the
 	// session VISIBLE: see announceOnline().
 	private static final int EMSG_CLIENT_CHANGE_STATUS = 716;
+	// ClientLogOff: leave the session DELIBERATELY. Without it Steam only notices
+	// when the socket dies, and until then the profile keeps showing the game --
+	// see logOff().
+	private static final int EMSG_CLIENT_LOG_OFF = 706;
+	// Rich presence. The "connect" key is what puts a working "Join Game" on the
+	// friends list; see uploadRichPresence().
+	private static final int EMSG_CLIENT_RICH_PRESENCE_UPLOAD = 7501;
 
 	// EPersonaState
 	private static final int PERSONA_ONLINE = 1;
@@ -457,6 +464,127 @@ public final class SteamCM
 	public void clearGamePlayed() throws IOException
 	{
 		send( EMSG_CLIENT_GAMES_PLAYED, new byte[0] );
+
+		// And clear the rich presence with it. The "connect" key is what puts
+		// "Join Game" on a friend's list; leaving it behind offers to join a
+		// server the player has left.
+		clearRichPresence();
+	}
+
+	// -----------------------------------------------------------------------
+	// Rich presence -- "Join Game" on the friends list
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Publish rich presence keys for this session.
+	 *
+	 * WHAT THIS BUYS, and it is the "чтобы друзья могли подключиться" request:
+	 * the friends UI reads the key "connect". When it is present, the friend's
+	 * client shows "Join Game" and, on clicking it, launches the game with that
+	 * string as the command line. So "+connect ip:port" is literally all that is
+	 * needed for a friend to land on the same server.
+	 *
+	 * "steam_display" is the other half of what a friend SEES. Steam looks the
+	 * token up in the app's localisation file; an app that has none (Counter-Strike
+	 * 1.6 has no rich-presence loc) falls back to showing the game name, which is
+	 * what we already get from games_played. So the status text stays where it
+	 * works -- game_extra_info -- and only "connect" is uploaded here.
+	 *
+	 * The payload is binary KeyValues, not protobuf: rich_presence_kv is a bytes
+	 * field carrying a KV blob. Shape (SteamKit KeyValue.RecursiveSaveBinaryToStream):
+	 *   0x00 <name NUL>            begin an object
+	 *   0x01 <key NUL> <value NUL> a string pair
+	 *   0x08                       end the object
+	 */
+	public void uploadRichPresence( String connect ) throws IOException
+	{
+		send( EMSG_CLIENT_RICH_PRESENCE_UPLOAD, new SteamWire.Writer()
+			.bytes( 1, richPresenceKv( connect ))
+			.toBytes() );
+
+		log( "cm: rich presence connect=" + ( connect != null ? connect : "(none)" ));
+	}
+
+	/** Remove the rich presence, so no stale "Join Game" is offered. */
+	public void clearRichPresence() throws IOException
+	{
+		send( EMSG_CLIENT_RICH_PRESENCE_UPLOAD, new SteamWire.Writer()
+			.bytes( 1, richPresenceKv( null ))
+			.toBytes() );
+
+		log( "cm: rich presence cleared" );
+	}
+
+	/**
+	 * The binary KeyValues blob for rich_presence_kv.
+	 *
+	 * PUBLIC so it can be asserted BYTE FOR BYTE from a test, and that is worth
+	 * the exposure: this is the only hand-rolled binary format in the stack that
+	 * Steam never answers, so a malformed blob produces no error anywhere -- the
+	 * friend simply never sees "Join Game", which is indistinguishable from the
+	 * feature not being implemented at all. Nor can it be checked over the wire:
+	 * an anonymous session (the only kind a test can open) is dropped by Steam at
+	 * about three minutes whatever it sends, so a live assertion measures the
+	 * session's lifetime rather than the message.
+	 *
+	 * A null or empty `connect` yields an object with no children, which is how
+	 * the keys are removed.
+	 */
+	public static byte[] richPresenceKv( String connect ) throws IOException
+	{
+		ByteArrayOutputStream kv = new ByteArrayOutputStream( 128 );
+
+		kv.write( 0x00 );                       // Type.None: begin an object
+		writeNulString( kv, "RP" );
+
+		if( connect != null && connect.length() > 0 )
+		{
+			kv.write( 0x01 );                   // Type.String: a key/value pair
+			writeNulString( kv, "connect" );
+			writeNulString( kv, connect );
+		}
+
+		kv.write( 0x08 );                       // Type.End
+		return kv.toByteArray();
+	}
+
+	private static void writeNulString( ByteArrayOutputStream out, String s )
+		throws IOException
+	{
+		out.write( s.getBytes( "UTF-8" ));
+		out.write( 0 );
+	}
+
+	// -----------------------------------------------------------------------
+	// Leaving
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Log off deliberately.
+	 *
+	 * WHY THIS MATTERS: closing the socket is not the same as leaving. Steam keeps
+	 * a session it has not been told about until its own timeout expires, and until
+	 * then the profile still shows the game -- which is exactly the report "сейчас
+	 * показывает что я в игре даже когда не играю". Sending ClientLogOff ends it at
+	 * once.
+	 *
+	 * Best-effort by construction: this runs while the app is going away, so a
+	 * failure here must never propagate.
+	 */
+	public void logOff()
+	{
+		try
+		{
+			if( ws == null || ws.isClosed() )
+				return;
+
+			send( EMSG_CLIENT_LOG_OFF, new byte[0] );
+			log( "cm: logged off" );
+		}
+		catch( IOException e )
+		{
+			log( "cm: log off failed: " + e.getMessage() );
+		}
 	}
 
 	// -----------------------------------------------------------------------
@@ -523,6 +651,12 @@ public final class SteamCM
 
 	public void close()
 	{
+		// TELL STEAM before dropping the socket. A session Steam has not been
+		// told about lingers until its own timeout, and the profile keeps showing
+		// the game for as long as it does -- "показывает что я в игре, даже когда
+		// не играю". logOff() swallows its own errors, so this stays a safe
+		// teardown path.
+		logOff();
 		closeQuietly();
 	}
 
@@ -728,8 +862,7 @@ public final class SteamCM
 
 	/** Dotted-quad to the big-endian int the protocol wants. 0 if unparseable. */
 	public static int ipToInt( String ip )
-	{
-		if( ip == null )
+	{		if( ip == null )
 			return 0;
 
 		String[] parts = ip.split( "\\." );
@@ -757,5 +890,20 @@ public final class SteamCM
 		}
 
 		return v;
+	}
+
+	/**
+	 * The inverse of ipToInt, for building the rich-presence "connect" string.
+	 *
+	 * Deliberately here rather than in the caller: the byte order is a property of
+	 * this protocol (big-endian, most significant octet first, matching what
+	 * ipToInt packs), and having the two directions side by side is what keeps
+	 * them from disagreeing. A mismatch would produce a "Join Game" that quietly
+	 * sends the friend to a mirrored address.
+	 */
+	public static String ipToString( int ip )
+	{
+		return (( ip >> 24 ) & 0xFF ) + "." + (( ip >> 16 ) & 0xFF ) + "."
+			+ (( ip >> 8 ) & 0xFF ) + "." + ( ip & 0xFF );
 	}
 }

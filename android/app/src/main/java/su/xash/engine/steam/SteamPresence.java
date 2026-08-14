@@ -276,6 +276,40 @@ public final class SteamPresence
 
 				// Nothing to say and nothing to keep alive: idle out so a
 				// finished match does not leave a thread and a socket behind.
+				//
+				// THE ORDER MATTERS. This branch is only correct when Steam has
+				// already been told we stopped, and "cm == null" is not the same
+				// thing: a session that dropped (Steam timeout, a network blip)
+				// while the player was still in a game leaves Steam believing the
+				// game is running. Idling out here would then leave that status on
+				// the profile until something else happened to clear it -- part of
+				// "показывает что я в игре, даже когда не играю".
+				//
+				// So a pending stop reconnects once, purely to say it.
+				if( !playing && sentPlaying && ( cm == null || !cm.isConnected() ))
+				{
+					try
+					{
+						note( "reconnecting once to clear a status Steam still believes" );
+						cm = connect();
+						sentPlaying = false;
+						cm.clearGamePlayed();
+						note( "status cleared" );
+						cm.close();
+						cm = null;
+					}
+					catch( Exception e )
+					{
+						// Best effort: if Steam cannot be reached, its own session
+						// timeout is the fallback. Do not spin on it.
+						note( "could not clear the status: " + e.getMessage() );
+						cm = null;
+						sentPlaying = false;
+					}
+
+					continue;
+				}
+
 				if( !playing && ( cm == null || !cm.isConnected() ))
 				{
 					synchronized( lock )
@@ -327,6 +361,22 @@ public final class SteamPresence
 								note( "status set: appid " + appid
 									+ ( extra != null ? " \"" + extra + "\"" : "" )
 									+ ( ip != 0 ? " @ " + port : "" ));
+
+								// "Join Game" for friends. The friends UI reads
+								// the rich-presence key "connect" and launches the
+								// game with that string, so this one line is the
+								// whole feature -- but ONLY with a real server
+								// address: an empty connect key offers a join that
+								// goes nowhere.
+								if( ip != 0 && port > 0 )
+								{
+									cm.uploadRichPresence( "+connect "
+										+ SteamCM.ipToString( ip ) + ":" + port );
+								}
+								else
+								{
+									cm.clearRichPresence();
+								}
 							}
 							else
 							{

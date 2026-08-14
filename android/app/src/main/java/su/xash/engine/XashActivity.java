@@ -50,6 +50,27 @@ public class XashActivity extends SDLActivity {
 
 	@Override
 	public void onDestroy() {
+		// TELL STEAM WE ARE LEAVING, BEFORE System.exit BELOW.
+		//
+		// This is the other half of "показывает что я в игре, даже когда не играю".
+		// The engine's own shutdown path (CL_Shutdown -> Slayer_SteamPresence_Shutdown)
+		// only runs on a clean quit. Android back, the task switcher, or the system
+		// reclaiming the activity all reach HERE, and then the System.exit(0) below
+		// takes the process -- with it the presence thread and its socket -- without a
+		// word to Steam. Steam then holds the session until its own timeout expires and
+		// the profile keeps showing the game for minutes afterwards.
+		//
+		// Best-effort and bounded: shutdown() joins its worker for at most 3 s, and the
+		// whole thing is wrapped because nothing here may stop the process from exiting.
+		try {
+			su.xash.engine.steam.SteamPresence p = su.xash.engine.steam.SteamPresence.peek();
+
+			if (p != null)
+				p.shutdown();
+		} catch (Throwable e) {
+			Log.e(TAG, "onDestroy: presence shutdown: " + e);
+		}
+
 		super.onDestroy();
 
 		// Now that we don't exit from native code, we need to exit here, resetting
