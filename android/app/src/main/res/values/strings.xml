@@ -100,6 +100,7 @@
 	<string name="steam_apikey">Steam Web API key (optional)</string>
 	<string name="steam_apikey_summary">Optional — speeds up bulk avatar loading. Avatars already load without it from public profiles. Free key: steamcommunity.com/dev/apikey</string>
 	<string name="steam_apikey_unset">Not set — avatars load from public profiles</string>
+	<string name="steam_apikey_malformed">Invalid: %1$d characters, expected 32. Steam refuses it (HTTP 403); avatars still load from public profiles. Get a key at steamcommunity.com/dev/apikey or clear this field.</string>
 	<string name="steam_advertise">Show my Steam avatar to others</string>
 	<string name="steam_advertise_summary">Sends your real SteamID to servers so other players see your avatar. Turn off if a server refuses the connection.</string>
 	<!-- Steam presence (playing status) -->

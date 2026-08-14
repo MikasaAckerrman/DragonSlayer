@@ -71,6 +71,7 @@
 	<string name="steam_apikey">Ключ Steam Web API (необязательно)</string>
 	<string name="steam_apikey_summary">Необязательно — ускоряет массовую загрузку. Аватарки и так грузятся из публичных профилей без него. Бесплатный ключ: steamcommunity.com/dev/apikey</string>
 	<string name="steam_apikey_unset">Не задан — аватарки грузятся из публичных профилей</string>
+	<string name="steam_apikey_malformed">Неверный: %1$d символов, нужно 32. Steam его отклоняет (HTTP 403); аватарки всё равно грузятся из публичных профилей. Возьмите ключ на steamcommunity.com/dev/apikey или очистите поле.</string>
 	<string name="steam_advertise">Показывать мою аватарку другим</string>
 	<string name="game_path_restart_required">Нужен перезапуск приложения</string>
 	<string name="game_path_invalid_folder">В выбранной папке должна быть подпапка valve/ или cstrike/</string>

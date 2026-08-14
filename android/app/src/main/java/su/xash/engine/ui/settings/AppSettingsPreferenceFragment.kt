@@ -122,11 +122,20 @@ class AppSettingsPreferenceFragment() : PreferenceFragmentCompat() {
 		}
 
 		val key = prefs.getString("steam_apikey", null)
-		findPreference<Preference>("steam_apikey")?.summary = if (key.isNullOrEmpty()) {
-			getString(R.string.steam_apikey_unset)
-		} else {
+		findPreference<Preference>("steam_apikey")?.summary = when {
+			key.isNullOrEmpty() -> getString(R.string.steam_apikey_unset)
+
+			// SAY SO WHEN THE KEY CANNOT WORK. A Steam Web API key is exactly 32 hex
+			// characters; the one on the reporting device is 64 (the same key twice, by
+			// the look of it) and earned an HTTP 403 on every request for days. The
+			// engine now refuses a malformed key before spending a request, but that
+			// message only reaches the game console -- this is the screen where the
+			// value is entered, so this is where it has to be visible.
+			key.length != 32 || !key.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' } ->
+				getString(R.string.steam_apikey_malformed, key.length)
+
 			// never show the key itself
-			"•".repeat(8) + key.takeLast(4)
+			else -> "•".repeat(8) + key.takeLast(4)
 		}
 
 		// The presence switch is only meaningful with a token, which the OpenID
