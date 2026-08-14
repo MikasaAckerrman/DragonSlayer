@@ -27,6 +27,7 @@ GNU General Public License for more details.
 #include "cl_steam_login.h"
 #include "cl_steam_presence_slayer.h"
 #include "cl_slayer_toast.h"
+#include "cl_slayer_conspy.h"   // Slayer3D: periodic console-spam table into the log
 #include "vid_common.h"
 #include "pm_local.h"
 #include "multi_emulator.h"
@@ -3747,6 +3748,10 @@ void Host_ClientFrame( void )
 	// tell Steam whether we are in a game; sends only on a change, and never
 	// blocks -- the CM session lives on its own thread in the launcher
 	Slayer_SteamPresence_Frame ();
+
+	// dump the console-spam table into the log every few minutes, so a log sent
+	// with a "спам в консоли" report already names the offender
+	Slayer_ConSpy_Frame ();
 }
 
 //============================================================================

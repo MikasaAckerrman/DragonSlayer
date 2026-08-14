@@ -308,6 +308,26 @@ static qboolean        slayer_local_died_at_hp1 = false;
 // server keeps you dead.
 static double          slayer_death_shown_at = 0.0;
 
+// Have we been ALIVE at least once since joining the current team?
+//
+// WHY THIS EXISTS: "когда захожу с спектров в другие команды скорборд
+// появляется". Joining a team is indistinguishable from dying on the two signals
+// the death test uses -- the team is already CT or T, and health is still 0
+// because the spawn has not happened yet. So the board treated team selection as
+// a death, which is both wrong and badly timed: that is the moment the player is
+// picking a spawn, not reading a table.
+//
+// A death requires a life to have ended, so the missing piece is "was there a
+// life". Kept per team change rather than per round: joining a team is exactly
+// the transition where "dead" and "not yet spawned" have to be told apart, and a
+// respawn inside the round already reads as alive on health alone.
+static qboolean        slayer_spawned_since_team = false;
+
+// The team we last saw for the local player, so a CHANGE can be detected. -1 is
+// "unknown yet", which is not any real team id, so the first ScoreInfo counts as
+// a change and arms the gate above.
+static int             slayer_local_team_seen = -1;
+
 // Avatar state: SteamID64 per player slot and cached texture handles
 static uint64_t        slayer_steamid64[MAX_CLIENTS];
 static int             slayer_avatar_tex[MAX_CLIENTS]; // 0 = not tried, >0 = loaded, -1 = failed
@@ -1377,6 +1397,11 @@ void Slayer_Scoreboard_Reset( void )
 	slayer_death_prev = false;   // a new map is not "just respawned"
 	slayer_local_died_at_hp1 = false;   // nor is it "just died"
 	slayer_death_shown_at = 0.0;
+	// A new map starts before any spawn, so the death view stays disarmed until
+	// one happens -- same reason as joining a team. -1 makes the first ScoreInfo
+	// count as a team change.
+	slayer_spawned_since_team = false;
+	slayer_local_team_seen = -1;
 	slayer_status_pending = false;
 	slayer_status_next_time = 0.0;   // allow immediate re-fetch on next connect
 	slayer_status_deadline = 0.0;
@@ -1399,6 +1424,13 @@ void Slayer_OnHealthUpdate( int hp )
 {
 	if( cl.playernum >= 0 && cl.playernum < MAX_CLIENTS )
 		slayer_scores[cl.playernum].health = hp;
+
+	// A life has begun. This is what separates "dead" from "picked a team and has
+	// not spawned yet": both read as health 0 on a CT/T team, and only this says
+	// there was ever a life to lose. >= 2 rather than > 0 for the same reason the
+	// death test uses it -- a spectator is forced to health 1.
+	if( hp >= 2 )
+		slayer_spawned_since_team = true;
 
 	// The DeathMsg mark is only meaningful while health sits at the ambiguous 1.
 	// Clearing it here rather than on a timer is what keeps it honest: a respawn
@@ -1456,6 +1488,22 @@ void Slayer_OnScoreInfo( const byte *pbuf, int iSize )
 	slayer_scores[slot].deaths    = deaths;
 	slayer_scores[slot].team_id   = team_id;
 	slayer_scores[slot].connected = 1;
+
+	// A team CHANGE for the local player disarms the death board until a spawn
+	// actually happens. This is the "спектры -> команда" case: from here on the
+	// team is CT/T while health is still 0, which is indistinguishable from being
+	// dead on the signals the death test has. See slayer_spawned_since_team.
+	//
+	// Only on a change, not on every ScoreInfo: the server re-sends this message
+	// during a round, and clearing the flag each time would hide the board for a
+	// death that follows one.
+	if( slot == cl.playernum && team_id != slayer_local_team_seen )
+	{
+		slayer_local_team_seen = team_id;
+		slayer_spawned_since_team = false;
+		Slayer_Log_Printf( "death-board: local team -> %d, waiting for a spawn before the death view arms",
+			team_id );
+	}
 
 	// Clear stale health when a player switches off CT/T (e.g. moves to spec).
 	// HP is only meaningful for in-round CT/T players; without this, a value
@@ -1919,6 +1967,13 @@ static qboolean SB_LocalDeadNow( void )
 	myteam = slayer_scores[cl.playernum].team_id;
 
 	if( myteam != SLAYER_TEAM_CT && myteam != SLAYER_TEAM_T )
+		return false;
+
+	// Joined a team but never spawned: THIS IS NOT DEATH. Health is 0 here and the
+	// team is already CT/T, so every signal below reads it as a death -- which is
+	// "когда захожу с спектров в другие команды скорборд появляется". Checked
+	// before the health cases precisely because health cannot tell the two apart.
+	if( !slayer_spawned_since_team )
 		return false;
 
 	hp = cl.local.health;

@@ -331,6 +331,28 @@ public class XashActivity extends SDLActivity {
 				return 2;
 			}
 
+			// A profile that was never SET UP. Steam answers HTTP 200 with a short
+			// XML carrying only steamID64 and a privacyMessage -- no avatar tags at
+			// all, and no privacyState either. MEASURED against the reporting
+			// device's own session: of the 8 players in the last map, 4 answered
+			// exactly this way.
+			//
+			// WHY IT NEEDS ITS OWN ANSWER: falling through to the "no avatar URL"
+			// return below reports an ordinary failure, which arms the 60-second
+			// retry -- and this player will never grow an avatar, so the retry runs
+			// for the rest of the session. That is a large part of the download
+			// storm in the log (63 requests, 30 workers, 30 failures in one map).
+			// GONE means "not again this session", which here is simply true.
+			if( xml.indexOf( "<privacyMessage>" ) != -1
+			 && xml.indexOf( "<avatarFull>" ) == -1
+			 && xml.indexOf( "<avatarMedium>" ) == -1 )
+			{
+				SlayerLog.log( "downloadAvatar",
+					steamid64 + " GONE, profile never set up (no avatar in XML, "
+					+ xml.length() + " chars)" );
+				return 5;   // AVD_RESULT_GONE
+			}
+
 			// Phase 2 - Parse XML for avatar URL.
 			// Prefer avatarFull (184x184): the scoreboard now draws icons at
 			// roughly three glyph heights, and avatarMedium is only 64x64, so it
