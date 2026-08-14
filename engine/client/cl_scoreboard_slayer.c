@@ -657,7 +657,8 @@ void Slayer_ParseStatusLine( const char *line )
 		steam_x = steam_x * 10 + ( *p - '0' );
 		p++;
 	}
-	(void)steam_x;
+	// X is the Steam universe, and it is now CHECKED rather than discarded -- see
+	// the validity test below, which is what stops us chasing emulator ids.
 
 	if( *p != ':' )
 		return;
@@ -681,6 +682,40 @@ void Slayer_ParseStatusLine( const char *line )
 	{
 		steam_z = steam_z * 10 + ( *p - '0' );
 		p++;
+	}
+
+	// AN ID THAT CANNOT BE REAL IS NOT WORTH A REQUEST.
+	//
+	// Measured on the reporting device, one map, 21 players: 52 of 61 status rows
+	// said STEAM_5, and every single one of those SteamID64s answered with Steam's
+	// HTML error page -- no such account. Only two rows were real accounts with
+	// avatars. Yet all of them were queued, so the download workers spent the map
+	// fetching profiles that do not exist, and the two real ones lost their turn
+	// to the concurrency limit.
+	//
+	// Two things make an id impossible, and both come straight from the format:
+	//
+	//   * the universe. STEAM_X: X is the Steam universe -- 0 (unspecified, what
+	//     GoldSrc prints) or 1 (public). There is no universe 5; RevEmu and the
+	//     other emulators put their own number there, which is precisely how they
+	//     can be told apart from a real Steam ticket.
+	//   * Y. It is the LOW BIT of the account id, so it is 0 or 1 and nothing
+	//     else. The device's own row reads STEAM_0:4:477833477 -- Y=4 -- so even
+	//     the line describing US is fabricated, just wearing universe 0.
+	//
+	// Rejected rows are logged with the raw text: this is the one place that can
+	// explain "аватарки не грузятся" without guessing, and the reason is a
+	// property of the server, not of us.
+	if( ( steam_x != 0 && steam_x != 1 ) || steam_y > 1 )
+	{
+		if( slayer_steam_reject_count < 8 )
+		{
+			slayer_steam_reject_count++;
+			Slayer_Log_Printf( "status: slot %d has a fabricated STEAM_%d:%d:%u "
+				"(emulated server, no Steam account behind it) — no avatar, not requesting",
+				slot, steam_x, steam_y, steam_z );
+		}
+		return;
 	}
 
 	// Compute SteamID64

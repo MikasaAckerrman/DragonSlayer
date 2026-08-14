@@ -255,24 +255,64 @@ void Slayer_ConSpy_QuietStatus( double seconds )
 // Is this line part of a `status` reply?
 //
 // Matched by SHAPE, not by content, because the table is printed by the server
-// and its exact columns differ between engines and mods. Three shapes cover it:
+// and its exact columns differ between engines and mods.
 //
-//   "map: de_dust2"                     -- the header line
-//   "# score ping dev  lastmsg ..."     -- the column header
-//   "#  3   0   Bot   n/a ..."          -- a player row
+// WIDENED after reading a real reply from the device transcript. The old version
+// caught only the '#' rows and a "map: " prefix, and MEASURED against the actual
+// server output that left five lines per reply on screen -- at 24 replies in 132
+// seconds that is 120 visible lines, the bulk of the reported spam:
 //
-// The player row is the one that needs care: a chat message can start with '#'.
-// So a row must be '#' followed by whitespace or a digit, which chat almost
-// never is, and this only applies inside a window we opened ourselves.
+//   hostname:  .::Наши Люди 16+::. [Public+night VIP] ©
+//   version :  48/1.1.2.7/Stdio 3937 secure  (10)
+//   tcp/ip  :  62.122.215.127:27015
+//   map     :  de_kabul at: 0 x, 0 y, 0 z
+//   players :  20 active (32 max)
+//   #      name userid uniqueid frag time ping loss adr     <- was caught
+//   # 1 "SHYMKENT" 812 STEAM_5:0:12921341   4 02:52  116    <- was caught
+//   20 users
+//
+// Note "map     :" -- the columns are space-padded to a fixed width, so a
+// "map: " prefix test never matched. That is why the old rule looked right and
+// did nothing.
 static qboolean Slayer_ConSpy_LooksLikeStatus( const char *msg )
 {
+	static const char *headers[] = { "hostname", "version", "tcp/ip", "map",
+	                                 "players", "edicts", NULL };
 	const char *p = msg;
+	int         i;
 
 	while( *p == ' ' || *p == '\t' )
 		p++;
 
-	if( !Q_strnicmp( p, "map: ", 5 ))
-		return true;
+	// "<keyword><spaces>:" -- the header block. Keyed on a known keyword rather
+	// than "anything with a colon", or chat like "lol: ok" would vanish.
+	for( i = 0; headers[i]; i++ )
+	{
+		size_t n = Q_strlen( headers[i] );
+
+		if( !Q_strnicmp( p, headers[i], n ))
+		{
+			const char *q = p + n;
+
+			while( *q == ' ' || *q == '\t' )
+				q++;
+			if( *q == ':' )
+				return true;
+		}
+	}
+
+	// "20 users" / "1 user" -- the trailer.
+	if( *p >= '0' && *p <= '9' )
+	{
+		const char *q = p;
+
+		while( *q >= '0' && *q <= '9' )
+			q++;
+		while( *q == ' ' || *q == '\t' )
+			q++;
+		if( !Q_strnicmp( q, "user", 4 ))
+			return true;
+	}
 
 	if( *p != '#' )
 		return false;
