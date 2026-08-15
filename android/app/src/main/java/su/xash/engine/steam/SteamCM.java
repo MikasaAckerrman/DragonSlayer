@@ -1426,11 +1426,168 @@ public final class SteamCM
 			}
 
 			log( "cm: got an ownership ticket, " + ticket.length + " bytes" );
+			logOwnershipTicket( appId, ticket );
 			return ticket;
 		}
 
 		log( "cm: no ownership ticket within the timeout" );
 		return null;
+	}
+
+	/**
+	 * Read back the app-ownership ticket we just received and say, in the log,
+	 * whether it actually proves ownership of the app we asked about.
+	 *
+	 * WHY THIS EXISTS: a server validates a real Steam ticket by asking Steam,
+	 * and Steam refuses a ticket for an app the account does not own. On the
+	 * emulated servers we tested, other players with genuine tickets get a real
+	 * STEAM_0:1 id while we get one derived from our IP -- the exact symptom of a
+	 * ticket Steam declined. The ownership ticket is the one piece of evidence we
+	 * already hold in memory that can confirm or kill the "does not own CS 1.6"
+	 * hypothesis, so it is parsed rather than guessed at.
+	 *
+	 * The ticket is NOT protobuf. Its layout (steam3 app-ownership ticket) is,
+	 * little-endian throughout:
+	 *   u32 ownershipTicketLength  -- counts from this field up to the signature
+	 *   u32 version
+	 *   u64 steamID
+	 *   u32 appID
+	 *   u32 externalIP, u32 internalIP, u32 flags, u32 gen date, u32 expiry
+	 *   u16 licenseCount, u32 license[licenseCount]
+	 *   u16 dlcCount, then per dlc: u32 appID, u16 n, u32 license[n]
+	 *   u16 reserved, then 128-byte RSA signature
+	 *
+	 * Parsing is defensive: a Steam emulator could hand back something shorter,
+	 * and a malformed ticket must produce a clear log line, never an exception
+	 * that aborts the connect.
+	 */
+	private void logOwnershipTicket( int wantAppId, byte[] t )
+	{
+		long[] parsed = parseOwnershipTicket( t );
+
+		if( parsed == null )
+		{
+			log( "cm: ownership ticket layout unexpected (total " + t.length
+				+ ") -- not decoding, raw head " + hexHead( t, 24 ));
+			return;
+		}
+
+		long appId    = parsed[0];
+		long steamId  = parsed[1];
+		long version  = parsed[2];
+		long licCount = parsed[3];
+		boolean ownsWanted = ( appId == wantAppId );
+
+		StringBuilder lic = new StringBuilder();
+		for( int i = 0; i < licCount; i++ )
+			lic.append( i == 0 ? "" : "," ).append( parsed[4 + i] );
+
+		log( "cm: OWNERSHIP for app " + appId + " (asked " + wantAppId + "), "
+			+ "steamID " + steamId + ", version " + version + ", "
+			+ licCount + " license(s) [" + lic + "] -- "
+			+ ( ownsWanted
+				? "ticket IS for the requested app"
+				: "*** ticket is for a DIFFERENT app -> Steam would refuse it "
+				  + "for app " + wantAppId ));
+	}
+
+	/**
+	 * Pure parse of a steam3 app-ownership ticket. Returns
+	 *   { appId, steamId, version, licenseCount, license0, license1, ... }
+	 * or null when the bytes do not match the layout. No logging, no side
+	 * effects, no exceptions escaping -- so it can be exercised directly by a
+	 * test that builds ticket bytes and checks the fields come back at the right
+	 * offsets. The layout (little-endian) is:
+	 *   u32 ownershipTicketLength  -- from this field up to the signature
+	 *   u32 version
+	 *   u64 steamID
+	 *   u32 appID
+	 *   u32 externalIP, internalIP, flags, gen date, expiry  (5 * u32, skipped)
+	 *   u16 licenseCount, u32 license[licenseCount]
+	 *   ... dlc list and 128-byte signature follow, not needed here
+	 */
+	static long[] parseOwnershipTicket( byte[] t )
+	{
+		try
+		{
+			if( t == null || t.length < 4 )
+				return null;
+
+			int[] off = { 0 };
+			long ownLen = readLE32u( t, off );
+
+			// The length field points at the signature start. A real ticket has
+			// either a 128-byte signature after it or (rarely) none. Any other
+			// trailing size means the layout is not what we expect, and every
+			// field below would be read from the wrong offset -- reject instead of
+			// returning numbers that look plausible but are garbage.
+			long trailing = t.length - ownLen;
+			if( ownLen < 42 || ownLen > t.length || ( trailing != 0 && trailing != 128 ))
+				return null;
+
+			long version = readLE32u( t, off );
+			long steamId = readLE64u( t, off );
+			long appId   = readLE32u( t, off );
+
+			off[0] += 4 * 5;   // externalIP, internalIP, flags, gen, expiry
+
+			if( off[0] + 2 > t.length )
+				return null;
+
+			int licCount = readLE16u( t, off );
+
+			// A license count that runs past the ticket means we mis-read: bail
+			// rather than index out of bounds.
+			if( licCount < 0 || off[0] + licCount * 4 > t.length )
+				return null;
+
+			long[] result = new long[4 + licCount];
+			result[0] = appId;
+			result[1] = steamId;
+			result[2] = version;
+			result[3] = licCount;
+
+			for( int i = 0; i < licCount; i++ )
+				result[4 + i] = readLE32u( t, off );
+
+			return result;
+		}
+		catch( Throwable e )
+		{
+			return null;
+		}
+	}
+
+	private static long readLE32u( byte[] b, int[] off )
+	{
+		int o = off[0];
+		off[0] += 4;
+		return  ( b[o]   & 0xFFL )
+			| (( b[o+1] & 0xFFL ) << 8 )
+			| (( b[o+2] & 0xFFL ) << 16 )
+			| (( b[o+3] & 0xFFL ) << 24 );
+	}
+
+	private static int readLE16u( byte[] b, int[] off )
+	{
+		int o = off[0];
+		off[0] += 2;
+		return ( b[o] & 0xFF ) | (( b[o+1] & 0xFF ) << 8 );
+	}
+
+	private static long readLE64u( byte[] b, int[] off )
+	{
+		long lo = readLE32u( b, off );
+		long hi = readLE32u( b, off );
+		return lo | ( hi << 32 );
+	}
+
+	private static String hexHead( byte[] b, int n )
+	{
+		StringBuilder s = new StringBuilder();
+		for( int i = 0; i < n && i < b.length; i++ )
+			s.append( String.format( "%02x", b[i] & 0xFF ));
+		return s.toString();
 	}
 
 	public boolean isConnected()
