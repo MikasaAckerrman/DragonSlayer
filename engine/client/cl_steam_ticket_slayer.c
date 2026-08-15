@@ -65,8 +65,11 @@ void Slayer_SteamTicket_Init( void )
 	if( !sticket_class )
 		return;
 
+	// (III)[B -- timeout, server ip, server port. The address is passed so the
+	// Java side can tell Steam which server we are joining BEFORE asking for the
+	// ticket; Steam pairs a validation request with that announcement.
 	sticket_fetch = (*env)->GetStaticMethodID( env, sticket_class,
-		"steamFetchAuthTicket", "(I)[B" );
+		"steamFetchAuthTicket", "(III)[B" );
 	sticket_steamid = (*env)->GetStaticMethodID( env, sticket_class,
 		"steamAuthTicketSteamId", "()J" );
 
@@ -86,7 +89,7 @@ void Slayer_SteamTicket_Init( void )
 }
 
 int Slayer_SteamTicket_Fetch( byte *buf, int buf_size, int timeout_ms,
-	uint64_t *out_steamid )
+	uint64_t *out_steamid, uint32_t server_ip, int server_port )
 {
 	JNIEnv    *env;
 	jbyteArray arr;
@@ -113,7 +116,7 @@ int Slayer_SteamTicket_Fetch( byte *buf, int buf_size, int timeout_ms,
 		return 0;
 
 	arr = (jbyteArray)(*env)->CallStaticObjectMethod( env, sticket_class,
-		sticket_fetch, (jint)timeout_ms );
+		sticket_fetch, (jint)timeout_ms, (jint)server_ip, (jint)server_port );
 
 	if( (*env)->ExceptionCheck( env ))
 	{
@@ -182,9 +185,10 @@ void Slayer_SteamTicket_Init( void )
 }
 
 int Slayer_SteamTicket_Fetch( byte *buf, int buf_size, int timeout_ms,
-	uint64_t *out_steamid )
+	uint64_t *out_steamid, uint32_t server_ip, int server_port )
 {
 	(void)buf; (void)buf_size; (void)timeout_ms;
+	(void)server_ip; (void)server_port;
 
 	if( out_steamid )
 		*out_steamid = 0;

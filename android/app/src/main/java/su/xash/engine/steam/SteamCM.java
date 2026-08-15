@@ -81,6 +81,15 @@ public final class SteamCM
 	private static final int EMSG_CLIENT_AUTH_LIST = 5432;
 	private static final int EMSG_CLIENT_AUTH_LIST_ACK = 5575;
 
+	// ClientTicketAuthComplete. THE ONLY PLACE STEAM TELLS US WHAT A GAME SERVER
+	// GOT WHEN IT CHECKED OUR TICKET.
+	//
+	// Steam sends this unsolicited after a server validates (or fails to validate)
+	// a ticket we registered. Its eauth_session_response is the answer we have been
+	// guessing at for days: whether the server asked at all, and if it did, exactly
+	// why Steam said no. Until now the read loop dropped it silently.
+	private static final int EMSG_CLIENT_TICKET_AUTH_COMPLETE = 5429;
+
 	// ClientRequestFriendData / ClientPersonaState. THE AVATAR PATH THAT DOES NOT
 	// GO THROUGH A WEB PAGE.
 	//
@@ -710,7 +719,84 @@ public final class SteamCM
 		if( m.emsg == EMSG_CLIENT_GAME_CONNECT_TOKENS )
 			storeConnectTokens( m.body );
 
+		// Same reasoning, and this one is the diagnosis: it arrives whenever a game
+		// server has asked Steam about a ticket of ours.
+		if( m.emsg == EMSG_CLIENT_TICKET_AUTH_COMPLETE )
+			logTicketAuthComplete( m.body );
+
 		return true;
+	}
+
+	/**
+	 * Steam's verdict on a ticket a game server asked about.
+	 *
+	 * WHY THIS MATTERS MORE THAN IT LOOKS: for days the only evidence available was
+	 * what the server ANNOUNCED, which conflates two completely different cases --
+	 * "the server asked Steam and Steam refused" versus "the server never asked".
+	 * Both end up as a fabricated SteamID in the status list, and no amount of
+	 * staring at that list can tell them apart. This message is present only in the
+	 * first case, and it names the reason.
+	 */
+	private void logTicketAuthComplete( byte[] body )
+	{
+		long steamid = 0, gameid = 0;
+		int response = -1, state = -1, crc = 0, seq = 0;
+
+		try
+		{
+			SteamWire.Reader r = new SteamWire.Reader( body );
+
+			while( r.next() )
+			{
+				switch( r.field() )
+				{
+				case 1: steamid = r.fixed64(); break;
+				case 2: gameid = r.fixed64(); break;
+				case 3: state = r.int32(); break;
+				case 4: response = r.int32(); break;
+				case 6: crc = r.int32(); break;
+				case 7: seq = r.int32(); break;
+				default: r.skip(); break;
+				}
+			}
+		}
+		catch( Throwable e )
+		{
+			log( "cm: ticket auth complete, but could not be parsed: " + e );
+			return;
+		}
+
+		log( "cm: TICKET CHECKED BY A SERVER -> " + authSessionResponseName( response )
+			+ " (response " + response + ", state " + state + ")"
+			+ " steamid " + steamid + " gameid " + gameid
+			+ " crc " + crc + " seq " + seq
+			+ ( acceptedTicketCrcs.contains( Long.valueOf( crc & 0xFFFFFFFFL ))
+				? " [our ticket]" : " [crc we never registered]" ));
+	}
+
+	/**
+	 * EAuthSessionResponse, spelled out.
+	 *
+	 * The numbers alone would send the next reader digging through SteamKit, and
+	 * the whole point of this log line is to end an argument on the spot.
+	 */
+	private static String authSessionResponseName( int r )
+	{
+		switch( r )
+		{
+		case 0:  return "OK";
+		case 1:  return "UserNotConnectedToSteam";
+		case 2:  return "NoLicenseOrExpired";
+		case 3:  return "VACBanned";
+		case 4:  return "LoggedInElseWhere";
+		case 5:  return "VACCheckTimedOut";
+		case 6:  return "AuthTicketCanceled";
+		case 7:  return "AuthTicketInvalidAlreadyUsed";
+		case 8:  return "AuthTicketInvalid";
+		case 9:  return "PublisherIssuedBan";
+		case 10: return "AuthTicketNetworkIdentityFailure";
+		default: return "unknown(" + r + ")";
+		}
 	}
 
 	/**

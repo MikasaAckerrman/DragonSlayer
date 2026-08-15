@@ -61,6 +61,6 @@ launcher). 0 is the ordinary case, not an error: the caller then uses the
 emulated ticket, exactly as before.
 */
 int Slayer_SteamTicket_Fetch( byte *buf, int buf_size, int timeout_ms,
-	uint64_t *out_steamid );
+	uint64_t *out_steamid, uint32_t server_ip, int server_port );
 
 #endif // CL_STEAM_TICKET_SLAYER_H

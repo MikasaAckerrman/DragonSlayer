@@ -941,7 +941,7 @@ public class XashActivity extends SDLActivity {
 	 *         account does not own the game, or Steam refused) -- the engine then
 	 *         falls back to the emulated ticket it has always used
 	 */
-	public static byte[] steamFetchAuthTicket( int timeoutMs )
+	public static byte[] steamFetchAuthTicket( int timeoutMs, int serverIp, int serverPort )
 	{
 		android.content.Context ctx = SDLActivity.getContext();
 
@@ -956,7 +956,8 @@ public class XashActivity extends SDLActivity {
 		try
 		{
 			su.xash.engine.steam.SteamTicket.Result r =
-				su.xash.engine.steam.SteamTicket.fetch( ctx, timeoutMs );
+				su.xash.engine.steam.SteamTicket.fetch( ctx, timeoutMs,
+					serverIp, serverPort );
 
 			if( r == null )
 				return null;

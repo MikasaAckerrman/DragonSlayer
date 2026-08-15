@@ -1088,7 +1088,7 @@ static void CL_GetCDKey( char *protinfo, size_t protinfosize )
 	Info_SetValueForKey( protinfo, "cdkey", key, protinfosize );
 }
 
-static void CL_WriteSteamTicket( sizebuf_t *send )
+static void CL_WriteSteamTicket( sizebuf_t *send, const netadr_t *server )
 {
 	string key;
 	netadr_t adr = { .type = NA_LOOPBACK, }; // goldsrc servers don't get unique key as xashid isn't sent raw to them
@@ -1147,8 +1147,32 @@ static void CL_WriteSteamTicket( sizebuf_t *send )
 	else if( !Q_stricmp( cl_ticket_generator.string, "steamcm" ))
 	{
 		uint64_t real_id = 0;
-		int      real_len = Slayer_SteamTicket_Fetch( (byte *)buf, sizeof( buf ),
-			(int)( slayer_steam_ticket_timeout.value * 1000.0f ), &real_id );
+		uint32_t server_ip = 0;
+		int      server_port = 0;
+		int      real_len;
+
+		// WHERE WE ARE GOING, handed down so Steam can be told before the ticket is
+		// requested. Steam pairs a server's validation request with the client's own
+		// announcement of that server, and ours went out 25 seconds too late.
+		//
+		// Only a real IPv4 peer is worth announcing: a loopback or otherwise
+		// address-less connect has no pairing to describe, and sending a bogus one
+		// would be worse than sending none.
+		if( server && server->type == NA_IP )
+		{
+			server_ip = ( server->ip[0] << 24 ) | ( server->ip[1] << 16 )
+				| ( server->ip[2] << 8 ) | server->ip[3];
+			server_port = MSG_BigShort( server->port );
+		}
+
+		real_len = Slayer_SteamTicket_Fetch( (byte *)buf, sizeof( buf ),
+			(int)( slayer_steam_ticket_timeout.value * 1000.0f ), &real_id,
+			server_ip, server_port );
+
+		Slayer_Log_Printf( "ticket: asked for a real ticket for %u.%u.%u.%u:%d -> %d bytes, steamid %llu",
+			( server_ip >> 24 ) & 0xFF, ( server_ip >> 16 ) & 0xFF,
+			( server_ip >> 8 ) & 0xFF, server_ip & 0xFF, server_port,
+			real_len, (unsigned long long)real_id );
 
 		if( real_len > 0 )
 		{
@@ -1302,7 +1326,7 @@ void CL_SendGoldSrcConnectPacket( netadr_t adr, int challenge, const void *ticke
 		PROTOCOL_GOLDSRC_VERSION, challenge, protinfo, cls.userinfo );
 	MSG_SeekToBit( &send, -8, SEEK_CUR ); // rewrite null terminator
 	if( ticket == NULL )
-		CL_WriteSteamTicket( &send );
+		CL_WriteSteamTicket( &send, &adr );
 	else
 		MSG_WriteBytes( &send, ticket, ticketlen );
 

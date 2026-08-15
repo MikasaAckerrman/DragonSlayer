@@ -94,7 +94,8 @@ public final class SteamTicket
 	 * The registration must OUTLIVE this call, so the work goes to the presence
 	 * worker instead of opening a second door onto the same account.
 	 */
-	public static Result fetch( Context ctx, int timeoutMs )
+	public static Result fetch( Context ctx, int timeoutMs, final int serverIp,
+		final int serverPort )
 	{
 		final byte[][] out = new byte[1][];
 		final long[] id = new long[1];
@@ -105,6 +106,44 @@ public final class SteamTicket
 			{
 				public void run( SteamCM cm ) throws java.io.IOException
 				{
+					// TELL STEAM WHERE WE ARE GOING *FIRST*.
+					//
+					// A real CS 1.6 client announces the server it is joining before
+					// connecting, and Steam then expects a validation request about
+					// that pairing. Our order was reversed, measurably: the ticket
+					// was registered at 14:21:59 and the "playing on <server>"
+					// status only went out at 14:22:24 -- 25 seconds later, long
+					// after the server had asked Steam and been told no.
+					//
+					// Non-fatal on purpose. This is one hypothesis about why
+					// validation fails; if it is wrong the ticket is still worth
+					// having. What was announced is logged so the next reading can
+					// tell whether the pairing mattered at all.
+					if( serverIp != 0 && serverPort > 0 )
+					{
+						try
+						{
+							cm.setGamePlayed( APPID_CS16, null, serverIp, serverPort );
+							su.xash.engine.SlayerLog.log( "ticket",
+								"announced the target server to Steam first: "
+								+ (( serverIp >>> 24 ) & 0xFF ) + "."
+								+ (( serverIp >> 16 ) & 0xFF ) + "."
+								+ (( serverIp >> 8 ) & 0xFF ) + "."
+								+ ( serverIp & 0xFF ) + ":" + serverPort );
+						}
+						catch( Throwable e )
+						{
+							su.xash.engine.SlayerLog.log( "ticket",
+								"could not announce the server first: " + e );
+						}
+					}
+					else
+					{
+						su.xash.engine.SlayerLog.log( "ticket",
+							"NO server address for the pairing (ip=" + serverIp
+							+ " port=" + serverPort + ") -- ticket requested unpaired" );
+					}
+
 					// A FULL SESSION TICKET, not the ownership ticket alone. The
 					// first version sent only the ownership one and the server made
 					// nothing of it: a GoldSrc server wants the auth SESSION ticket
