@@ -1168,11 +1168,13 @@ static void CL_WriteSteamTicket( sizebuf_t *send, const netadr_t *server )
 
 		real_len = Slayer_SteamTicket_Fetch( (byte *)buf, sizeof( buf ),
 			(int)( slayer_steam_ticket_timeout.value * 1000.0f ), &real_id,
-			server_ip, server_port );
+			server_ip, server_port, cls.server_steamid, cls.vac2_secure );
 
-		Slayer_Log_Printf( "ticket: asked for a real ticket for %u.%u.%u.%u:%d -> %d bytes, steamid %llu",
+		Slayer_Log_Printf( "ticket: asked for a real ticket for %u.%u.%u.%u:%d "
+			"(server steamid %llu, secure %d) -> %d bytes, steamid %llu",
 			( server_ip >> 24 ) & 0xFF, ( server_ip >> 16 ) & 0xFF,
 			( server_ip >> 8 ) & 0xFF, server_ip & 0xFF, server_port,
+			(unsigned long long)cls.server_steamid, cls.vac2_secure,
 			real_len, (unsigned long long)real_id );
 
 		if( real_len > 0 )

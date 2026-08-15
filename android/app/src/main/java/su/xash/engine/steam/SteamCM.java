@@ -501,14 +501,48 @@ public final class SteamCM
 	 * @param extraInfo optional title shown in the status
 	 * @param serverIp  optional server address, big-endian int (0 = none)
 	 * @param serverPort server port
+	 * @param serverSteamId the server's own SteamID from its getchallenge reply,
+	 *        or 0 when it did not report a usable one
+	 * @param serverSecure whether the server announced itself VAC-secure
+	 * @param token the game-connect token that will be embedded in the ticket we
+	 *        are about to hand this server, or null when announcing without one
 	 */
-	public void setGamePlayed( long appid, String extraInfo, int serverIp, int serverPort )
+	public void setGamePlayed( long appid, String extraInfo, int serverIp, int serverPort,
+		long serverSteamId, boolean serverSecure, byte[] token )
 		throws IOException
 	{
 		SteamWire.Writer game = new SteamWire.Writer().fixed64( 2, appid );
 
+		// WHY steam_id_gs AND token MATTER, and why leaving them out is not a
+		// harmless omission:
+		//
+		// A game server validates a ticket by asking Steam "is this ticket good
+		// for ME?". Steam answers by looking up what the CLIENT said it was doing.
+		// The pairing key is not the IP -- both ends may sit behind NAT, and the
+		// address the server sees need not be the one we see. It is the server's
+		// own SteamID (field 1) plus the connect token (field 6), which is the
+		// same token embedded in the ticket bytes.
+		//
+		// We were sending only the app id, the port and an IP. From Steam's point
+		// of view that is "playing Counter-Strike somewhere" -- enough for the
+		// friends list, not enough to answer a specific server's question about a
+		// specific token. So the ticket was registered and disowned in the same
+		// breath: valid, ours, and attached to no server.
+		//
+		// Both fields are optional in the protocol precisely because the message
+		// serves double duty (status display vs. connection announcement). Sending
+		// them only when known keeps the status path working unchanged.
+		if( serverSteamId != 0 )
+			game.uint64( 1, serverSteamId );
+
 		if( serverPort > 0 )
 			game.uint32( 4, serverPort );
+
+		if( serverSecure )
+			game.bool( 5, true );
+
+		if( token != null && token.length > 0 )
+			game.bytes( 6, token );
 
 		if( extraInfo != null && extraInfo.length() > 0 )
 			game.string( 7, extraInfo );
@@ -518,6 +552,26 @@ public final class SteamCM
 
 		send( EMSG_CLIENT_GAMES_PLAYED,
 			new SteamWire.Writer().message( 1, game ).toBytes() );
+
+		log( "cm: status set: appid " + appid
+			+ ( serverPort > 0 ? " @ " + serverPort : "" )
+			+ ", server steamid " + serverSteamId
+			+ ", secure " + serverSecure
+			+ ", token " + ( token == null ? "none" : token.length + " bytes" ));
+	}
+
+	/**
+	 * Status-only announcement, for the launcher and for clearing.
+	 *
+	 * Kept as a separate entry point rather than a default argument so that the
+	 * connect path cannot silently degrade to it: a missing pairing is a real
+	 * difference in meaning, and the call sites that have the data are the ones
+	 * that must pass it.
+	 */
+	public void setGamePlayed( long appid, String extraInfo, int serverIp, int serverPort )
+		throws IOException
+	{
+		setGamePlayed( appid, extraInfo, serverIp, serverPort, 0L, false, null );
 	}
 
 	/** Clear the status: an empty games_played list means "not playing". */
@@ -886,6 +940,24 @@ public final class SteamCM
 	 */
 	public byte[] buildAuthSessionTicket( int appId, int timeoutMs ) throws IOException
 	{
+		return buildAuthSessionTicket( appId, timeoutMs, null );
+	}
+
+	/**
+	 * Same, but reporting which token went into the ticket.
+	 *
+	 * WHY THE CALLER NEEDS THE TOKEN BACK: the pairing Steam checks is (server
+	 * SteamID, connect token), and the token is chosen HERE, from the pool, at
+	 * build time. Announcing the game before building means announcing a token we
+	 * have not picked yet; announcing after means the server may already have
+	 * asked. So the ticket is built first, the token comes back with it, and the
+	 * caller announces the exact pair before handing the ticket over.
+	 *
+	 * @param tokenOut when non-null, element 0 receives the token used
+	 */
+	public byte[] buildAuthSessionTicket( int appId, int timeoutMs, byte[][] tokenOut )
+		throws IOException
+	{
 		byte[] ownership = requestAppOwnershipTicket( appId, timeoutMs );
 
 		if( ownership == null )
@@ -920,6 +992,11 @@ public final class SteamCM
 			log( "cm: Steam did not confirm the ticket; a server would be told it is invalid" );
 			return null;
 		}
+
+		// Only after Steam confirmed it: a token from a rejected ticket must not
+		// be announced as the one we will connect with.
+		if( tokenOut != null )
+			tokenOut[0] = token;
 
 		return ticket;
 	}

@@ -65,11 +65,22 @@ void Slayer_SteamTicket_Init( void )
 	if( !sticket_class )
 		return;
 
-	// (III)[B -- timeout, server ip, server port. The address is passed so the
-	// Java side can tell Steam which server we are joining BEFORE asking for the
-	// ticket; Steam pairs a validation request with that announcement.
+	// (IIIIII)[B -- timeout, server ip, server port, then the server's own SteamID
+	// split into low and high halves, then its VAC-secure flag.
+	//
+	// WHY THE SERVER'S OWN SteamID IS PART OF THIS: Steam pairs a server's
+	// validation request with what the CLIENT announced, and the pairing key is
+	// (server SteamID, connect token) -- not the address. Both ends can be behind
+	// NAT, so the IP the server sees need not be the one we see, while the SteamID
+	// is unambiguous. It arrives in the getchallenge reply, which is parsed before
+	// this call.
+	//
+	// The 64-bit id is split into two jints on purpose: a jlong would make the
+	// signature "(IIIJI)[B", and a signature mismatch between these two files is
+	// silent -- it shows up as "launcher lacks steamFetchAuthTicket" at runtime.
+	// Two ints keep every argument the same width on both sides.
 	sticket_fetch = (*env)->GetStaticMethodID( env, sticket_class,
-		"steamFetchAuthTicket", "(III)[B" );
+		"steamFetchAuthTicket", "(IIIIII)[B" );
 	sticket_steamid = (*env)->GetStaticMethodID( env, sticket_class,
 		"steamAuthTicketSteamId", "()J" );
 
@@ -89,7 +100,8 @@ void Slayer_SteamTicket_Init( void )
 }
 
 int Slayer_SteamTicket_Fetch( byte *buf, int buf_size, int timeout_ms,
-	uint64_t *out_steamid, uint32_t server_ip, int server_port )
+	uint64_t *out_steamid, uint32_t server_ip, int server_port,
+	uint64_t server_steamid, int server_secure )
 {
 	JNIEnv    *env;
 	jbyteArray arr;
@@ -116,7 +128,10 @@ int Slayer_SteamTicket_Fetch( byte *buf, int buf_size, int timeout_ms,
 		return 0;
 
 	arr = (jbyteArray)(*env)->CallStaticObjectMethod( env, sticket_class,
-		sticket_fetch, (jint)timeout_ms, (jint)server_ip, (jint)server_port );
+		sticket_fetch, (jint)timeout_ms, (jint)server_ip, (jint)server_port,
+		(jint)( server_steamid & 0xFFFFFFFFu ),
+		(jint)(( server_steamid >> 32 ) & 0xFFFFFFFFu ),
+		(jint)( server_secure ? 1 : 0 ));
 
 	if( (*env)->ExceptionCheck( env ))
 	{
@@ -185,10 +200,12 @@ void Slayer_SteamTicket_Init( void )
 }
 
 int Slayer_SteamTicket_Fetch( byte *buf, int buf_size, int timeout_ms,
-	uint64_t *out_steamid, uint32_t server_ip, int server_port )
+	uint64_t *out_steamid, uint32_t server_ip, int server_port,
+	uint64_t server_steamid, int server_secure )
 {
 	(void)buf; (void)buf_size; (void)timeout_ms;
 	(void)server_ip; (void)server_port;
+	(void)server_steamid; (void)server_secure;
 
 	if( out_steamid )
 		*out_steamid = 0;

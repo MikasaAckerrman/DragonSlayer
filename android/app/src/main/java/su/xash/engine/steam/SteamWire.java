@@ -122,6 +122,19 @@ public final class SteamWire
 			return varint( field, value ? 1 : 0 );
 		}
 
+		/**
+		 * uint64 field.
+		 *
+		 * rawVarint already treats its argument as unsigned 64-bit, so this is
+		 * varint() under a name that says what the schema calls the field. Worth
+		 * having explicitly: a SteamID passed through int32() would sign-extend to
+		 * ten bytes and decode as a different number.
+		 */
+		public Writer uint64( int field, long value )
+		{
+			return varint( field, value );
+		}
+
 		public Writer fixed32( int field, int value )
 		{
 			tag( field, WIRE_FIXED32 );

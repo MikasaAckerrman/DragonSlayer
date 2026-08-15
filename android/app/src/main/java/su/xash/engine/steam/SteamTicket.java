@@ -95,7 +95,7 @@ public final class SteamTicket
 	 * worker instead of opening a second door onto the same account.
 	 */
 	public static Result fetch( Context ctx, int timeoutMs, final int serverIp,
-		final int serverPort )
+		final int serverPort, final long serverSteamId, final boolean serverSecure )
 	{
 		final byte[][] out = new byte[1][];
 		final long[] id = new long[1];
@@ -106,35 +106,52 @@ public final class SteamTicket
 			{
 				public void run( SteamCM cm ) throws java.io.IOException
 				{
-					// TELL STEAM WHERE WE ARE GOING *FIRST*.
+					// BUILD FIRST, THEN ANNOUNCE THE EXACT PAIR.
 					//
-					// A real CS 1.6 client announces the server it is joining before
-					// connecting, and Steam then expects a validation request about
-					// that pairing. Our order was reversed, measurably: the ticket
-					// was registered at 14:21:59 and the "playing on <server>"
-					// status only went out at 14:22:24 -- 25 seconds later, long
-					// after the server had asked Steam and been told no.
+					// The previous order -- announce, then build -- was itself a fix
+					// for an even earlier version that announced 25 seconds late. But
+					// announcing first cannot name the token, because the token is
+					// chosen during the build, from the pool. And the token is half
+					// of what Steam matches on: a server asks "is this TOKEN good for
+					// ME?", and Steam looks up what the client said about that pair.
 					//
-					// Non-fatal on purpose. This is one hypothesis about why
-					// validation fails; if it is wrong the ticket is still worth
-					// having. What was announced is logged so the next reading can
-					// tell whether the pairing mattered at all.
+					// So: build (which registers the ticket with Steam and hands back
+					// the token it used), then announce server SteamID + that token,
+					// then return the ticket to the engine to put in the connect
+					// packet. The announcement still precedes the connect packet,
+					// which is the ordering that actually matters.
+					byte[][] tokenOut = new byte[1][];
+					byte[] t = cm.buildAuthSessionTicket( APPID_CS16, 8000, tokenOut );
+
+					if( t == null )
+						return;
+
+					// Non-fatal on purpose: a ticket that Steam confirmed is worth
+					// sending even if the announcement fails. What was announced is
+					// logged either way, so the next reading can tell the two cases
+					// apart instead of guessing.
 					if( serverIp != 0 && serverPort > 0 )
 					{
 						try
 						{
-							cm.setGamePlayed( APPID_CS16, null, serverIp, serverPort );
+							cm.setGamePlayed( APPID_CS16, null, serverIp, serverPort,
+								serverSteamId, serverSecure, tokenOut[0] );
+
 							su.xash.engine.SlayerLog.log( "ticket",
-								"announced the target server to Steam first: "
+								"announced the pairing: "
 								+ (( serverIp >>> 24 ) & 0xFF ) + "."
 								+ (( serverIp >> 16 ) & 0xFF ) + "."
 								+ (( serverIp >> 8 ) & 0xFF ) + "."
-								+ ( serverIp & 0xFF ) + ":" + serverPort );
+								+ ( serverIp & 0xFF ) + ":" + serverPort
+								+ " steamid " + serverSteamId
+								+ " secure " + serverSecure
+								+ " token " + ( tokenOut[0] == null
+									? "MISSING" : tokenOut[0].length + " bytes" ));
 						}
 						catch( Throwable e )
 						{
 							su.xash.engine.SlayerLog.log( "ticket",
-								"could not announce the server first: " + e );
+								"could not announce the pairing: " + e );
 						}
 					}
 					else
@@ -143,16 +160,6 @@ public final class SteamTicket
 							"NO server address for the pairing (ip=" + serverIp
 							+ " port=" + serverPort + ") -- ticket requested unpaired" );
 					}
-
-					// A FULL SESSION TICKET, not the ownership ticket alone. The
-					// first version sent only the ownership one and the server made
-					// nothing of it: a GoldSrc server wants the auth SESSION ticket
-					// -- ownership ticket plus a game-connect token plus a session
-					// block -- and it wants one Steam has been told about.
-					byte[] t = cm.buildAuthSessionTicket( APPID_CS16, 8000 );
-
-					if( t == null )
-						return;
 
 					out[0] = t;
 					id[0] = cm.getSteamId();

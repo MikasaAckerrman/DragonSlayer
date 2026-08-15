@@ -941,7 +941,8 @@ public class XashActivity extends SDLActivity {
 	 *         account does not own the game, or Steam refused) -- the engine then
 	 *         falls back to the emulated ticket it has always used
 	 */
-	public static byte[] steamFetchAuthTicket( int timeoutMs, int serverIp, int serverPort )
+	public static byte[] steamFetchAuthTicket( int timeoutMs, int serverIp, int serverPort,
+		int serverSteamIdLo, int serverSteamIdHi, int serverSecure )
 	{
 		android.content.Context ctx = SDLActivity.getContext();
 
@@ -955,9 +956,16 @@ public class XashActivity extends SDLActivity {
 
 		try
 		{
+			// Split across two ints because JNI signatures are matched as strings:
+			// a jlong would make it "(IIIJI)[B" and give the two sides one more way
+			// to disagree silently. Both halves widen as UNSIGNED -- a SteamID has
+			// its type field in the high bits, so sign extension would corrupt it.
+			long serverSteamId = (( (long)serverSteamIdHi & 0xFFFFFFFFL ) << 32 )
+				| ( (long)serverSteamIdLo & 0xFFFFFFFFL );
+
 			su.xash.engine.steam.SteamTicket.Result r =
 				su.xash.engine.steam.SteamTicket.fetch( ctx, timeoutMs,
-					serverIp, serverPort );
+					serverIp, serverPort, serverSteamId, serverSecure != 0 );
 
 			if( r == null )
 				return null;
