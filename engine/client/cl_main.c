@@ -29,6 +29,7 @@ GNU General Public License for more details.
 #include "cl_slayer_toast.h"
 #include "cl_slayer_conspy.h"   // Slayer3D: periodic console-spam table into the log
 #include "cl_steam_ticket_slayer.h"   // Slayer3D: real Steam ticket for the connect packet
+#include "cl_slayer_log.h"             // Slayer3D: Slayer_Log_Printf
 #include "vid_common.h"
 #include "pm_local.h"
 #include "multi_emulator.h"
