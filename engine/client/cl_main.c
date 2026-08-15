@@ -2688,6 +2688,61 @@ static void CL_Challenge( const char *c, netadr_t from )
 			cls.server_steamid = strtoull( Cmd_Argv( 3 ), NULL, 10 );
 			cls.vac2_secure = Q_atoi( Cmd_Argv( 4 ));
 		}
+
+		// Slayer3D: WHO IS ON THE OTHER END, and whether asking Steam is even
+		// possible here. We already parsed both of these and then threw them
+		// away, which cost days: a ticket cannot be "rejected by Steam" by a
+		// server that never talks to Steam, yet from the outside the two look
+		// identical (the server just announces some SteamID either way).
+		//
+		// The server's own SteamID is the tell. ReHLDS answers getchallenge with
+		// Steam_GSGetSteamID(), and ReUnion REPLACES that hook with a literal 1
+		// (GAMESERVER_STEAMID in its protocol.h, commented "not NULL") precisely
+		// so that clients keep using auth protocol 3. A real logged-in game
+		// server reports its actual gameserver SteamID, which is a large number
+		// in the 90071992547409920+ range. So:
+		//
+		//   steamid == 1  -> ReUnion is faking it; the real Steam3Server is not
+		//                    logged on, SendUserConnectAndAuthenticate cannot
+		//                    happen, and no ticket of any shape will help.
+		//   steamid == 0  -> not logged on and not even faking.
+		//   steamid large -> genuinely logged in; a ticket CAN be validated.
+		//
+		// vac_secure is reported separately and can be 0 on a logged-in server
+		// (sv_secure off), so it is logged but not used to decide.
+		//
+		// The Argc check is repeated deliberately: without it a short reply would
+		// make us log the PREVIOUS server's id, which is worse than logging
+		// nothing -- it would look like evidence.
+		if( !cls.steam_auth )
+		{
+			// Auth protocol 2 means the server did not ask for a Steam ticket at
+			// all, so the connect packet carries no certificate to validate.
+			Slayer_Log_Printf( "challenge: auth protocol %d (not 3) -- "
+				"server does not want a Steam ticket", Q_atoi( Cmd_Argv( 2 )));
+		}
+		else if( Cmd_Argc( ) != 5 )
+		{
+			Slayer_Log_Printf( "challenge: auth protocol 3 but %d args, no server"
+				" steamid reported", Cmd_Argc( ));
+		}
+		else
+		{
+			const char *verdict;
+
+			if( cls.server_steamid == 0 )
+				verdict = "NOT logged into Steam (id 0) -> cannot validate any ticket";
+			else if( cls.server_steamid == 1 )
+				verdict = "FAKED id 1 = ReUnion/ReHLDS emulator, real Steam login absent"
+					" -> cannot validate any ticket";
+			else if( cls.server_steamid < 10000000ULL )
+				verdict = "suspicious tiny id -> almost certainly emulated";
+			else
+				verdict = "REAL gameserver SteamID -> this server CAN validate a ticket";
+
+			Slayer_Log_Printf( "challenge: server steamid %llu, vac_secure %d -- %s",
+				(unsigned long long)cls.server_steamid, cls.vac2_secure, verdict );
+		}
 	}
 
 	cls.bandwidth_test.challenge = Q_atoi( Cmd_Argv( 1 ));
