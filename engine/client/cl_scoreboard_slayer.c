@@ -714,10 +714,35 @@ void Slayer_ParseStatusLine( const char *line )
 	{
 		if( slayer_steam_reject_count < 8 )
 		{
+			const char *origin;
+
+			// WHICH emulator branch produced this row. The number is not noise: it
+			// is the server telling us, in the open, how it decided who we are, and
+			// the branches are distinguishable because ReUnion builds the string
+			// from per-branch constants (reunion_player.cpp getSteamIdString).
+			//
+			//   Y == 4 with X == 0 -> its IPGen branch: no ticket of ours was
+			//     recognised, so the id was DERIVED FROM OUR IP ADDRESS. Nothing we
+			//     put in the certificate can change it; the only lever is the
+			//     server's cid_* config.
+			//   X == 5, Y == 0 -> RevEmu family: Y is 0 because those ids are
+			//     revHash() << 1, always even.
+			//
+			// Kept to the two shapes actually observed. Anything else is reported as
+			// unknown rather than guessed at -- a wrong attribution here would send
+			// the next investigation down the wrong road, which is exactly the cost
+			// this project already paid once.
+			if( steam_x == 0 && steam_y == 4 )
+				origin = "ReUnion IPGen: id derived from the player's IP, no ticket accepted";
+			else if( steam_x == 5 && steam_y == 0 )
+				origin = "RevEmu family: id is a hash of the client's hardware key";
+			else
+				origin = "unrecognised emulator branch";
+
 			slayer_steam_reject_count++;
 			Slayer_Log_Printf( "status: slot %d has a fabricated STEAM_%d:%d:%u "
-				"(emulated server, no Steam account behind it) — no avatar, not requesting",
-				slot, steam_x, steam_y, steam_z );
+				"(%s) — no avatar, not requesting",
+				slot, steam_x, steam_y, steam_z, origin );
 		}
 		return;
 	}
