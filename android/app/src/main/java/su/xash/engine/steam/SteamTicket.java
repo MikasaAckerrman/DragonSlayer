@@ -78,58 +78,63 @@ public final class SteamTicket
 	 * caller falls back to the emulated ticket, which is what every build so far
 	 * has used, so a null here means "nothing changes", not "cannot connect".
 	 *
-	 * A SEPARATE SESSION from the presence one, on purpose. Sharing would be
-	 * cheaper, but the presence session is owned by a worker thread that sends and
-	 * reads on its own schedule; a second reader would steal its replies and the
-	 * status would start missing updates. Connecting to a server is rare enough
-	 * that a short-lived session is the cheaper mistake.
+	 * THE SHARED SESSION, and this is not an optimisation.
+	 *
+	 * Registering an auth ticket is bound to the session that registered it. The
+	 * old code opened a session of its own, took the ticket and closed it -- so by
+	 * the time the game server asked Steam about that ticket, the registration had
+	 * gone with the session. Steam answered "unknown", and Reunion fell back to a
+	 * generated id: the device announced us as STEAM_10:0:... , which is
+	 * DP_AUTH_REVEMU2013, not native Steam auth.
+	 *
+	 * Measured on the device: 100 logons and 14 EResult 34 (LogonSessionReplaced)
+	 * in one match. Steam permits a single session per account, so ours were
+	 * evicting each other -- avatar lookups opened one per player.
+	 *
+	 * The registration must OUTLIVE this call, so the work goes to the presence
+	 * worker instead of opening a second door onto the same account.
 	 */
 	public static Result fetch( Context ctx, int timeoutMs )
 	{
-		SteamCM cm = null;
+		final byte[][] out = new byte[1][];
+		final long[] id = new long[1];
 
 		try
 		{
-			cm = SteamPresence.get( ctx ).openSession();
+			boolean ran = SteamPresence.get( ctx ).submit( new SteamPresence.SessionTask()
+			{
+				public void run( SteamCM cm ) throws java.io.IOException
+				{
+					// A FULL SESSION TICKET, not the ownership ticket alone. The
+					// first version sent only the ownership one and the server made
+					// nothing of it: a GoldSrc server wants the auth SESSION ticket
+					// -- ownership ticket plus a game-connect token plus a session
+					// block -- and it wants one Steam has been told about.
+					byte[] t = cm.buildAuthSessionTicket( APPID_CS16, 8000 );
 
-			if( cm == null )
-				return null;
+					if( t == null )
+						return;
 
-			// A FULL SESSION TICKET, not the ownership ticket alone.
-			//
-			// The first version sent just the ownership ticket, and the device
-			// measurement was unambiguous: the server announced the same made-up
-			// SteamID as before, so it had made no sense of what we sent. A GoldSrc
-			// server wants the auth SESSION ticket -- ownership ticket plus a
-			// game-connect token plus a session block -- and it wants one Steam has
-			// been told about, because the server validates by asking Steam.
-			byte[] ticket = cm.buildAuthSessionTicket( APPID_CS16, timeoutMs );
+					out[0] = t;
+					id[0] = cm.getSteamId();
+				}
+			}, timeoutMs );
 
-			if( ticket == null )
+			if( !ran || out[0] == null )
 				return null;
 
 			su.xash.engine.SlayerLog.log( "ticket",
-				"session ticket ready, " + ticket.length + " bytes, SteamID " + cm.getSteamId() );
+				"session ticket ready, " + out[0].length + " bytes, SteamID " + id[0]
+				+ " (registration kept alive on the shared session)" );
 
-			return new Result( ticket, cm.getSteamId() );
+			return new Result( out[0], id[0] );
 		}
 		catch( Throwable e )
 		{
-			// Includes IOException, and also anything unexpected: a failure to get
-			// a nicer ticket must never stop the player joining a server.
+			// Includes IOException, and anything unexpected: failing to get a nicer
+			// ticket must never stop the player joining a server.
 			su.xash.engine.SlayerLog.log( "ticket", "FAIL " + e );
 			return null;
-		}
-		finally
-		{
-			if( cm != null )
-			{
-				try
-				{
-					cm.close();
-				}
-				catch( Throwable ignored ) {}
-			}
 		}
 	}
 }

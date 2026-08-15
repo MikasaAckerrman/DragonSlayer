@@ -64,6 +64,45 @@ public final class SteamPresence
 	private int wantServerPort;
 	private boolean intentDirty;
 
+	// ONE SESSION, ONE OWNER.
+	//
+	// Steam allows a single client session per account: a second logon evicts the
+	// first with EResult 34 (LogonSessionReplaced). The device log showed 100
+	// logons and 14 evictions in one game -- avatar lookups were opening a session
+	// per player and closing it, so the sessions were evicting each other.
+	//
+	// That is not merely wasteful, it breaks server-side auth: registering an auth
+	// ticket is bound to the session that registered it, so when the game server
+	// asked Steam about our ticket, the session holding that registration was
+	// already gone. Steam said "unknown", and Reunion fell back to a generated id
+	// (announced as STEAM_10:0:... = DP_AUTH_REVEMU2013).
+	//
+	// So work goes TO the session instead of opening one: callers submit a task,
+	// the worker thread runs it on its own socket between pumps. A second reader on
+	// the same socket would be just as wrong -- it would consume replies the worker
+	// is waiting for -- and this keeps the socket single-threaded by construction.
+	private final java.util.ArrayList<Pending> queue = new java.util.ArrayList<Pending>();
+	private long sessionWantedUntil;   // keep the session up while work is likely
+
+	/** How long a session is held open after the last task. */
+	private static final int SESSION_LINGER_MS = 90000;
+
+	/** Work to run on the shared session, on the worker thread. */
+	public interface SessionTask
+	{
+		void run( SteamCM cm ) throws IOException;
+	}
+
+	private static final class Pending
+	{
+		final SessionTask task;
+		boolean done;
+		boolean ok;
+		String error;
+
+		Pending( SessionTask t ) { task = t; }
+	}
+
 	private SteamPresence( Context context )
 	{
 		this.context = context.getApplicationContext();
@@ -176,20 +215,7 @@ public final class SteamPresence
 			wantServerPort = serverPort;
 			intentDirty = true;
 
-			if( worker == null )
-			{
-				running = true;
-				worker = new Thread( new Runnable()
-				{
-					public void run()
-					{
-						workerLoop();
-					}
-				}, "SteamPresence" );
-				worker.setDaemon( true );
-				worker.start();
-			}
-
+			ensureWorkerLocked();
 			lock.notifyAll();
 		}
 	}
@@ -255,6 +281,7 @@ public final class SteamPresence
 			while( true )
 			{
 				boolean playing;
+				boolean wantSession;
 				long appid;
 				String extra;
 				int ip, port;
@@ -262,9 +289,10 @@ public final class SteamPresence
 
 				synchronized( lock )
 				{
-					if( !running && !intentDirty )
+					if( !running && !intentDirty && queue.isEmpty() )
 						break;
 
+					wantSession = sessionWantedLocked();
 					playing = wantPlaying;
 					appid = wantAppId;
 					extra = wantExtraInfo;
@@ -310,14 +338,17 @@ public final class SteamPresence
 					continue;
 				}
 
-				if( !playing && ( cm == null || !cm.isConnected() ))
+				// Idling out is only allowed when nothing wants the session. A
+				// queued task is exactly such a want, and without this check the
+				// worker would sleep 30s with a caller blocked on it.
+				if( !playing && !wantSession && ( cm == null || !cm.isConnected() ))
 				{
 					synchronized( lock )
 					{
 						if( !running )
 							break;
 
-						if( !intentDirty )
+						if( !intentDirty && queue.isEmpty() )
 						{
 							try
 							{
@@ -335,7 +366,7 @@ public final class SteamPresence
 
 				try
 				{
-					if( playing && ( cm == null || !cm.isConnected() ))
+					if(( playing || wantSession ) && ( cm == null || !cm.isConnected() ))
 					{
 						cm = connect();
 						backoff = RECONNECT_BASE_MS;
@@ -391,6 +422,10 @@ public final class SteamPresence
 							sentPort = port;
 						}
 
+						// Tasks run here, on this thread, on this socket -- between
+						// pumps, so nobody else ever reads from it.
+						drainQueue( cm );
+
 						cm.heartbeatIfDue();
 
 						// Blocks up to a second reading whatever Steam sends,
@@ -405,8 +440,10 @@ public final class SteamPresence
 								sentPlaying = false;
 						}
 
-						// Status is off and Steam knows: stop holding a session.
-						if( !playing && cm != null )
+						// Status is off and Steam knows: stop holding a session --
+						// unless a task still wants it. Dropping it here is what made
+						// every avatar lookup pay for a fresh logon.
+						if( !playing && !sessionWantedLocked() && cm != null )
 						{
 							cm.close();
 							cm = null;
@@ -420,6 +457,7 @@ public final class SteamPresence
 					// that, and hammering the auth endpoint is how accounts get
 					// rate-limited, so give up until new credentials arrive.
 					note( "logon refused, giving up: " + e.getMessage() );
+					failQueue( "logon refused" );
 
 					if( cm != null )
 					{
@@ -438,6 +476,7 @@ public final class SteamPresence
 				catch( IOException e )
 				{
 					note( "network error: " + e.getMessage() );
+					failQueue( "network error: " + e.getMessage() );
 
 					if( cm != null )
 					{
@@ -481,6 +520,10 @@ public final class SteamPresence
 				cm.close();
 			}
 
+			// Nobody is left to run them, and a caller blocked on lock.wait() would
+			// otherwise sit there until its own timeout.
+			failQueue( "worker stopped" );
+
 			synchronized( lock )
 			{
 				worker = null;
@@ -491,12 +534,161 @@ public final class SteamPresence
 	}
 
 	/**
-	 * Open a fresh, logged-on CM session for something other than presence.
+	 * Run a task on the shared CM session and wait for it to finish.
 	 *
-	 * Exposed for SteamTicket, which needs a session of its own: the presence
-	 * worker owns its socket and reads replies on its own schedule, so a second
-	 * consumer reading from the same session would steal messages the worker is
-	 * waiting for and the status would start missing updates.
+	 * Returns true when the task ran (whatever it concluded), false when no
+	 * session could be had in time -- no credentials, Steam unreachable, or the
+	 * worker busy longer than the caller is willing to wait.
+	 *
+	 * Callers must NOT keep the SteamCM reference past the task: it belongs to the
+	 * worker, and using it from another thread reintroduces exactly the two-readers
+	 * bug this replaced.
+	 */
+	public boolean submit( SessionTask task, int timeoutMs )
+	{
+		if( task == null || !isAvailable() )
+			return false;
+
+		Pending p = new Pending( task );
+		long deadline = System.currentTimeMillis() + timeoutMs;
+
+		synchronized( lock )
+		{
+			queue.add( p );
+			sessionWantedUntil = deadline + SESSION_LINGER_MS;
+
+			// A task is a reason to have a session even when nothing is playing.
+			intentDirty = true;
+			ensureWorkerLocked();
+			lock.notifyAll();
+
+			while( !p.done )
+			{
+				long left = deadline - System.currentTimeMillis();
+
+				if( left <= 0 )
+				{
+					queue.remove( p );
+					note( "session task timed out" );
+					return false;
+				}
+
+				try
+				{
+					lock.wait( left );
+				}
+				catch( InterruptedException e )
+				{
+					Thread.currentThread().interrupt();
+					queue.remove( p );
+					return false;
+				}
+			}
+		}
+
+		if( !p.ok && p.error != null )
+			note( "session task failed: " + p.error );
+
+		return p.ok;
+	}
+
+	/** Must hold lock. Starts the worker if it is not already running. */
+	private void ensureWorkerLocked()
+	{
+		if( worker != null )
+			return;
+
+		running = true;
+		worker = new Thread( new Runnable()
+		{
+			public void run()
+			{
+				workerLoop();
+			}
+		}, "SteamPresence" );
+		worker.setDaemon( true );
+		worker.start();
+	}
+
+	/** Must hold lock. True while a session should be kept up for tasks. */
+	private boolean sessionWantedLocked()
+	{
+		return !queue.isEmpty()
+			|| System.currentTimeMillis() < sessionWantedUntil;
+	}
+
+	/**
+	 * Run every queued task. Called on the worker thread with a live session.
+	 *
+	 * A task that throws is reported to its caller and does not disturb the
+	 * others: one bad avatar lookup must not take down the status.
+	 */
+	private void drainQueue( SteamCM cm )
+	{
+		while( true )
+		{
+			Pending p;
+
+			synchronized( lock )
+			{
+				if( queue.isEmpty() )
+					return;
+
+				p = queue.remove( 0 );
+			}
+
+			try
+			{
+				p.task.run( cm );
+				p.ok = true;
+			}
+			catch( Throwable e )
+			{
+				p.ok = false;
+				p.error = String.valueOf( e );
+			}
+
+			synchronized( lock )
+			{
+				p.done = true;
+				lock.notifyAll();
+			}
+		}
+	}
+
+	/** Fail every queued task, e.g. when the session could not be established. */
+	private void failQueue( String why )
+	{
+		while( true )
+		{
+			Pending p;
+
+			synchronized( lock )
+			{
+				if( queue.isEmpty() )
+					return;
+
+				p = queue.remove( 0 );
+				p.done = true;
+				p.ok = false;
+				p.error = why;
+				lock.notifyAll();
+			}
+		}
+	}
+
+	/**
+	 * Open a session that nothing else shares.
+	 *
+	 * DO NOT USE THIS FOR WORK ON OUR OWN ACCOUNT -- use submit(). Steam permits
+	 * one session per account, so a second logon evicts the first (EResult 34), and
+	 * whatever the evicted session had registered -- notably an auth ticket -- dies
+	 * with it. That is measured, not theoretical: the device logged 100 logons and
+	 * 14 evictions in one match, and the game server consequently treated our
+	 * registered ticket as unknown.
+	 *
+	 * Kept because the test suite drives it directly to prove that bad credentials
+	 * yield null rather than an exception.
 	 *
 	 * Returns null when no credentials are stored, which is the ordinary case for
 	 * an account signed in the old OpenID way. The caller must close the session.

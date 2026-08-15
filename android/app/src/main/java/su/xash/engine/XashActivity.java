@@ -509,29 +509,33 @@ public class XashActivity extends SDLActivity {
 			if( p == null )
 				return null;
 
-			su.xash.engine.steam.SteamCM cm = p.openSession();
+			// SUBMIT, DO NOT OPEN. Opening a session per avatar is what made the
+			// device log 100 logons and 14 EResult 34 (LogonSessionReplaced) in one
+			// match: Steam permits one session per account, so these were evicting
+			// each other -- and, worse, evicting the session that had registered our
+			// auth ticket, which is why the game server was told the ticket was
+			// unknown and announced us as a RevEmu2013 client instead of a Steam one.
+			final long id = Long.parseLong( steamid64 );
+			final String[] found = new String[1];
 
-			if( cm == null )
+			boolean ran = p.submit( new su.xash.engine.steam.SteamPresence.SessionTask()
+			{
+				public void run( su.xash.engine.steam.SteamCM cm ) throws java.io.IOException
+				{
+					java.util.Map<Long,String> hashes = cm.requestAvatarHashes(
+						new long[] { id }, 8000 );
+
+					found[0] = hashes.get( Long.valueOf( id ));
+				}
+			}, 10000 );
+
+			if( !ran || found[0] == null )
 				return null;
 
-			try
-			{
-				java.util.Map<Long,String> hashes = cm.requestAvatarHashes(
-					new long[] { Long.parseLong( steamid64 ) }, 8000 );
-				String hash = hashes.get( Long.valueOf( Long.parseLong( steamid64 )));
-
-				if( hash == null )
-					return null;
-
-				// The CDN spells it out of the hash. avatars.steamstatic.com is the
-				// canonical host -- measured: it serves hashes that the per-region
-				// hosts in profile XML (akamai/fastly) also serve.
-				return "https://avatars.steamstatic.com/" + hash + "_full.jpg";
-			}
-			finally
-			{
-				cm.close();
-			}
+			// The CDN spells it out of the hash. avatars.steamstatic.com is the
+			// canonical host -- measured: it serves hashes that the per-region
+			// hosts in profile XML (akamai/fastly) also serve.
+			return "https://avatars.steamstatic.com/" + found[0] + "_full.jpg";
 		}
 		catch( Throwable e )
 		{
