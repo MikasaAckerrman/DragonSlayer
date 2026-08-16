@@ -70,7 +70,10 @@ static CVAR_DEFINE_AUTO( slayer_radar_size_migrated, "0", FCVAR_ARCHIVE,
 // World units mapped across the radar. Lower = more zoomed in, like CS2's
 // cl_radar_scale. When the map has an overview script this scales it too.
 static CVAR_DEFINE_AUTO( slayer_radar_scale, "1400", FCVAR_ARCHIVE,
-	"Slayer3D: world units across the radar (smaller = closer zoom)" );
+	"Slayer3D: world units across the radar when auto-fit is off (smaller = closer zoom)" );
+
+static CVAR_DEFINE_AUTO( slayer_radar_autoscale, "1", FCVAR_ARCHIVE,
+	"Slayer3D: choose a useful player-centred local map scale from BSP size (0 = manual)" );
 
 // 1 = radar rotates with the player (CS2 default), 0 = north-up.
 static CVAR_DEFINE_AUTO( slayer_radar_rotate, "1", FCVAR_ARCHIVE,
@@ -106,6 +109,9 @@ static CVAR_DEFINE_AUTO( slayer_radar_memory, "4.0", FCVAR_ARCHIVE,
 
 static CVAR_DEFINE_AUTO( slayer_radar_dot, "1.0", FCVAR_ARCHIVE,
 	"Slayer3D: player dot size multiplier" );
+
+static CVAR_DEFINE_AUTO( slayer_radar_names, "1", FCVAR_ARCHIVE,
+	"Slayer3D: draw compact player names beside radar markers (0 = off)" );
 
 static CVAR_DEFINE_AUTO( slayer_radar_height, "1", FCVAR_ARCHIVE,
 	"Slayer3D: draw above/below height arcs on dots (0 = off)" );
@@ -291,23 +297,52 @@ static void Slayer_Radar_LoadMap( void )
 //   2. a trace from the eye to the enemy's chest must be clear.
 // Deliberately NOT a FOV check: CS2 marks enemies your team saw, and a strict
 // cone would make the ring flicker every time you turn your head.
-static qboolean Slayer_Radar_CanSee( cl_entity_t *ent )
+static qboolean Slayer_Radar_CanSee( cl_entity_t *ent, const vec3_t focus_origin,
+	const cl_entity_t *focus )
 {
-	vec3_t    eye, target;
-	pmtrace_t tr;
+	vec3_t     eye, target;
+	pmtrace_t *tr;
+	int         ignore_pe = -1;
+	int         target_pe = -1;
+	int         i;
 
 	if( !ent || !ent->player )
 		return false;
 	if( ent->curstate.messagenum != cl.parsecount )
 		return false;   // not in this snapshot -> not in our PVS
 
-	VectorAdd( cl.simorg, cl.viewheight, eye );
+	VectorCopy( focus_origin, eye );
+	if( focus )
+	{
+		if( focus->curstate.solid == SOLID_NOT ) eye[2] -= 8.0f;
+		else if( focus->curstate.usehull == 1 ) eye[2] += 12.0f;
+		else eye[2] += 28.0f;
+	}
+	else
+	{
+		VectorAdd( focus_origin, cl.viewheight, eye );
+	}
+
 	VectorCopy( ent->origin, target );
 	target[2] += 20.0f;   // chest, not feet: feet are behind cover more often
 
-	tr = CL_TraceLine( eye, target, PM_STUDIO_BOX );
+	if( clgame.pmove )
+	{
+		for( i = 0; i < clgame.pmove->numphysent; i++ )
+		{
+			if( focus && clgame.pmove->physents[i].info == focus->index )
+				ignore_pe = i;
+			if( clgame.pmove->physents[i].info == ent->index )
+				target_pe = i;
+		}
+	}
 
-	return ( tr.fraction > 0.98f ) ? true : false;
+	tr = PM_CL_TraceLine( eye, target, PM_TRACELINE_PHYSENTSONLY,
+		2 /* point hull */, ignore_pe );
+	if( !tr )
+		return false;
+
+	return tr->fraction > 0.98f || tr->ent == target_pe ? true : false;
 }
 
 // ===========================================================================
@@ -388,6 +423,128 @@ static void Slayer_Radar_HeightArc( int cx, int cy, int radius, qboolean above,
 	}
 }
 
+static void Slayer_Radar_DrawName( int px, int py, int dot, const char *name,
+	const byte col[3], byte alpha, int cx, int cy, int radius )
+{
+	char   label[13];
+	int    text_w = 0, text_h = 0;
+	int    x, y;
+	rgba_t rgba;
+
+	if( slayer_radar_names.value == 0.0f || COM_StringEmptyOrNULL( name ))
+		return;
+
+	Q_strncpy( label, name, sizeof( label ));
+	Con_DrawStringLen( label, &text_w, &text_h );
+	if( text_w <= 0 ) text_w = (int)Q_strlen( label ) * 8;
+	if( text_h <= 0 ) text_h = 8;
+
+	x = px - text_w / 2;
+	y = py - dot - text_h - 2;
+
+	if( x < cx - radius + 3 ) x = cx - radius + 3;
+	if( x + text_w > cx + radius - 3 ) x = cx + radius - 3 - text_w;
+	if( y < cy - radius + 3 ) y = py + dot + 2;
+	if( y + text_h > cy + radius - 3 ) return;
+
+	Slayer_Radar_Rect( x - 2, y - 1, text_w + 4, text_h + 2,
+		0, 0, 0, (byte)( alpha * 3 / 4 ));
+	rgba[0] = col[0];
+	rgba[1] = col[1];
+	rgba[2] = col[2];
+	rgba[3] = alpha;
+	Con_DrawString( x, y, label, rgba );
+}
+
+static void Slayer_Radar_Triangle( float x0, float y0, float x1, float y1,
+	float x2, float y2, byte r, byte g, byte b, byte a )
+{
+	vec3_t p;
+
+	ref.dllFuncs.TriRenderMode( kRenderTransColor );
+	ref.dllFuncs.Color4ub( r, g, b, a );
+	ref.dllFuncs.Begin( TRI_TRIANGLES );
+
+	p[0] = x0; p[1] = y0; p[2] = 0.0f;
+	ref.dllFuncs.Vertex3fv( p );
+	p[0] = x1; p[1] = y1;
+	ref.dllFuncs.Vertex3fv( p );
+	p[0] = x2; p[1] = y2;
+	ref.dllFuncs.Vertex3fv( p );
+
+	ref.dllFuncs.End();
+	ref.dllFuncs.TriRenderMode( kRenderNormal );
+	ref.dllFuncs.GL_SetRenderMode( kRenderTransTexture );
+	ref.dllFuncs.Color4ub( 255, 255, 255, 255 );
+}
+
+static void Slayer_Radar_PlayerArrow( int cx, int cy, int size, float yaw,
+	float cs, float sn, byte r, byte g, byte b, byte a )
+{
+	float wy = (float)DEG2RAD( yaw );
+	float wx = cosf( wy );
+	float yy = sinf( wy );
+	float dx = wx * cs - yy * sn;
+	float dy = -( wx * sn + yy * cs );
+	float px = -dy;
+	float py = dx;
+	float tipx = (float)cx + dx * (float)size * 1.45f;
+	float tipy = (float)cy + dy * (float)size * 1.45f;
+	float basex = (float)cx - dx * (float)size * 0.75f;
+	float basey = (float)cy - dy * (float)size * 0.75f;
+
+	Slayer_Radar_Triangle( tipx, tipy,
+		basex + px * (float)size, basey + py * (float)size,
+		basex - px * (float)size, basey - py * (float)size,
+		r, g, b, a );
+}
+
+static void Slayer_Radar_DrawCone( int cx, int cy, int radius )
+{
+	float half_fov;
+	float len;
+	byte  ca;
+	float tan_half;
+	int   k, ilen;
+
+	if( slayer_radar_cone.value == 0.0f )
+		return;
+
+	half_fov = bound( 10.0f, cl.local.scr_fov, 150.0f ) * 0.5f;
+	len = (float)radius * slayer_radar_cone_len.value;
+	ca = (byte)bound( 0, (int)slayer_radar_cone_alpha.value, 255 );
+	if( len < 6.0f ) len = 6.0f;
+	if( len > (float)radius ) len = (float)radius;
+	ilen = (int)len;
+
+	if( half_fov < 5.0f ) half_fov = 5.0f;
+	if( half_fov > 85.0f ) half_fov = 85.0f;
+	tan_half = tanf( (float)DEG2RAD( half_fov ));
+
+	for( k = 1; k <= ilen; k++ )
+	{
+		float t = (float)k / len;
+		int   half_w = (int)( (float)k * tan_half );
+		int   y = cy - k;
+		byte  a = (byte)( ca * ( 1.0f - t * 0.85f ));
+
+		if( half_w < 1 ) half_w = 1;
+		if( a == 0 ) continue;
+
+		if( (float)( k * k + half_w * half_w ) > (float)( radius * radius ))
+		{
+			float room = (float)( radius * radius - k * k );
+
+			if( room <= 0.0f ) break;
+			half_w = (int)sqrt( room );
+			if( half_w < 1 ) continue;
+		}
+
+		Slayer_Radar_Rect( cx - half_w, y, half_w * 2, 1,
+			255, 255, 255, a );
+	}
+}
+
 // ===========================================================================
 // Public API
 // ===========================================================================
@@ -448,18 +605,21 @@ static const slayer_radar_spot_t s_radar_spots[] =
 
 static void Slayer_Radar_PrintSettings( void )
 {
-	Con_Printf( "^3radar:^7 %s   pos %.3f %.3f   size %.3f   scale %.0f units   rotate %d\n",
+	Con_Printf( "^3radar:^7 %s   pos %.3f %.3f   size %.3f   scale %s/%.0f   rotate %d\n",
 		slayer_radar.value != 0.0f ? "on" : "off",
 		slayer_radar_x.value, slayer_radar_y.value,
-		slayer_radar_size.value, slayer_radar_scale.value,
+		slayer_radar_size.value,
+		slayer_radar_autoscale.value != 0.0f ? "auto-local" : "manual",
+		slayer_radar_scale.value,
 		(int)slayer_radar_rotate.value );
 	Con_Printf( "  map %d (1=from BSP, 2=external overview, 0=off)  res %d  alpha %d  color %d\n",
 		(int)slayer_radar_map.value, (int)slayer_radar_map_res.value,
 		(int)slayer_radar_map_alpha.value, (int)slayer_radar_map_color.value );
-	Con_Printf( "  cone %d  len %.2f  alpha %d   dot %.2f   memory %.1fs   height %d\n",
+	Con_Printf( "  cone %d  len %.2f  alpha %d   dot %.2f   names %d   memory %.1fs   height %d\n",
 		(int)slayer_radar_cone.value, slayer_radar_cone_len.value,
 		(int)slayer_radar_cone_alpha.value, slayer_radar_dot.value,
-		slayer_radar_memory.value, (int)slayer_radar_height.value );
+		(int)slayer_radar_names.value, slayer_radar_memory.value,
+		(int)slayer_radar_height.value );
 	Con_Printf( "  border '%s'  bg '%s'\n",
 		slayer_radar_border.string[0] ? slayer_radar_border.string : "(follow hud_color)",
 		slayer_radar_bg.string );
@@ -572,20 +732,28 @@ static void Cmd_RadarZoom_f( void )
 
 	if( Cmd_Argc() < 2 )
 	{
-		Con_Printf( "usage: slayer_radar_zoom <units>   world units across the radar\n" );
-		Con_Printf( "       slayer_radar_zoom in / out  (step by 200 units)\n" );
-		Con_Printf( "current: %.0f units (smaller = closer zoom)\n", slayer_radar_scale.value );
+		Con_Printf( "usage: slayer_radar_zoom <fit|in|out|units>\n" );
+		Con_Printf( "current: %s, manual %.0f units\n",
+			slayer_radar_autoscale.value != 0.0f ? "auto local scale" : "manual",
+			slayer_radar_scale.value );
 		return;
 	}
 
 	arg = Cmd_Argv( 1 );
+	if( !Q_stricmp( arg, "fit" ))
+	{
+		Cvar_SetValue( "slayer_radar_autoscale", 1.0f );
+		Con_Printf( "radar zoom: automatic player-centred scale for current BSP\n" );
+		return;
+	}
 
 	if( !Q_stricmp( arg, "in" ))        v = slayer_radar_scale.value - 200.0f;
 	else if( !Q_stricmp( arg, "out" ))  v = slayer_radar_scale.value + 200.0f;
 	else                                v = Q_atof( arg );
 
+	Cvar_SetValue( "slayer_radar_autoscale", 0.0f );
 	Cvar_SetValue( "slayer_radar_scale", bound( 300.0f, v, 6000.0f ));
-	Con_Printf( "radar scale %.0f units across\n", slayer_radar_scale.value );
+	Con_Printf( "radar zoom: manual %.0f units across\n", slayer_radar_scale.value );
 }
 
 static void Cmd_RadarReset_f( void )
@@ -595,6 +763,7 @@ static void Cmd_RadarReset_f( void )
 	Cvar_SetValue( "slayer_radar_y", 0.130f );
 	Cvar_SetValue( "slayer_radar_size", 0.18f );
 	Cvar_SetValue( "slayer_radar_scale", 1400.0f );
+	Cvar_SetValue( "slayer_radar_autoscale", 1.0f );
 	Cvar_SetValue( "slayer_radar_rotate", 1.0f );
 	Cvar_SetValue( "slayer_radar_map", 1.0f );
 	Cvar_SetValue( "slayer_radar_map_res", 512.0f );
@@ -604,6 +773,7 @@ static void Cmd_RadarReset_f( void )
 	Cvar_SetValue( "slayer_radar_cone_len", 0.55f );
 	Cvar_SetValue( "slayer_radar_cone_alpha", 70.0f );
 	Cvar_SetValue( "slayer_radar_dot", 1.0f );
+	Cvar_SetValue( "slayer_radar_names", 1.0f );
 	Cvar_SetValue( "slayer_radar_memory", 4.0f );
 	Cvar_SetValue( "slayer_radar_height", 1.0f );
 	Cvar_DirectSet( &slayer_radar_border, "" );
@@ -628,6 +798,7 @@ void Slayer_Radar_Init( void )
 	Cvar_RegisterVariable( &slayer_radar_size );
 	Cvar_RegisterVariable( &slayer_radar_size_migrated );
 	Cvar_RegisterVariable( &slayer_radar_scale );
+	Cvar_RegisterVariable( &slayer_radar_autoscale );
 	Cvar_RegisterVariable( &slayer_radar_rotate );
 	Cvar_RegisterVariable( &slayer_radar_map );
 	Cvar_RegisterVariable( &slayer_radar_map_res );
@@ -637,6 +808,7 @@ void Slayer_Radar_Init( void )
 	Cvar_RegisterVariable( &slayer_radar_bg );
 	Cvar_RegisterVariable( &slayer_radar_memory );
 	Cvar_RegisterVariable( &slayer_radar_dot );
+	Cvar_RegisterVariable( &slayer_radar_names );
 	Cvar_RegisterVariable( &slayer_radar_height );
 	Cvar_RegisterVariable( &slayer_radar_cone );
 	Cvar_RegisterVariable( &slayer_radar_cone_len );
@@ -696,8 +868,8 @@ qboolean Slayer_Radar_IsEnabled( void )
 // This runs inside the 2D pass (R_Set2DMode true), where the projection maps
 // screen pixels directly, so TriAPI vertices take screen coordinates.
 static void Slayer_Radar_DrawMapDisc( int cx, int cy, int radius, int texnum,
-	const vec3_t mins, const vec3_t maxs, float units_across, float cs, float sn,
-	byte alpha )
+	const vec3_t mins, const vec3_t maxs, const vec3_t focus_origin,
+	float units_across, float cs, float sn, byte alpha )
 {
 #define SLAYER_RADAR_FAN 48
 	float upp;   // world units per radar pixel
@@ -743,8 +915,8 @@ static void Slayer_Radar_DrawMapDisc( int cx, int cy, int radius, int texnum,
 		wx = ( sx * cs - sy * sn ) * upp;
 		wy = ( -sx * sn - sy * cs ) * upp;
 
-		u = Slayer_RadarMap_WorldToU( cl.simorg[0] + wx, mins[0], maxs[0] );
-		v = Slayer_RadarMap_WorldToV( cl.simorg[1] + wy, mins[1], maxs[1] );
+		u = Slayer_RadarMap_WorldToU( focus_origin[0] + wx, mins[0], maxs[0] );
+		v = Slayer_RadarMap_WorldToV( focus_origin[1] + wy, mins[1], maxs[1] );
 
 		p[0] = (float)cx + sx;
 		p[1] = (float)cy + sy;
@@ -775,11 +947,18 @@ static void Slayer_Radar_DrawMapDisc( int cx, int cy, int radius, int texnum,
 
 void Slayer_Radar_Draw( void )
 {
+	cl_entity_t *focus;
+	int    focus_index, focus_slot;
+	vec3_t focus_origin;
+	float  focus_yaw;
 	int    screen_w, screen_h;
 	int    cx, cy, radius;
 	byte   border[3], bg[4];
 	float  yaw_rad, cs, sn;
 	float  units;
+	float  map_span;
+	int    map_tex = 0;
+	vec3_t map_mins, map_maxs;
 	int    i;
 	double now = host.realtime;
 
@@ -788,6 +967,23 @@ void Slayer_Radar_Draw( void )
 		return;
 	if( cl.intermission )
 		return;
+
+	focus_index = Slayer_ObserverFocusIndex();
+	focus_slot = focus_index - 1;
+	focus = Slayer_ObserverFocusEntity();
+	if( focus_slot < 0 || focus_slot >= MAX_CLIENTS )
+		return;
+
+	if( Slayer_ObserverFollowsPlayer() && focus )
+	{
+		VectorCopy( focus->origin, focus_origin );
+		focus_yaw = focus->angles[YAW];
+	}
+	else
+	{
+		VectorCopy( cl.simorg, focus_origin );
+		focus_yaw = cl.viewangles[YAW];
+	}
 
 	screen_w = refState.width;
 	screen_h = refState.height;
@@ -827,11 +1023,10 @@ void Slayer_Radar_Draw( void )
 	units = slayer_radar_scale.value;
 	if( units < 64.0f ) units = 64.0f;
 
-	// Rotate so the player's facing is up. cl.viewangles, not the render angles:
-	// in third person the camera may look elsewhere, and the radar must follow
-	// the PLAYER (same reasoning as the third-person tracer aim).
+	// Rotate so the focus player's facing is up. In free spectator/map modes
+	// the camera's yaw is the only meaningful direction.
 	if( slayer_radar_rotate.value != 0.0f )
-		yaw_rad = (float)DEG2RAD( -cl.viewangles[YAW] + 90.0f );
+		yaw_rad = (float)DEG2RAD( -focus_yaw + 90.0f );
 	else
 		yaw_rad = (float)DEG2RAD( 90.0f );
 
@@ -841,14 +1036,10 @@ void Slayer_Radar_Draw( void )
 	// --- map picture --------------------------------------------------------
 	if( slayer_radar_map.value != 0.0f )
 	{
-		int    map_tex = 0;
-		vec3_t map_mins, map_maxs;
-		byte   map_alpha = (byte)bound( 0, (int)slayer_radar_map_alpha.value, 255 );
+		byte map_alpha_local = (byte)bound( 0, (int)slayer_radar_map_alpha.value, 255 );
 
 		// Mode 1 (default): rasterize the CURRENT map from the BSP already in
-		// memory. This is the whole point -- it works on every server and every
-		// custom map, with no per-map asset to prepare and no way for a stale
-		// picture of another map to be shown.
+		// memory. External overview images remain an explicit opt-in only.
 		if( slayer_radar_map.value < 2.0f )
 		{
 			Slayer_RadarMap_Build( (int)slayer_radar_map_res.value,
@@ -857,9 +1048,6 @@ void Slayer_Radar_Draw( void )
 		}
 		else
 		{
-			// Mode 2: explicit opt-in to the external engine overview. Kept
-			// because a hand-made picture can look nicer, but never automatic:
-			// the file is only valid for the map it was made from.
 			Slayer_Radar_LoadMap();
 			if( s_map.texnum > 0 )
 			{
@@ -877,14 +1065,27 @@ void Slayer_Radar_Draw( void )
 
 		if( map_tex > 0 )
 		{
+			map_span = Q_max( map_maxs[0] - map_mins[0],
+				map_maxs[1] - map_mins[1] );
+			if( slayer_radar_autoscale.value != 0.0f && map_span > 64.0f )
+			{
+				// Player-centred minimap: choose a useful local radius from the
+				// map size, but never move the player off centre or fit the whole BSP.
+				units = bound( 1200.0f, map_span * 0.42f, 2600.0f );
+			}
+			if( units < 64.0f ) units = 64.0f;
+
 			Slayer_Radar_DrawMapDisc( cx, cy, radius - 2, map_tex,
-				map_mins, map_maxs, units, cs, sn, map_alpha );
+				map_mins, map_maxs, focus_origin, units, cs, sn, map_alpha_local );
 		}
 	}
 
-	// rim in HUD colour, drawn last so nothing covers it
-	Slayer_Radar_Ring( cx, cy, radius, 2, border[0], border[1], border[2], 235, false );
-	Slayer_Radar_Ring( cx, cy, radius - 2, 1, border[0], border[1], border[2], 90, false );
+	// Local/observed player is always fixed at the radar centre.
+	// The cone is a map layer, so draw it before every marker and label.
+	Slayer_Radar_DrawCone( cx, cy, radius );
+
+	// Rim is drawn at the very end, after markers and labels.
+
 
 	// --- transform ----------------------------------------------------------
 	// Already computed above the map draw: both must share one rotation.
@@ -902,15 +1103,18 @@ void Slayer_Radar_Draw( void )
 		byte         col[3];
 		byte         alpha = 255;
 		qboolean     from_memory = false;
+		qboolean     at_edge = false;
 
-		if( i == cl.playernum )
+		if( i == focus_slot )
 			continue;
+		if( Slayer_ObserverFollowsPlayer() && i == cl.playernum )
+			continue;   // dead/spectator local slot is not a second map player
 		if( !cl.players[i].name[0] )
 			continue;
 
 		ent = CL_GetEntityByIndex( i + 1 );
-		ally = Slayer_TeamColors_IsAlly( i );
-		visible = Slayer_Radar_CanSee( ent );
+		ally = Slayer_TeamColors_IsAllyOf( focus_slot, i );
+		visible = Slayer_Radar_CanSee( ent, focus_origin, focus );
 
 		// Skip players whose side the server has not announced: without a side
 		// there is no colour, and a grey blob on the radar is worse than none.
@@ -923,7 +1127,7 @@ void Slayer_Radar_Draw( void )
 			// CS, and that is exactly what the vanilla radar shows.
 			if( !ent || ent->curstate.messagenum != cl.parsecount )
 				continue;
-			VectorSubtract( ent->origin, cl.simorg, rel );
+			VectorSubtract( ent->origin, focus_origin, rel );
 		}
 		else
 		{
@@ -934,7 +1138,7 @@ void Slayer_Radar_Draw( void )
 				s_sight[i].t_seen = now;
 				s_sight[i].ever = true;
 				VectorCopy( ent->origin, s_sight[i].pos );
-				VectorSubtract( ent->origin, cl.simorg, rel );
+				VectorSubtract( ent->origin, focus_origin, rel );
 			}
 			else
 			{
@@ -954,7 +1158,7 @@ void Slayer_Radar_Draw( void )
 
 					alpha = (byte)bound( 20, (int)( f * 255.0f ), 255 );
 				}
-				VectorSubtract( s_sight[i].pos, cl.simorg, rel );
+				VectorSubtract( s_sight[i].pos, focus_origin, rel );
 			}
 		}
 
@@ -977,6 +1181,7 @@ void Slayer_Radar_Draw( void )
 				px = cx + (int)( ddx * lim / d );
 				py = cy + (int)( ddy * lim / d );
 				alpha = (byte)( alpha * 3 / 5 );   // edge blips are dimmer
+				at_edge = true;
 			}
 		}
 
@@ -987,10 +1192,11 @@ void Slayer_Radar_Draw( void )
 
 		if( ally )
 		{
-			// Allies: solid dot with a dark outline so it stays readable on a
-			// bright patch of the map texture.
-			Slayer_Radar_Disc( px, py, dot + 1, 0, 0, 0, (byte)( alpha * 2 / 3 ));
-			Slayer_Radar_Disc( px, py, dot, col[0], col[1], col[2], alpha );
+			// Teammates: directional arrow with a dark outline. This keeps
+			// orientation visible on a bright map and matches the reference radar.
+			Slayer_Radar_Disc( px, py, dot + 2, 0, 0, 0, (byte)( alpha * 2 / 3 ));
+			Slayer_Radar_PlayerArrow( px, py, dot, ent->angles[YAW], cs, sn,
+				col[0], col[1], col[2], alpha );
 		}
 		else
 		{
@@ -1000,11 +1206,15 @@ void Slayer_Radar_Draw( void )
 				from_memory ? false : true );
 		}
 
+		if(( ally || !from_memory ) && !at_edge )
+			Slayer_Radar_DrawName( px, py, dot, cl.players[i].name,
+				col, alpha, cx, cy, radius );
+
 		// Height arcs: another floor, above or below.
 		if( slayer_radar_height.value != 0.0f )
 		{
-			float dz = ( ally || visible ) ? ( ent->origin[2] - cl.simorg[2] )
-			                               : ( s_sight[i].pos[2] - cl.simorg[2] );
+			float dz = ( ally || visible ) ? ( ent->origin[2] - focus_origin[2] )
+			                               : ( s_sight[i].pos[2] - focus_origin[2] );
 
 			if( dz > 64.0f )
 				Slayer_Radar_HeightArc( px, py, dot + 2, true, col[0], col[1], col[2], alpha );
@@ -1013,72 +1223,29 @@ void Slayer_Radar_Draw( void )
 		}
 	}
 
-	// --- view cone ----------------------------------------------------------
-	// The element the vanilla radar draws as a bare triangle. Here it is a real
-	// wedge whose half-angle is the player's ACTUAL horizontal FOV, so a scope
-	// visibly narrows it. Drawn before the own-marker so the marker sits on top.
-	//
-	// The radar is already rotated so that forward is up, which is why the cone
-	// is built straight up the screen and needs no rotation of its own.
-	if( slayer_radar_cone.value != 0.0f )
+	// --- focus marker -------------------------------------------------------
+	// One marker only: local player while alive, observed target while following.
+	// In a rotating radar it points straight up; in north-up it keeps real yaw.
 	{
-		float half_fov = bound( 10.0f, cl.local.scr_fov, 150.0f ) * 0.5f;
-		float len = (float)radius * slayer_radar_cone_len.value;
-		byte  ca = (byte)bound( 0, (int)slayer_radar_cone_alpha.value, 255 );
-		float tan_half;
-		int   k, ilen;
-
-		if( len < 6.0f ) len = 6.0f;
-		if( len > (float)radius ) len = (float)radius;
-		ilen = (int)len;
-
-		if( half_fov < 5.0f ) half_fov = 5.0f;
-		if( half_fov > 85.0f ) half_fov = 85.0f;
-		tan_half = tanf( (float)DEG2RAD( half_fov ));
-
-		// Scanline wedge: one row per pixel of depth, width from the FOV. Fades
-		// out along its length so it reads as a light beam rather than a solid
-		// pie slice covering the map.
-		for( k = 1; k <= ilen; k++ )
-		{
-			float t = (float)k / len;
-			int   half_w = (int)( (float)k * tan_half );
-			int   y = cy - k;
-			byte  a = (byte)( ca * ( 1.0f - t * 0.85f ));
-
-			if( half_w < 1 ) half_w = 1;
-			if( a == 0 )
-				continue;
-
-			// Stay inside the disc: the cone must not spill over the rim.
-			if( (float)( k * k + half_w * half_w ) > (float)( radius * radius ))
-			{
-				float room = (float)( radius * radius - k * k );
-
-				if( room <= 0.0f )
-					break;
-				half_w = (int)sqrt( room );
-				if( half_w < 1 )
-					continue;
-			}
-
-			Slayer_Radar_Rect( cx - half_w, y, half_w * 2, 1, 255, 255, 255, a );
-		}
-	}
-
-	// --- own marker ---------------------------------------------------------
-	// A triangle pointing up (the radar is already rotated, so "up" is forward).
-	{
-		int k, h = (int)( radius * 0.11f );
+		int h = (int)( radius * 0.10f );
+		byte focus_col[3];
 
 		if( h < 3 ) h = 3;
+		Slayer_TeamColors_Get( focus_slot, focus_col );
+		Slayer_Radar_Disc( cx, cy, h + 2, 0, 0, 0, 190 );
+		Slayer_Radar_Ring( cx, cy, h + 2, 2,
+			focus_col[0], focus_col[1], focus_col[2], 235, false );
+		Slayer_Radar_PlayerArrow( cx, cy, h, focus_yaw, cs, sn,
+			255, 255, 255, 245 );
 
-		for( k = 0; k <= h; k++ )
-		{
-			int wide = ( h - k ) * 2 / 3 + 1;
-
-			Slayer_Radar_Rect( cx - wide, cy - h / 2 + k, wide * 2, 1,
-				255, 255, 255, 235 );
-		}
+		if( Slayer_ObserverFollowsPlayer() )
+			Slayer_Radar_DrawName( cx, cy, h + 2,
+				cl.players[focus_slot].name, focus_col, 255, cx, cy, radius );
 	}
+
+	// Final lens edge. No marker, label or cone may paint across it.
+	Slayer_Radar_Ring( cx, cy, radius, 2,
+		border[0], border[1], border[2], 235, false );
+	Slayer_Radar_Ring( cx, cy, radius - 2, 1,
+		border[0], border[1], border[2], 90, false );
 }

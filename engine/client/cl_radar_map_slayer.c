@@ -47,6 +47,7 @@ GNU General Public License for more details.
 #include "ref_common.h"
 #include "mod_local.h"          // world.version, QBSP2_VERSION, Mod_SampleSizeForFace
 #include "cl_radar_map_slayer.h"
+#include "cl_radar_map_slayer_logic.h"
 #include "cl_slayer_log.h"
 
 // Maximum vertices of a single BSP face we are willing to rasterize. Real faces
@@ -61,6 +62,8 @@ typedef struct
 	vec3_t   mins, maxs;   // world bounds the texture covers
 	int      surfaces_used;
 	int      colour_mode;  // the mode this raster was built for (see below)
+	const model_t *worldmodel;
+	char     mapname[MAX_QPATH];
 } slayer_radar_raster_t;
 
 static slayer_radar_raster_t s_raster;
@@ -110,6 +113,53 @@ float Slayer_RadarMap_WorldToV( float world_y, float min_y, float max_y )
 		return 0.5f;
 	// V is flipped: world +Y is north (up on the radar), texture V grows down.
 	return 1.0f - ( world_y - min_y ) / span;
+}
+
+static mvertex_t *Slayer_MapVertex( model_t *mod, int surfedge );
+
+static qboolean Slayer_RadarMap_VisibleBounds( model_t *mod, vec3_t mins, vec3_t maxs )
+{
+	qboolean found = false;
+	int i, v;
+
+	for( i = 0; i < mod->numsurfaces; i++ )
+	{
+		msurface_t *surf = &mod->surfaces[i];
+		vec3_t normal;
+
+		if( surf->numedges < 3 || surf->numedges > SLAYER_MAP_MAXVERTS )
+			continue;
+		if( FBitSet( surf->flags, SURF_DRAWSKY ) || !surf->plane )
+			continue;
+
+		VectorCopy( surf->plane->normal, normal );
+		if( FBitSet( surf->flags, SURF_PLANEBACK ))
+			VectorNegate( normal, normal );
+		if( normal[2] < -0.5f )
+			continue;
+
+		for( v = 0; v < surf->numedges; v++ )
+		{
+			mvertex_t *mv = Slayer_MapVertex( mod, surf->firstedge + v );
+			int axis;
+
+			if( !found )
+			{
+				VectorCopy( mv->position, mins );
+				VectorCopy( mv->position, maxs );
+				found = true;
+				continue;
+			}
+
+			for( axis = 0; axis < 3; axis++ )
+			{
+				if( mv->position[axis] < mins[axis] ) mins[axis] = mv->position[axis];
+				if( mv->position[axis] > maxs[axis] ) maxs[axis] = mv->position[axis];
+			}
+		}
+	}
+
+	return found;
 }
 
 // ===========================================================================
@@ -534,23 +584,13 @@ qboolean Slayer_RadarMap_Build( int size, int colour )
 	slayer_map_canvas_t canvas;
 	model_t *mod = cl.worldmodel;
 	double   t0 = Sys_DoubleTime();
+	vec3_t   visible_mins, visible_maxs;
 	size_t   pixels;
 	int      i;
+	int      tex_flags;
 
 	if( colour < SLAYER_RADARMAP_PLAIN ) colour = SLAYER_RADARMAP_PLAIN;
 	if( colour > SLAYER_RADARMAP_LIGHTMAP ) colour = SLAYER_RADARMAP_LIGHTMAP;
-
-	// A colour-mode change must rebuild, otherwise the cvar appears to do
-	// nothing until the next map.
-	if( s_raster.built && s_raster.colour_mode == colour )
-		return ( s_raster.texnum > 0 ) ? true : false;
-
-	// Mark as attempted FIRST: a map we cannot rasterize must not be retried
-	// every frame.
-	s_raster.built = true;
-	s_raster.texnum = 0;
-	s_raster.surfaces_used = 0;
-	s_raster.colour_mode = colour;
 
 	if( !mod || mod->numsurfaces <= 0 || !mod->vertexes || !mod->surfedges )
 	{
@@ -577,7 +617,36 @@ qboolean Slayer_RadarMap_Build( int size, int colour )
 		if( size <= i ) { size = i; break; }
 	}
 
-	Slayer_RadarMap_SquareBounds( mod->mins, mod->maxs, s_raster.mins, s_raster.maxs );
+	// Key the cache by the actual world, its name, resolution and colour mode.
+	// GL texture names survive ordinary changelevels, so colour-only caching was
+	// exactly how pixels from the previous map could be returned here.
+	if( s_raster.built && Slayer_RadarMap_CacheMatches(
+		s_raster.worldmodel, s_raster.mapname, s_raster.size, s_raster.colour_mode,
+		mod, mod->name, size, colour ))
+	{
+		return ( s_raster.texnum > 0 ) ? true : false;
+	}
+
+	// Mark as attempted FIRST: a map we cannot rasterize must not be retried
+	// every frame.
+	s_raster.built = true;
+	s_raster.texnum = 0;
+	s_raster.surfaces_used = 0;
+	s_raster.colour_mode = colour;
+	s_raster.size = size;
+	s_raster.worldmodel = mod;
+	Q_strncpy( s_raster.mapname, mod->name, sizeof( s_raster.mapname ));
+
+	// Worldmodel bounds can include skybox/service geometry thousands of units
+	// outside the playable layout. Measure only the same non-sky, non-ceiling
+	// surfaces that the rasterizer will draw; this keeps the map filling the disc.
+	if( !Slayer_RadarMap_VisibleBounds( mod, visible_mins, visible_maxs ))
+	{
+		VectorCopy( mod->mins, visible_mins );
+		VectorCopy( mod->maxs, visible_maxs );
+	}
+	Slayer_RadarMap_SquareBounds( visible_mins, visible_maxs,
+		s_raster.mins, s_raster.maxs );
 
 	pixels = (size_t)size * (size_t)size;
 	canvas.size = size;
@@ -605,8 +674,14 @@ qboolean Slayer_RadarMap_Build( int size, int colour )
 
 	// TF_CLAMP matters: the radar samples outside [0,1] near the map edge and a
 	// repeating wrap would paste the far side of the map next to the player.
+	// GL textures are name-cached across an ordinary changelevel. TF_UPDATE is
+	// required when the slot already exists, otherwise GL_CreateTexture returns
+	// the previous map's pixels unchanged.
+	tex_flags = TF_CLAMP | TF_NOMIPMAP | TF_HAS_ALPHA;
+	if( ref.dllFuncs.GL_FindTexture( "*slayer_radar_map" ) > 0 )
+		SetBits( tex_flags, TF_UPDATE );
 	s_raster.texnum = ref.dllFuncs.GL_CreateTexture( "*slayer_radar_map", size, size,
-		canvas.rgba, TF_CLAMP | TF_NOMIPMAP | TF_HAS_ALPHA );
+		canvas.rgba, tex_flags );
 	s_raster.size = size;
 
 	Mem_Free( canvas.rgba );

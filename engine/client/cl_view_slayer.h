@@ -38,6 +38,14 @@ void V_InitSlayerCvars( void );
 // Returns true when the Slayer3D third-person mode is active.
 qboolean V_IsSlayerThirdPerson( void );
 
+// GoldSrc observer context. Indices are 1-based entity indices. Roaming and
+// map-free deliberately fall back to the local entity because iuser2 may keep
+// a stale target in those modes.
+int Slayer_ObserverMode( void );
+int Slayer_ObserverFocusIndex( void );
+qboolean Slayer_ObserverFollowsPlayer( void );
+struct cl_entity_s *Slayer_ObserverFocusEntity( void );
+
 // Adjust the given viewpass so the camera orbits the player.
 // Safe to call every frame; no-op when slayer_thirdperson is 0.
 void V_ApplySlayerThirdPerson( ref_viewpass_t *rvp );

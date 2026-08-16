@@ -54,6 +54,11 @@ void Slayer_Tracer_NoteServerTracer( const vec3_t start, const vec3_t end );
 // Advance the heat state machine. Call once per rendered frame.
 void Slayer_Tracer_Frame( void );
 
+// Resolve muzzleflash/impact events that were queued before studio models had
+// computed their attachment points. Call from the translucent EFX pass, after
+// opaque player models were rendered and before drawing the tracer pool.
+void Slayer_Tracer_FlushDeferred( void );
+
 // Age and draw every live tracer of the OWN renderer (ribbon geometry).
 // Call from CL_DrawEFX in the translucent pass, after the engine beams, so the
 // view matrix is already set up and additive blending lands on top of the world.

@@ -52,6 +52,11 @@ void Slayer_TeamColors_Update( void );
 // True when `slot` is on the same team as the local player.
 qboolean Slayer_TeamColors_IsAlly( int slot );
 
+// True when `slot` is on the same team as an arbitrary observer slot.
+// Used by the radar while spectating, where cl.playernum is not the player
+// whose team context is being displayed.
+qboolean Slayer_TeamColors_IsAllyOf( int observer_slot, int slot );
+
 // The player's colour index within its team (0..4), or -1 if unknown.
 // Exposed so the scoreboard can show the same ordering as the radar.
 int Slayer_TeamColors_Index( int slot );

@@ -16,6 +16,7 @@ GNU General Public License for more details.
 #include "common.h"
 #include "client.h"
 #include "cl_view_slayer.h"
+#include "cl_observer_slayer_logic.h"
 #include "cl_teamcolors_slayer.h"
 #include "cl_radar_slayer.h"
 #include "cl_slayer_conspy.h"
@@ -283,6 +284,64 @@ qboolean V_IsSlayerThirdPerson( void )
 	return slayer_thirdperson.value != 0.0f;
 }
 
+static void Slayer_ObserverReadState( int *mode, int *target )
+{
+	cl_entity_t *local = CL_GetLocalPlayer();
+
+	*mode = SLAYER_OBS_NONE;
+	*target = 0;
+
+	if( local )
+	{
+		*mode = local->curstate.iuser1;
+		*target = local->curstate.iuser2;
+	}
+
+	// HLTV/spectate-only clients keep observer state in this synthetic slot.
+	if( cls.spectator && cls.spectator_state.client.iuser1 != SLAYER_OBS_NONE )
+	{
+		*mode = cls.spectator_state.client.iuser1;
+		*target = cls.spectator_state.client.iuser2;
+	}
+}
+
+int Slayer_ObserverMode( void )
+{
+	int mode, target;
+
+	Slayer_ObserverReadState( &mode, &target );
+	return mode;
+}
+
+int Slayer_ObserverFocusIndex( void )
+{
+	cl_entity_t *ent;
+	int mode, target, local, focus;
+
+	local = cl.playernum + 1;
+	Slayer_ObserverReadState( &mode, &target );
+	focus = Slayer_Observer_SelectFocus( local, mode, target, cl.maxclients );
+
+	if( focus != local )
+	{
+		ent = CL_GetEntityByIndex( focus );
+		if( !ent || !ent->player || !cl.players[focus - 1].name[0] )
+			focus = local;
+	}
+
+	return focus;
+}
+
+qboolean Slayer_ObserverFollowsPlayer( void )
+{
+	return Slayer_ObserverFocusIndex() != cl.playernum + 1 ? true : false;
+}
+
+cl_entity_t *Slayer_ObserverFocusEntity( void )
+{
+	return CL_GetEntityByIndex( Slayer_ObserverFocusIndex() );
+}
+
 qboolean V_IsSlayerCamFree( void )
 {
 	return V_IsSlayerThirdPerson() && slayer_cam_free.value != 0.0f;
@@ -337,8 +396,13 @@ void V_ApplySlayerThirdPerson( ref_viewpass_t *rvp )
 
 	vec3_t    forward;
 	vec3_t    camangles;
+	vec3_t    anchor;
 	vec3_t    ideal_org;
+	cl_entity_t *focus;
 	float     ofs;
+	int       focus_index;
+	int       ignore_pe;
+	int       i;
 	pmtrace_t *tr;
 
 	if( !V_IsSlayerThirdPerson( ))
@@ -376,15 +440,45 @@ void V_ApplySlayerThirdPerson( ref_viewpass_t *rvp )
 	// Only the forward axis is needed; AngleVectors accepts NULLs.
 	AngleVectors( camangles, forward, NULL, NULL );
 
+	VectorCopy( rvp->vieworigin, anchor );
+	focus_index = Slayer_ObserverFocusIndex();
+	focus = Slayer_ObserverFocusEntity();
+	ignore_pe = -1;
+
+	if( Slayer_ObserverFollowsPlayer() && focus )
+	{
+		VectorCopy( focus->origin, anchor );
+		if( focus->curstate.solid == SOLID_NOT )
+			anchor[2] -= 8.0f;
+		else if( focus->curstate.usehull == 1 )
+			anchor[2] += 12.0f;
+		else
+			anchor[2] += 28.0f;
+
+		VectorCopy( anchor, rvp->vieworigin );
+
+		if( clgame.pmove )
+		{
+			for( i = 0; i < clgame.pmove->numphysent; i++ )
+			{
+				if( clgame.pmove->physents[i].info == focus_index )
+				{
+					ignore_pe = i;
+					break;
+				}
+			}
+		}
+	}
+
 	ofs = bound( SLAYER_CAM_MIN_OFS, slayer_cam_ofs.value, SLAYER_CAM_MAX_OFS );
-	VectorMA( rvp->vieworigin, -ofs, forward, ideal_org );
+	VectorMA( anchor, -ofs, forward, ideal_org );
 
 	if( slayer_cam_clip.value != 0.0f && ofs > 0.0f )
 	{
 		// PM_CL_TraceLine returns a pointer to a static pmtrace_t inside
 		// pm_trace.c; do not store the pointer past this call.
-		tr = PM_CL_TraceLine( rvp->vieworigin, ideal_org,
-			PM_TRACELINE_PHYSENTSONLY, 2 /* small hull */, -1 );
+		tr = PM_CL_TraceLine( anchor, ideal_org,
+			PM_TRACELINE_PHYSENTSONLY, 2 /* small hull */, ignore_pe );
 
 		if( tr->fraction < 1.0f )
 		{

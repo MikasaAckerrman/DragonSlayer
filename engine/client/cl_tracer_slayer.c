@@ -479,6 +479,34 @@ static unsigned int s_muzzleq_order;
 static int s_muzzleq_hit;    // shots placed from the queue
 static int s_muzzleq_miss;   // shots that had to read the live sequence instead
 
+// Muzzleflash edges arrive while CL_LinkPlayers is still preparing entities,
+// immediately before attachment[0..3] are reset to origin. The studio renderer
+// computes the real attachment later in the same frame. Queueing the edge until
+// the translucent EFX pass lets every third-person/remote tracer use that exact
+// rendered muzzle instead of an eye-height approximation.
+typedef struct
+{
+	qboolean pending;
+	qboolean is_local;
+	int      entindex;
+} slayer_deferred_fire_t;
+
+static slayer_deferred_fire_t s_deferred_fire[MAX_CLIENTS + 1];
+
+#define SLAYER_DEFERRED_IMPACTS 32
+typedef struct
+{
+	qboolean pending;
+	vec3_t   pos;
+	double   time;
+} slayer_deferred_impact_t;
+
+static slayer_deferred_impact_t s_deferred_impact[SLAYER_DEFERRED_IMPACTS];
+static int s_deferred_impact_next;
+
+static void Slayer_Tracer_Fire( cl_entity_t *ent, qboolean is_local );
+void Slayer_Tracer_FlushDeferred( void );
+
 // Midpoint colour (orange) between cold and hot, so a 3-stop ramp reads right.
 static const byte SLAYER_TRACER_MID[3] = { 255, 150, 50 };
 
@@ -811,6 +839,9 @@ void Slayer_Tracer_Reset( void )
 	memset( s_muzzleq, 0, sizeof( s_muzzleq ));
 	s_muzzleq_order = 0;
 	s_muzzleq_hit = s_muzzleq_miss = 0;
+	memset( s_deferred_fire, 0, sizeof( s_deferred_fire ));
+	memset( s_deferred_impact, 0, sizeof( s_deferred_impact ));
+	s_deferred_impact_next = 0;
 	s_last_summary = 0.0;
 	s_last_trace_warn = 0.0;
 	s_seen_local_probe = s_seen_remote_probe = false;
@@ -1276,7 +1307,6 @@ static void Slayer_Tracer_LocalMuzzleNow( vec3_t out )
 {
 	cl_entity_t *src;
 	vec3_t       fwd, right, up;
-	vec3_t       eye;
 	int          idx;
 	qboolean     third = ( V_IsSlayerThirdPerson() || CL_IsThirdPerson( ));
 
@@ -1301,29 +1331,25 @@ static void Slayer_Tracer_LocalMuzzleNow( vec3_t out )
 
 	s_attach_reject++;
 
-	// Fallback: offset from the eye along the aim. In third person the aim is
-	// cl.viewangles from the player's eye (refState holds the CAMERA there, ~120
-	// units behind, and tracing from it produces a streak detached from the gun);
-	// in first person the view IS the shot line.
+	// Fallback: use the player's weapon-height band, not the eye position. The
+	// eye is ~28 units above the feet in CS and was the reason third-person
+	// tracers visibly started from the top of the model when attachment data was
+	// not ready yet. `slayer_tracer_up` is the approximate weapon height from the
+	// player origin; forward/right then place the point near the barrel.
 	if( third )
 	{
 		AngleVectors( cl.viewangles, fwd, right, up );
-		VectorAdd( cl.simorg, cl.viewheight, eye );
+		VectorCopy( cl.simorg, out );
+		VectorMA( out, slayer_tracer_up.value, up, out );
 	}
 	else
 	{
 		AngleVectors( refState.viewangles, fwd, right, up );
-		VectorCopy( refState.vieworg, eye );
+		VectorCopy( refState.vieworg, out );
 	}
 
-	VectorCopy( eye, out );
-	VectorMA( out, slayer_tracer_fwd.value,   fwd,   out );
+	VectorMA( out, slayer_tracer_fwd.value, fwd, out );
 	VectorMA( out, slayer_tracer_right.value, right, out );
-
-	// The up offset only makes sense away from the eye: in first person it would
-	// lift the streak above the crosshair.
-	if( third )
-		VectorMA( out, slayer_tracer_up.value, up, out );
 }
 
 /*
@@ -1534,11 +1560,7 @@ static void Slayer_Tracer_Fire( cl_entity_t *ent, qboolean is_local )
 
 		if( third )
 		{
-			vec3_t eye;
-
 			AngleVectors( cl.viewangles, fwd, right, up );
-
-			VectorAdd( cl.simorg, cl.viewheight, eye );
 
 			// In third person R_RunViewmodelEvents returns early (it bails on
 			// PARM_THIRDPERSON), so clgame.viewent.attachment[0] is stale --
@@ -1563,10 +1585,10 @@ static void Slayer_Tracer_Fire( cl_entity_t *ent, qboolean is_local )
 				}
 				else
 				{
-					// Fall back to eye + forward offset, same shape as the remote
-					// approximation, so the streak still leaves the model instead
-					// of the camera.
-					VectorCopy( eye, start );
+					// A model without a usable attachment still starts near the
+					// weapon band, never at eye/head height.
+					VectorCopy( cl.simorg, start );
+					VectorMA( start, slayer_tracer_up.value,    up,    start );
 					VectorMA( start, slayer_tracer_fwd.value,   fwd,   start );
 					VectorMA( start, slayer_tracer_right.value, right, start );
 				}
@@ -1693,9 +1715,62 @@ void Slayer_Tracer_CheckMuzzleflash( cl_entity_t *ent, int slot, qboolean is_loc
 	}
 
 	if( now_on && !s_mf_prev[slot] )
-		Slayer_Tracer_Fire( ent, is_local );
+	{
+		qboolean needs_rendered_muzzle = !is_local ||
+			V_IsSlayerThirdPerson() || CL_IsThirdPerson();
+
+		if( needs_rendered_muzzle )
+		{
+			s_deferred_fire[slot].pending = true;
+			s_deferred_fire[slot].is_local = is_local;
+			s_deferred_fire[slot].entindex = ent->index;
+		}
+		else
+		{
+			Slayer_Tracer_Fire( ent, is_local );
+		}
+	}
 
 	s_mf_prev[slot] = now_on;
+}
+
+void Slayer_Tracer_FlushDeferred( void )
+{
+	int i;
+
+	// Server echoes first. An older echo must consume an older instant credit
+	// before this frame's newly predicted impacts append their credits.
+	for( i = 0; i <= MAX_CLIENTS; i++ )
+	{
+		cl_entity_t *ent;
+
+		if( !s_deferred_fire[i].pending )
+			continue;
+
+		s_deferred_fire[i].pending = false;
+		ent = CL_GetEntityByIndex( s_deferred_fire[i].entindex );
+		if( ent && ent->model )
+			Slayer_Tracer_Fire( ent, s_deferred_fire[i].is_local );
+	}
+
+	for( i = 0; i < SLAYER_DEFERRED_IMPACTS; i++ )
+	{
+		vec3_t muzzle, delta;
+
+		if( !s_deferred_impact[i].pending )
+			continue;
+
+		s_deferred_impact[i].pending = false;
+		Slayer_Tracer_LocalMuzzleNow( muzzle );
+		VectorSubtract( s_deferred_impact[i].pos, muzzle, delta );
+
+		if( VectorLength( delta ) < 1.0f )
+			continue;
+
+		Slayer_Tracer_SpawnVisual( muzzle, s_deferred_impact[i].pos, false );
+		Slayer_Tracer_InstantCredit();
+		s_instant_drawn++;
+	}
 }
 
 int Slayer_Tracer_BeginEvent( int entindex )
@@ -1804,21 +1879,40 @@ void Slayer_Tracer_NoteImpact( const vec3_t pos )
 	// worse than a slightly late one.
 	if( slayer_tracer_instant.value != 0.0f )
 	{
-		vec3_t muzzle;
-		vec3_t delta;
+		qboolean third = ( V_IsSlayerThirdPerson() || CL_IsThirdPerson()) &&
+			slayer_tracer_tp_muzzle.value != 0.0f;
 
-		Slayer_Tracer_LocalMuzzleNow( muzzle );
-		VectorSubtract( pos, muzzle, delta );
-
-		// A degenerate pair (impact essentially at the muzzle: a wall pressed
-		// against the barrel) has no direction to draw along; let the echo path
-		// deal with it.
-		if( VectorLength( delta ) >= 1.0f )
+		if( third )
 		{
-			Slayer_Tracer_SpawnVisual( muzzle, pos, false );
-			Slayer_Tracer_InstantCredit();
-			s_instant_drawn++;
+			slayer_deferred_impact_t *d = &s_deferred_impact[s_deferred_impact_next];
+
+			// This queue is drained later in the SAME rendered frame, after the
+			// player studio model has filled attachment[]. Thirty-two slots cover
+			// every stock shotgun pellet burst without allocating.
+			d->pending = true;
+			d->time = host.realtime;
+			VectorCopy( pos, d->pos );
+			s_deferred_impact_next = ( s_deferred_impact_next + 1 ) % SLAYER_DEFERRED_IMPACTS;
 			return;
+		}
+		else
+		{
+			vec3_t muzzle;
+			vec3_t delta;
+
+			Slayer_Tracer_LocalMuzzleNow( muzzle );
+			VectorSubtract( pos, muzzle, delta );
+
+			// A degenerate pair (impact essentially at the muzzle: a wall pressed
+			// against the barrel) has no direction to draw along; let the echo path
+			// deal with it.
+			if( VectorLength( delta ) >= 1.0f )
+			{
+				Slayer_Tracer_SpawnVisual( muzzle, pos, false );
+				Slayer_Tracer_InstantCredit();
+				s_instant_drawn++;
+				return;
+			}
 		}
 	}
 
