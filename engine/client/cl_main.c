@@ -25,7 +25,11 @@ GNU General Public License for more details.
 #include "cl_hud_slayer.h"
 #include "cl_sgs_slayer.h"
 #include "cl_steam_login.h"
+#include "cl_steam_presence_slayer.h"
 #include "cl_slayer_toast.h"
+#include "cl_slayer_conspy.h"   // Slayer3D: periodic console-spam table into the log
+#include "cl_steam_ticket_slayer.h"   // Slayer3D: real Steam ticket for the connect packet
+#include "cl_slayer_log.h"             // Slayer3D: Slayer_Log_Printf
 #include "vid_common.h"
 #include "pm_local.h"
 #include "multi_emulator.h"
@@ -101,6 +105,14 @@ static CVAR_DEFINE_AUTO( bottomcolor, "0", FCVAR_USERINFO|FCVAR_ARCHIVE|FCVAR_FI
 CVAR_DEFINE_AUTO( rate, "25000", FCVAR_USERINFO|FCVAR_ARCHIVE|FCVAR_FILTERABLE, "player network rate" );
 
 CVAR_DEFINE_AUTO( cl_ticket_generator, "revemu2013", FCVAR_ARCHIVE, "you wouldn't steal a car" );
+
+// How long to wait for Steam to issue a real ticket, in seconds.
+//
+// Bounded because this BLOCKS the connect: a silent wait looks like the game
+// hanging, and a server's own connect timeout is not generous. 8 s is past the
+// measured answer time with room for a slow mobile network; on timeout the
+// emulated ticket is used and the player still joins.
+CVAR_DEFINE_AUTO( slayer_steam_ticket_timeout, "8", FCVAR_ARCHIVE, "Slayer3D: seconds to wait for a real Steam auth ticket before falling back to the emulated one" );
 CVAR_DEFINE_AUTO( slayer_steam_advertise_id, "0", FCVAR_ARCHIVE, "Slayer3D: advertise your logged-in real SteamID to servers so other clients show your Steam avatar (0=off; disable if a server rejects the connection)" );
 static CVAR_DEFINE_AUTO( cl_advertise_engine_in_name, "1", FCVAR_ARCHIVE|FCVAR_PRIVILEGED, "add [Slayer3D] to the nickname when connecting to GoldSrc servers" );
 static CVAR_DEFINE_AUTO( cl_log_outofband, "0", FCVAR_ARCHIVE, "log out of band messages, can be useful for server admins and for engine debugging" );
@@ -1077,11 +1089,12 @@ static void CL_GetCDKey( char *protinfo, size_t protinfosize )
 	Info_SetValueForKey( protinfo, "cdkey", key, protinfosize );
 }
 
-static void CL_WriteSteamTicket( sizebuf_t *send )
+static void CL_WriteSteamTicket( sizebuf_t *send, const netadr_t *server )
 {
 	string key;
 	netadr_t adr = { .type = NA_LOOPBACK, }; // goldsrc servers don't get unique key as xashid isn't sent raw to them
 	uint32_t crc;
+	uint32_t spoof_id;
 	char buf[768] = { 0 }; // setti and steamemu return 768
 	int i = sizeof( buf );
 
@@ -1091,35 +1104,206 @@ static void CL_WriteSteamTicket( sizebuf_t *send )
 		return;
 	}
 
+	// A REAL Steam ticket, when asked for and available.
+	//
+	// This is the only thing that can make other players see your actual account:
+	// the server announces whatever the ticket says, and every build until now sent
+	// a fabricated id (see cl_steam_ticket_slayer.h for the measurement). Steam
+	// issues the genuine article over the session the launcher already holds -- no
+	// Steam client, no PC.
+	//
+	// OPT-IN, and it falls back rather than failing: a server running an emulator
+	// may refuse a genuine ticket, and being refused means not playing at all.
+	// TWO SETTINGS WANTED OPPOSITE THINGS, AND THE ONE THAT MATTERS LOST SILENTLY.
+	//
+	// Measured on the device: with cl_ticket_generator "steamcm" AND
+	// slayer_steam_advertise_id 1, the log showed three "real Steam ticket" lines
+	// and not a single "advertising account id" -- the real-ticket path returns
+	// before the generator is ever reached, so the id branch never ran at all.
+	// The player saw their own avatar (drawn locally from the logged-in id) while
+	// everyone else saw none.
+	//
+	// The two cannot both be honoured in one connect packet, and on a GoldSrc
+	// server the real ticket is the WORSE of the two:
+	//
+	//   * The server takes the id from fixed offsets. In a Steam session ticket
+	//     those bytes are the game-connect token, which Steam reissues on every
+	//     connect -- hence the announced id changed between sessions (746006789,
+	//     then 1870375173) while a real account id never does.
+	//   * This server does not ask Steam anyway: half the status rows read
+	//     STEAM_5:..., and universe 5 does not exist. It accepts anything.
+	//
+	// So when advertising our account is on and we know the account, the emulated
+	// ticket built FOR that account wins -- it is the only thing that makes other
+	// players fetch our avatar. steamcm stays reachable for a genuine Steam server
+	// (or with advertise_id 0), and the choice is logged either way, because a
+	// silent loser is what cost two days here.
+	if( !Q_stricmp( cl_ticket_generator.string, "steamcm" )
+	 && slayer_steam_advertise_id.value != 0.0f
+	 && Slayer_SteamLogin_GetLocalID() != 0 )
+	{
+		Con_Printf( "Slayer3D: advertising our own SteamID, so using the emulated "
+			"ticket (a real one carries a per-connect token where the server reads the id)\n" );
+	}
+	else if( !Q_stricmp( cl_ticket_generator.string, "steamcm" ))
+	{
+		uint64_t real_id = 0;
+		uint32_t server_ip = 0;
+		int      server_port = 0;
+		int      real_len;
+
+		// WHERE WE ARE GOING, handed down so Steam can be told before the ticket is
+		// requested. Steam pairs a server's validation request with the client's own
+		// announcement of that server, and ours went out 25 seconds too late.
+		//
+		// Only a real IPv4 peer is worth announcing: a loopback or otherwise
+		// address-less connect has no pairing to describe, and sending a bogus one
+		// would be worse than sending none.
+		if( server && server->type == NA_IP )
+		{
+			server_ip = ( server->ip[0] << 24 ) | ( server->ip[1] << 16 )
+				| ( server->ip[2] << 8 ) | server->ip[3];
+			server_port = MSG_BigShort( server->port );
+		}
+
+		real_len = Slayer_SteamTicket_Fetch( (byte *)buf, sizeof( buf ),
+			(int)( slayer_steam_ticket_timeout.value * 1000.0f ), &real_id,
+			server_ip, server_port, cls.server_steamid, cls.vac2_secure );
+
+		Slayer_Log_Printf( "ticket: asked for a real ticket for %u.%u.%u.%u:%d "
+			"(server steamid %llu, secure %d) -> %d bytes, steamid %llu",
+			( server_ip >> 24 ) & 0xFF, ( server_ip >> 16 ) & 0xFF,
+			( server_ip >> 8 ) & 0xFF, server_ip & 0xFF, server_port,
+			(unsigned long long)cls.server_steamid, cls.vac2_secure,
+			real_len, (unsigned long long)real_id );
+
+		if( real_len > 0 )
+		{
+			MSG_WriteBytes( send, buf, real_len );
+
+			// cls.steamid must match what we just proved, not what RevEmu would
+			// have hashed: the scoreboard and everything else downstream reads it.
+			*(uint32_t *)cls.steamid = LittleLong( (uint32_t)( real_id & 0xFFFFFFFFu ));
+			*(uint32_t *)( cls.steamid + 4 ) = LittleLong( (uint32_t)( real_id >> 32 ));
+
+			Con_Printf( "Slayer3D: connecting with a real Steam ticket (%d bytes)\n",
+				real_len );
+			return;
+		}
+
+		// Fall through to the emulated ticket. buf may hold a partial answer, so
+		// it is zeroed again before the generator writes into it.
+		memset( buf, 0, sizeof( buf ));
+		Con_Printf( S_WARN "Slayer3D: no real Steam ticket, using the emulated one\n" );
+	}
+
 	ID_GetMD5ForAddress( key, adr, sizeof( key ));
 	CRC32_Init( &crc );
 	CRC32_ProcessBuffer( &crc, key, Q_strlen( key ));
 	crc = CRC32_Final( crc );
-	i = GenerateRevEmu2013( buf, key, crc );
 
-	// Slayer3D: advertise the real logged-in SteamID so other players' clients
-	// (GoldClient / GSClient / Steam CS1.6) fetch and show YOUR real avatar
-	// instead of the fake RevEmu-generated ID. The SteamID lives in the ticket
-	// as two little-endian dwords: [1] = account id (low), [5] = 0x01100001 (high).
-	// Gated behind a cvar (default off) because a server that validates the
-	// ticket signature against its embedded SteamID would reject the altered
-	// ticket — set slayer_steam_advertise_id 0 to fall back to the stock ticket.
+	// Slayer3D: ASK THE GENERATOR FOR OUR ACCOUNT ID, do not patch the ticket
+	// afterwards.
+	//
+	// The previous version overwrote dwords [1] and [5] once the ticket was built,
+	// and that cannot work: RevEmu derives the account id from a hwid string and
+	// then spreads it across the ticket --
+	//
+	//     [1] @+4   revHash            (patched)
+	//     [4] @+16  revHash << 1       (NOT patched)
+	//     [8] @+32  revHash * 2 >> 3   (NOT patched)
+	//     @+40      AES( hwid ), @+104 SHA( hwid )
+	//
+	// Patching two of those leaves a ticket that contradicts itself, and a server
+	// reading any other copy sees the machine CRC. That is exactly what the device
+	// log showed: the server announced 746006789, which IS this machine's CRC.
+	//
+	// The generator already does the right thing if asked properly: RevSpoofer
+	// searches for a hwid whose hash equals the id we want, so every derived copy
+	// agrees. Measured cost of that search: under 0.1s worst case in the harness.
+	// [5] needs no patching at all -- the generator writes 0x01100001 there, which
+	// is already the correct high dword of a public-universe SteamID.
+	spoof_id = crc;
+
 	if( slayer_steam_advertise_id.value != 0.0f )
 	{
 		uint64_t myid = Slayer_SteamLogin_GetLocalID();
 
 		if( myid != 0 )
-		{
-			((uint32_t*)buf)[1] = LittleLong( (uint32_t)( myid & 0xFFFFFFFFu ));
-			((uint32_t*)buf)[5] = LittleLong( (uint32_t)( myid >> 32 ));
-		}
+			spoof_id = (uint32_t)( myid & 0xFFFFFFFFu );
 	}
+
+	// THE SERVER READS [4] @+16, AND IT READS IT WHOLE.
+	//
+	// Measured from this server's own status output. Other non-Steam clients are
+	// announced as STEAM_1:0:z with z up to 1.8e9; if z were accountID>>1 those
+	// accounts would be above 3.6e9, which does not exist. So the server takes the
+	// dword at +16 as the ENTIRE account id and prints y = dword & 1,
+	// z = dword >> 1. Confirmed on two players whose avatars we did fetch:
+	// STEAM_0:0:83853295 and STEAM_0:0:207734759 map back to the exact SteamID64s
+	// sitting in our avatar cache.
+	//
+	// Which also explains the steamemu attempt: it writes the id at +84 and leaves
+	// +16 zero, so this server found nothing there and fell back to the client IP
+	// xored with 0x25730981 -- 832972013 decodes to 108.45.213.20, and it announced
+	// us as STEAM_3:0:832972013. The -1 marker at +80 only matters to a server that
+	// looks at +84 at all, and this one does not.
+	//
+	// So revemu IS the right format here; the problem was only that it writes
+	// hash << 1, which is always even, and our account id is odd (1269056997 =
+	// STEAM_0:1:634528498). Half of all Steam accounts are.
+	//
+	// Fix: ask the generator for id >> 1, then set the low bit of +16 by hand. The
+	// hash at [1] and the hwid string at +24 stay consistent with each other --
+	// they are derived from id >> 1 and we do not touch them -- so any check the
+	// server makes on the hash still passes. Verified in ticket_format_test.c:
+	// asking for 634528498 yields 1269056996 at +16, and the single bit turns it
+	// into exactly 1269056997.
+	if( spoof_id != crc )
+	{
+		i = GenerateRevEmu2013( buf, key, (int)( spoof_id >> 1 ));
+
+		if( i > 0 )
+		{
+			buf[16] |= (char)( spoof_id & 1 );
+
+			Con_Printf( "Slayer3D: emulated ticket (%d bytes), advertising account id %u"
+				" -> STEAM_0:%u:%u\n", i, (uint32_t)spoof_id,
+				(uint32_t)( spoof_id & 1 ), (uint32_t)( spoof_id >> 1 ));
+
+			MSG_WriteBytes( send, buf, i );
+
+			// cls.steamid is a byte[8] read elsewhere as two little-endian dwords.
+			*(uint32_t *)cls.steamid = LittleLong( spoof_id );
+			*(uint32_t *)( cls.steamid + 4 ) = LittleLong( 0x01100001 );
+			return;
+		}
+
+		Con_Printf( S_WARN "Slayer3D: no hwid hashes to our id, using the machine one\n" );
+		memset( buf, 0, sizeof( buf ));
+	}
+
+	// Stock behaviour: the machine CRC, no id of ours involved. Reached either
+	// because advertising is off / nobody is signed in, or because the hwid search
+	// above did not converge -- announcing the wrong id is better than not
+	// connecting at all.
+	i = GenerateRevEmu2013( buf, key, crc );
+
+	if( i <= 0 )
+	{
+		Con_Printf( S_ERROR "Slayer3D: ticket generator failed\n" );
+		return;
+	}
+
+	Con_Printf( "Slayer3D: emulated ticket (%d bytes), machine account id %u\n",
+		i, (uint32_t)( *(uint32_t *)&buf[16] ));
 
 	MSG_WriteBytes( send, buf, i );
 
-	// RevEmu2013: pTicket[1] = revHash (low), pTicket[5] = 0x01100001 (high)
-	*(uint32_t*)cls.steamid = LittleLong( ((uint32_t*)buf)[1] );
-	*(uint32_t*)(cls.steamid + 4) = LittleLong( ((uint32_t*)buf)[5] );
+	// Read the id back from the SAME dword the server reads (+16), so cls.steamid
+	// cannot disagree with what was announced. [1] holds the hash, not the id.
+	*(uint32_t *)cls.steamid = LittleLong( *(uint32_t *)&buf[16] );
+	*(uint32_t *)( cls.steamid + 4 ) = LittleLong( ((uint32_t *)buf)[5] );
 }
 
 void CL_SendGoldSrcConnectPacket( netadr_t adr, int challenge, const void *ticket, size_t ticketlen )
@@ -1145,7 +1329,7 @@ void CL_SendGoldSrcConnectPacket( netadr_t adr, int challenge, const void *ticke
 		PROTOCOL_GOLDSRC_VERSION, challenge, protinfo, cls.userinfo );
 	MSG_SeekToBit( &send, -8, SEEK_CUR ); // rewrite null terminator
 	if( ticket == NULL )
-		CL_WriteSteamTicket( &send );
+		CL_WriteSteamTicket( &send, &adr );
 	else
 		MSG_WriteBytes( &send, ticket, ticketlen );
 
@@ -2506,6 +2690,61 @@ static void CL_Challenge( const char *c, netadr_t from )
 			cls.server_steamid = strtoull( Cmd_Argv( 3 ), NULL, 10 );
 			cls.vac2_secure = Q_atoi( Cmd_Argv( 4 ));
 		}
+
+		// Slayer3D: WHO IS ON THE OTHER END, and whether asking Steam is even
+		// possible here. We already parsed both of these and then threw them
+		// away, which cost days: a ticket cannot be "rejected by Steam" by a
+		// server that never talks to Steam, yet from the outside the two look
+		// identical (the server just announces some SteamID either way).
+		//
+		// The server's own SteamID is the tell. ReHLDS answers getchallenge with
+		// Steam_GSGetSteamID(), and ReUnion REPLACES that hook with a literal 1
+		// (GAMESERVER_STEAMID in its protocol.h, commented "not NULL") precisely
+		// so that clients keep using auth protocol 3. A real logged-in game
+		// server reports its actual gameserver SteamID, which is a large number
+		// in the 90071992547409920+ range. So:
+		//
+		//   steamid == 1  -> ReUnion is faking it; the real Steam3Server is not
+		//                    logged on, SendUserConnectAndAuthenticate cannot
+		//                    happen, and no ticket of any shape will help.
+		//   steamid == 0  -> not logged on and not even faking.
+		//   steamid large -> genuinely logged in; a ticket CAN be validated.
+		//
+		// vac_secure is reported separately and can be 0 on a logged-in server
+		// (sv_secure off), so it is logged but not used to decide.
+		//
+		// The Argc check is repeated deliberately: without it a short reply would
+		// make us log the PREVIOUS server's id, which is worse than logging
+		// nothing -- it would look like evidence.
+		if( !cls.steam_auth )
+		{
+			// Auth protocol 2 means the server did not ask for a Steam ticket at
+			// all, so the connect packet carries no certificate to validate.
+			Slayer_Log_Printf( "challenge: auth protocol %d (not 3) -- "
+				"server does not want a Steam ticket", Q_atoi( Cmd_Argv( 2 )));
+		}
+		else if( Cmd_Argc( ) != 5 )
+		{
+			Slayer_Log_Printf( "challenge: auth protocol 3 but %d args, no server"
+				" steamid reported", Cmd_Argc( ));
+		}
+		else
+		{
+			const char *verdict;
+
+			if( cls.server_steamid == 0 )
+				verdict = "NOT logged into Steam (id 0) -> cannot validate any ticket";
+			else if( cls.server_steamid == 1 )
+				verdict = "FAKED id 1 = ReUnion/ReHLDS emulator, real Steam login absent"
+					" -> cannot validate any ticket";
+			else if( cls.server_steamid < 10000000ULL )
+				verdict = "suspicious tiny id -> almost certainly emulated";
+			else
+				verdict = "REAL gameserver SteamID -> this server CAN validate a ticket";
+
+			Slayer_Log_Printf( "challenge: server steamid %llu, vac_secure %d -- %s",
+				(unsigned long long)cls.server_steamid, cls.vac2_secure, verdict );
+		}
 	}
 
 	cls.bandwidth_test.challenge = Q_atoi( Cmd_Argv( 1 ));
@@ -3460,6 +3699,7 @@ static void CL_InitLocal( void )
 	cl.resourcesonhand.pNext = cl.resourcesonhand.pPrev = &cl.resourcesonhand;
 
 	Cvar_RegisterVariable( &cl_ticket_generator );
+	Cvar_RegisterVariable( &slayer_steam_ticket_timeout );
 	Cvar_RegisterVariable( &slayer_steam_advertise_id );
 	Cvar_RegisterVariable( &cl_advertise_engine_in_name );
 	Cvar_RegisterVariable( &cl_log_outofband );
@@ -3742,6 +3982,14 @@ void Host_ClientFrame( void )
 
 	// adjust client time
 	CL_AdjustClock ();
+
+	// tell Steam whether we are in a game; sends only on a change, and never
+	// blocks -- the CM session lives on its own thread in the launcher
+	Slayer_SteamPresence_Frame ();
+
+	// dump the console-spam table into the log every few minutes, so a log sent
+	// with a "спам в консоли" report already names the offender
+	Slayer_ConSpy_Frame ();
 }
 
 //============================================================================
@@ -3808,6 +4056,9 @@ void CL_Shutdown( void )
 	SCR_Shutdown ();
 	CL_UnloadProgs ();
 	SteamBroker_Shutdown();
+	// before cls.initialized goes false: an abandoned "playing" status on the
+	// profile outlives the process, so clearing it is not optional
+	Slayer_SteamPresence_Shutdown();
 	cls.initialized = false;
 
 	// for client-side VGUI support we use other order

@@ -31,6 +31,12 @@ void Slayer_Scoreboard_Draw( void );
 // the frame.
 qboolean Slayer_Scoreboard_IsVisible( void );
 
+// Whether the game library's OWN scoreboard should be suppressed this frame.
+// Wider than IsVisible: it also covers the dead period when the client library
+// auto-shows its board but ours is dismissed, so the stock board cannot bleed
+// through. Drives the pixel gate in cl_stockboard_gate_slayer.c.
+qboolean Slayer_Scoreboard_ShouldGateStock( void );
+
 // How hard to suppress the game's own scoreboard this frame:
 // 0 = not at all, 1 = skip VGui_Paint, 2 = also skip the client HUD redraw.
 // Driven by slayer_scoreboard_block_stock and only non-zero while ours is up.
@@ -53,6 +59,12 @@ void Slayer_OnScoreAttrib( const byte *pbuf, int iSize );
 // Hook for health updates from cl_parse.c.
 // Stores HP for the local/spectated player row in the scoreboard.
 void Slayer_OnHealthUpdate( int hp );
+
+// DeathMsg named the local player as the victim.
+// Second death signal for the ambiguous health == 1 case (a spectating dead
+// player), because the ScoreAttrib dead bit is a CS convention some servers
+// never send. Called from Slayer_OnDeathMsg.
+void Slayer_Scoreboard_OnLocalDeath( void );
 
 // Hook for server-sent "HealthInfo" user message.
 // Some servers (ReGameDLL) broadcast per-player HP this way.

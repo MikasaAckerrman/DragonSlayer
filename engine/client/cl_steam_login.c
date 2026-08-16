@@ -27,6 +27,7 @@ Non-Android: prints console message (not yet implemented).
 #include "common.h"
 #include "client.h"
 #include "cl_steam_login.h"
+#include "cl_avatar_download.h"   // Slayer_AvatarPath: cache location lives there
 #include "cl_slayer_log.h"
 
 // Persistent local SteamID64 (0 = not logged in)
@@ -249,7 +250,7 @@ void Slayer_SteamLogin_Init( void )
 
 					// Drop the cached picture too, otherwise the previous
 					// account's avatar keeps rendering after sign-out.
-					Q_snprintf( avatar_path, sizeof( avatar_path ), "avatars/%"PRIu64".png",
+					Slayer_AvatarPath( avatar_path, sizeof( avatar_path ),
 						slogin_local_steamid64 );
 					FS_Delete( avatar_path );
 

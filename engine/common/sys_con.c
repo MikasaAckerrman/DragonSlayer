@@ -14,6 +14,11 @@ GNU General Public License for more details.
 */
 
 #include "common.h"
+#if !XASH_DEDICATED
+// `client` is on the include path for the non-dedicated build (see engine/wscript),
+// so the plain name works and the dedicated build never sees it.
+#include "cl_slayer_conspy.h"   // Slayer3D: console spam accounting
+#endif
 #if XASH_ANDROID
 #include <android/log.h>
 #endif
@@ -306,6 +311,11 @@ void Sys_PrintLog( const char *pMsg )
 
 	// spew to stdout
 	Sys_PrintStdout( logtime, logtime_len, pMsg );
+
+	// NOTE: the Slayer3D spam accounting used to be here. It moved to
+	// Slayer_ConSpy_Filter, called from Sys_Print, because a line that is muted
+	// must still be counted -- and counting in both places would double every
+	// line that is not muted.
 
 	len = Q_strlen( pMsg );
 

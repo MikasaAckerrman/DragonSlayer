@@ -54,7 +54,9 @@ GNU General Public License for more details.
 
 #include "library.h"
 #include "whereami.h"
-
+#if !XASH_DEDICATED
+#include "cl_slayer_conspy.h"   // Slayer3D: console spam accounting + muting
+#endif
 int error_on_exit = 0;	// arg for exit();
 
 /*
@@ -456,6 +458,14 @@ print into window console
 void Sys_Print( const char *pMsg )
 {
 #if !XASH_DEDICATED
+	// Slayer3D: give the spam accounting the line BEFORE anything can drop it,
+	// and let it say whether the line belongs on screen at all. The filter is
+	// here rather than at each Con_Printf because most spam comes from the game
+	// DLL and from engine paths we do not own -- there is no call site to edit.
+	// See cl_slayer_conspy.c: with slayer_conspy_mute off this is one compare.
+	if( !Slayer_ConSpy_Filter( pMsg ))
+		return;
+
 	if( !Host_IsDedicated() )
 	{
 		Con_Print( pMsg );

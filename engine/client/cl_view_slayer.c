@@ -16,11 +16,20 @@ GNU General Public License for more details.
 #include "common.h"
 #include "client.h"
 #include "cl_view_slayer.h"
+#include "cl_observer_slayer_logic.h"
+#include "cl_teamcolors_slayer.h"
+#include "cl_radar_slayer.h"
+#include "cl_slayer_conspy.h"
 #include "cl_scoreboard_slayer.h"
 #include "cl_hud_slayer.h"
+#include "cl_tracer_slayer.h"
 #include "cl_sgs_slayer.h"
 #include "cl_loading_slayer.h"
 #include "cl_grenade_tumble_slayer.h"
+#include "cl_item_phys_slayer.h"
+#include "cl_model_extent_slayer.h"
+#include "cl_stockboard_gate_slayer.h"
+#include "cl_slayer_log.h"
 
 // ===========================================================================
 // Cvars - Third-person camera
@@ -50,6 +59,42 @@ CVAR_DEFINE_AUTO( slayer_chat_color_ct, "", FCVAR_ARCHIVE, "Slayer3D: CT name co
 static CVAR_DEFINE_AUTO( slayer_ducktap,    "0", FCVAR_ARCHIVE, "Slayer3D: enable ducktap (rapid duck toggling for duckrun speed)" );
 static CVAR_DEFINE_AUTO( slayer_autostrafe, "0", FCVAR_ARCHIVE, "Slayer3D: enable automatic air-strafing based on yaw delta" );
 static CVAR_DEFINE_AUTO( slayer_autojump,   "0", FCVAR_ARCHIVE, "Slayer3D: enable auto-bhop with ladder safety and anti-bhop bypass" );
+
+// JumpBug assist: hold jump while falling and it lands the trick for you.
+//
+// Why holding jump alone can never work: GoldSrc's PM_Jump ignores IN_JUMP when
+// the same bit was set in the previous tick (pmove->oldbuttons) -- that is what
+// stops a held space bar from auto-bhopping. A fresh press has to land on the
+// right tick, so the assist must keep IN_JUMP clear until then, and supply the
+// duck itself (the trick is "ducked in the air, unduck + jump on the last
+// airborne tick", and a player who only holds jump is never ducked).
+//
+// Why it is winnable at all: the ducked hull's floor sits 18 units higher than
+// the standing one (pm_trace.c hull table), so unducking on the last tick moves
+// the hull down into space the server has not yet resolved as a landing. That
+// 18-unit slack is the real window, not a single frame.
+//
+// The odds come down to how many commands per second reach the server: at
+// cl_cmdrate 30 a 750 u/s fall covers ~25 units per tick, wider than the window,
+// so it cannot be hit. At 100 it is ~7.5 units and lands comfortably. The assist
+// therefore also warns when cl_cmdrate is too low to succeed.
+static CVAR_DEFINE_AUTO( slayer_jumpbug,    "0", FCVAR_ARCHIVE, "Slayer3D: JumpBug timing assist -- just hold jump while falling (0 = off)" );
+
+// How many frames of fall distance to look ahead. The assist prepares (ducks,
+// clears jump) as soon as the ground is within this many frames, and fires on
+// the frame it is within one. Larger values prepare earlier, which matters on
+// low FPS where a single frame covers a lot of ground.
+static CVAR_DEFINE_AUTO( slayer_jumpbug_lookahead, "3", FCVAR_ARCHIVE, "Slayer3D: JumpBug preparation window, in frames of fall distance" );
+
+// Minimum downward speed before the assist arms, so steps and small hops do
+// not trip it -- only real falls.
+static CVAR_DEFINE_AUTO( slayer_jumpbug_minfall, "180", FCVAR_ARCHIVE, "Slayer3D: minimum fall speed (units/s) before JumpBug arms" );
+
+// Retry pattern. A single guessed tick is a coin flip once latency and frame
+// jitter are in play, so on the approach the assist alternates press / release
+// every frame: whichever tick the server resolves as the landing one, a fresh
+// press is likely to coincide with it. 0 = single attempt on the last frame.
+static CVAR_DEFINE_AUTO( slayer_jumpbug_retry, "1", FCVAR_ARCHIVE, "Slayer3D: alternate jump press/release on approach to catch the landing tick (0 = single try)" );
 
 // ===========================================================================
 // Cvars - Smooth zoom
@@ -86,6 +131,10 @@ static int slayer_ducktap_active = 0;
 // Movement tweak state (file-scoped so Slayer_ResetMatchState can clear them)
 static float slayer_prev_yaw = 0.0f;
 static int   slayer_prev_onground = 0;
+static int   slayer_jb_armed = 0;    // player held jump during this fall
+static int   slayer_jb_fired = 0;    // fired on the final frame (log once)
+static int   slayer_jb_press = 0;    // retry pattern: alternate press/release
+static int   slayer_jb_warned = 0;   // cl_cmdrate warning shown once per fall
 static int   slayer_yaw_initialized = 0;
 
 static void Cmd_DucktapDown_f( void )
@@ -168,6 +217,10 @@ void V_InitSlayerCvars( void )
 	Cvar_RegisterVariable( &slayer_ducktap );
 	Cvar_RegisterVariable( &slayer_autostrafe );
 	Cvar_RegisterVariable( &slayer_autojump );
+	Cvar_RegisterVariable( &slayer_jumpbug );
+	Cvar_RegisterVariable( &slayer_jumpbug_lookahead );
+	Cvar_RegisterVariable( &slayer_jumpbug_minfall );
+	Cvar_RegisterVariable( &slayer_jumpbug_retry );
 	Cmd_AddCommand( "+ducktap", Cmd_DucktapDown_f,
 		"begin rapid duck toggling (ducktap)" );
 	Cmd_AddCommand( "-ducktap", Cmd_DucktapUp_f,
@@ -186,6 +239,9 @@ void V_InitSlayerCvars( void )
 	// HUD damage indicator
 	Slayer_HUD_Init();
 
+	// Custom bullet tracers (heat colour + spark replacement)
+	Slayer_Tracer_Init();
+
 	// Side-Game Strafe (mobile auto-strafer)
 	Slayer_SGS_Init();
 
@@ -194,6 +250,27 @@ void V_InitSlayerCvars( void )
 
 	// Client-side grenade tumble
 	Slayer_GrenadeTumble_Init();
+
+	// Physical pose for dropped weapons / shields / props. Shares the spin core
+	// with the grenade module above.
+	Slayer_ItemPhys_Init();
+
+	// The gate that drops the game's own scoreboard. Registered here with the rest
+	// so its cvars exist before config.cfg runs; it does nothing until our own
+	// board is opened.
+	Slayer_StockBoard_Init();
+
+	// Shared per-player colour identity. MUST come before the radar and the
+	// scoreboard: both ask it for colours, and it owns the slot -> colour map.
+	Slayer_TeamColors_Init();
+
+	// Own radar (replaces the vanilla one)
+	Slayer_Radar_Init();
+
+	// Console spam accounting. Registered LAST on purpose: it hooks Sys_Print,
+	// so the fewer of our own init messages it counts, the cleaner the first
+	// report is.
+	Slayer_ConSpy_Init();
 
 	Con_Printf( "Slayer3D: cvars initialized\n" );
 }
@@ -205,6 +282,64 @@ void V_InitSlayerCvars( void )
 qboolean V_IsSlayerThirdPerson( void )
 {
 	return slayer_thirdperson.value != 0.0f;
+}
+
+static void Slayer_ObserverReadState( int *mode, int *target )
+{
+	cl_entity_t *local = CL_GetLocalPlayer();
+
+	*mode = SLAYER_OBS_NONE;
+	*target = 0;
+
+	if( local )
+	{
+		*mode = local->curstate.iuser1;
+		*target = local->curstate.iuser2;
+	}
+
+	// HLTV/spectate-only clients keep observer state in this synthetic slot.
+	if( cls.spectator && cls.spectator_state.client.iuser1 != SLAYER_OBS_NONE )
+	{
+		*mode = cls.spectator_state.client.iuser1;
+		*target = cls.spectator_state.client.iuser2;
+	}
+}
+
+int Slayer_ObserverMode( void )
+{
+	int mode, target;
+
+	Slayer_ObserverReadState( &mode, &target );
+	return mode;
+}
+
+int Slayer_ObserverFocusIndex( void )
+{
+	cl_entity_t *ent;
+	int mode, target, local, focus;
+
+	local = cl.playernum + 1;
+	Slayer_ObserverReadState( &mode, &target );
+	focus = Slayer_Observer_SelectFocus( local, mode, target, cl.maxclients );
+
+	if( focus != local )
+	{
+		ent = CL_GetEntityByIndex( focus );
+		if( !ent || !ent->player || !cl.players[focus - 1].name[0] )
+			focus = local;
+	}
+
+	return focus;
+}
+
+qboolean Slayer_ObserverFollowsPlayer( void )
+{
+	return Slayer_ObserverFocusIndex() != cl.playernum + 1 ? true : false;
+}
+
+cl_entity_t *Slayer_ObserverFocusEntity( void )
+{
+	return CL_GetEntityByIndex( Slayer_ObserverFocusIndex() );
 }
 
 qboolean V_IsSlayerCamFree( void )
@@ -261,8 +396,13 @@ void V_ApplySlayerThirdPerson( ref_viewpass_t *rvp )
 
 	vec3_t    forward;
 	vec3_t    camangles;
+	vec3_t    anchor;
 	vec3_t    ideal_org;
+	cl_entity_t *focus;
 	float     ofs;
+	int       focus_index;
+	int       ignore_pe;
+	int       i;
 	pmtrace_t *tr;
 
 	if( !V_IsSlayerThirdPerson( ))
@@ -300,15 +440,45 @@ void V_ApplySlayerThirdPerson( ref_viewpass_t *rvp )
 	// Only the forward axis is needed; AngleVectors accepts NULLs.
 	AngleVectors( camangles, forward, NULL, NULL );
 
+	VectorCopy( rvp->vieworigin, anchor );
+	focus_index = Slayer_ObserverFocusIndex();
+	focus = Slayer_ObserverFocusEntity();
+	ignore_pe = -1;
+
+	if( Slayer_ObserverFollowsPlayer() && focus )
+	{
+		VectorCopy( focus->origin, anchor );
+		if( focus->curstate.solid == SOLID_NOT )
+			anchor[2] -= 8.0f;
+		else if( focus->curstate.usehull == 1 )
+			anchor[2] += 12.0f;
+		else
+			anchor[2] += 28.0f;
+
+		VectorCopy( anchor, rvp->vieworigin );
+
+		if( clgame.pmove )
+		{
+			for( i = 0; i < clgame.pmove->numphysent; i++ )
+			{
+				if( clgame.pmove->physents[i].info == focus_index )
+				{
+					ignore_pe = i;
+					break;
+				}
+			}
+		}
+	}
+
 	ofs = bound( SLAYER_CAM_MIN_OFS, slayer_cam_ofs.value, SLAYER_CAM_MAX_OFS );
-	VectorMA( rvp->vieworigin, -ofs, forward, ideal_org );
+	VectorMA( anchor, -ofs, forward, ideal_org );
 
 	if( slayer_cam_clip.value != 0.0f && ofs > 0.0f )
 	{
 		// PM_CL_TraceLine returns a pointer to a static pmtrace_t inside
 		// pm_trace.c; do not store the pointer past this call.
-		tr = PM_CL_TraceLine( rvp->vieworigin, ideal_org,
-			PM_TRACELINE_PHYSENTSONLY, 2 /* small hull */, -1 );
+		tr = PM_CL_TraceLine( anchor, ideal_org,
+			PM_TRACELINE_PHYSENTSONLY, 2 /* small hull */, ignore_pe );
 
 		if( tr->fraction < 1.0f )
 		{
@@ -341,6 +511,17 @@ void V_ApplySlayerThirdPerson( ref_viewpass_t *rvp )
 #define SLAYER_TEAM_LEN  16
 static char slayer_player_team[MAX_CLIENTS + 1][SLAYER_TEAM_LEN];
 
+// Single accessor for the team table. Both the radar and the scoreboard need
+// the side a player is on; giving them this instead of a second parse keeps one
+// source of truth (and one place to fix when a mod names its teams oddly).
+const char *Slayer_PlayerTeam( int slot )
+{
+	if( slot < 1 || slot > MAX_CLIENTS )
+		return "";
+
+	return slayer_player_team[slot];
+}
+
 void Slayer_ResetMatchState( void )
 {
 	memset( slayer_player_team, 0, sizeof( slayer_player_team ));
@@ -349,6 +530,10 @@ void Slayer_ResetMatchState( void )
 	// do not bleed into the first frame of a new one.
 	slayer_prev_yaw = 0.0f;
 	slayer_prev_onground = 0;
+	slayer_jb_armed = 0;
+	slayer_jb_fired = 0;
+	slayer_jb_press = 0;
+	slayer_jb_warned = 0;
 	slayer_yaw_initialized = 0;
 	slayer_ducktap_active = 0; // clear sticky +ducktap on disconnect
 
@@ -358,11 +543,30 @@ void Slayer_ResetMatchState( void )
 	// Clear HUD damage indicator events
 	Slayer_HUD_Reset();
 
+	// Clear tracer heat state
+	Slayer_Tracer_Reset();
+
 	// Clear SGS phase / swipe timestamp / held flag
 	Slayer_SGS_Reset();
 
 	// Reset loading screen overlay state
 	Slayer_Loading_Reset();
+
+	// Drop the slot -> colour mapping and the radar's map/sighting state
+	Slayer_TeamColors_Reset();
+	Slayer_Radar_Reset();
+
+	// Drop per-entity item poses: entity indices are reassigned on the next map,
+	// so a stale slot would hand a fresh item the previous one's orientation.
+	Slayer_ItemPhys_Reset();
+
+	// Drop the measured model extents. The cache is keyed by `model_t *`, and the
+	// model pool is reset between maps, so the next map's models land on the same
+	// addresses -- keeping the cache would hand a knife the extents of whatever
+	// occupied that pointer before it. (Slayer_ModelExtent_Get also verifies the
+	// model name on every hit, so this is belt and braces rather than the only
+	// defence, which is deliberate: a silently wrong box is invisible in play.)
+	Slayer_ModelExtent_Reset();
 }
 
 // ===========================================================================
@@ -454,6 +658,15 @@ void Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 	killer = pbuf[0];
 	victim = pbuf[1];
 
+	// Tell the scoreboard we died. It needs this as a death signal independent of
+	// the server's ScoreAttrib flag: a dead player watching the round reads
+	// health == 1 (StartObserver), and on a server that never sets the dead bit
+	// that was indistinguishable from a live player on his last hit point -- so
+	// the death board did not appear. DeathMsg is sent by every mod, it draws the
+	// kill feed. Slot ids here are 1-based.
+	if( victim == cl.playernum + 1 && victim != 0 )
+		Slayer_Scoreboard_OnLocalDeath();
+
 	// Headshot detection. In CS/CSCZ the DeathMsg layout is:
 	//   byte killer, byte victim, byte headshot(0/1), string weapon
 	// In vanilla HL/DM it's:
@@ -493,6 +706,165 @@ void Slayer_OnDeathMsg( const byte *pbuf, int iSize )
 	}
 
 	(void)weapon_str; // used by killsound path only for future extensions
+}
+
+// ===========================================================================
+// JumpBug - timing assist
+// ===========================================================================
+
+// The JumpBug pattern, and why holding jump alone can never work:
+//
+// GoldSrc's PM_Jump ignores IN_JUMP when the same bit was set in the previous
+// tick (pmove->oldbuttons) -- that is what stops a held space bar from
+// auto-bhopping. So the assist must present a FRESH press on exactly the right
+// frame, which means it has to keep IN_JUMP clear until then. It also has to
+// supply the duck itself: the trick is "ducked in the air, unduck + jump on the
+// last airborne frame", and a player who only holds jump is never ducked.
+//
+// Hence: while falling fast we hold IN_DUCK and strip IN_JUMP; on the frame a
+// downward trace says the ground arrives, we drop IN_DUCK and set IN_JUMP.
+// The player only has to hold jump -- that is the arm signal, not the input.
+//
+// The server still runs the physics. This lands the timing window, it does not
+// remove fall damage.
+void Slayer_JumpBug( usercmd_t *cmd )
+{
+	playermove_t *pm;
+	vec3_t        start, end;
+	pmtrace_t     tr;
+	float         fall_speed, per_frame, frametime, look;
+	float         cmdrate, per_tick;
+	qboolean      want;
+
+	if( cmd == NULL )
+		return;
+
+	if( slayer_jumpbug.value == 0.0f )
+	{
+		slayer_jb_armed = slayer_jb_fired = slayer_jb_press = slayer_jb_warned = 0;
+		return;
+	}
+
+	// Holding jump is the arm signal. Capture it before we strip the bit, so
+	// the player's intent is not lost while we withhold the press.
+	want = ( cmd->buttons & IN_JUMP ) ? true : false;
+	if( want )
+		slayer_jb_armed = 1;
+
+	pm = clgame.pmove;
+
+	// Landed, or no physics state: disarm and let normal input through.
+	if( pm == NULL || pm->PM_PlayerTrace == NULL || cl.local.onground >= 0 )
+	{
+		slayer_jb_armed = slayer_jb_fired = slayer_jb_press = slayer_jb_warned = 0;
+		return;
+	}
+
+	if( !slayer_jb_armed )
+		return;   // player never asked for it on this fall
+
+	if( pm->movetype == MOVETYPE_FLY )
+		return;   // ladder / flying
+
+	// Must be falling, and fast enough that this is a real fall, not a step.
+	fall_speed = -pm->velocity[2];   // downward is negative z
+	if( fall_speed < slayer_jumpbug_minfall.value )
+		return;
+
+	frametime = pm->frametime;
+	if( frametime <= 0.0f )
+		frametime = (float)host.frametime;
+	if( frametime <= 0.0f )
+		frametime = 0.015f;
+
+	per_frame = fall_speed * frametime;
+	if( per_frame < 1.0f )
+		per_frame = 1.0f;
+
+	// The window is the 18-unit gap between the ducked and standing hull
+	// floors, so what decides success is how far we fall between the commands
+	// the server actually sees. Warn once when that exceeds the window: at
+	// cl_cmdrate 30 a fast fall simply steps over it.
+	cmdrate = Cvar_VariableValue( "cl_cmdrate" );
+	if( cmdrate < 10.0f ) cmdrate = 10.0f;
+	per_tick = fall_speed / cmdrate;
+	if( !slayer_jb_warned && per_tick > 18.0f )
+	{
+		slayer_jb_warned = 1;
+		Slayer_Log_Printf( "jumpbug: WARN fall=%.0f cmdrate=%.0f -> %.1f units/tick > 18 window; raise cl_cmdrate",
+			fall_speed, cmdrate, per_tick );
+		Con_DPrintf( S_WARN "JumpBug: cl_cmdrate %.0f too low for this fall (%.1f u/tick); try cl_cmdrate 100\n",
+			cmdrate, per_tick );
+	}
+
+	// Look several frames ahead so we can prepare (duck, withhold jump) before
+	// the decisive tick instead of reacting on it.
+	look = slayer_jumpbug_lookahead.value;
+	if( look < 1.0f ) look = 1.0f;
+	if( look > 8.0f ) look = 8.0f;
+
+	VectorCopy( pm->origin, start );
+	VectorCopy( pm->origin, end );
+	end[2] -= per_frame * look;
+
+	tr = pm->PM_PlayerTrace( start, end, PM_NORMAL, -1 );
+
+	if( tr.startsolid || tr.allsolid )
+		return;
+
+	if( tr.fraction >= 1.0f )
+	{
+		// Ground still far: stay ducked and keep jump clear, so whenever the
+		// approach begins the press we make is seen as new.
+		cmd->buttons |= IN_DUCK;
+		cmd->buttons &= ~IN_JUMP;
+		slayer_jb_fired = 0;
+		slayer_jb_press = 0;
+		return;
+	}
+
+	// Distance remaining, in frames of fall.
+	{
+		float remain_frames = ( tr.fraction * look );
+
+		if( remain_frames <= 1.0f )
+		{
+			// Final frame: unduck and press. This is the tick that matters.
+			cmd->buttons &= ~IN_DUCK;
+			cmd->buttons |= IN_JUMP;
+
+			if( !slayer_jb_fired )
+			{
+				slayer_jb_fired = 1;
+				Slayer_Log_Printf( "jumpbug: FIRE fall=%.0f frame=%.1fu tick=%.1fu frac=%.3f oldjump=%d bInDuck=%d cmdrate=%.0f",
+					fall_speed, per_frame, per_tick, tr.fraction,
+					( pm->oldbuttons & IN_JUMP ) ? 1 : 0, (int)pm->bInDuck, cmdrate );
+			}
+			return;
+		}
+
+		// On approach but not the final frame. Stay ducked, and if retries are
+		// enabled alternate the jump bit: latency and frame jitter mean we
+		// cannot know which tick the server will resolve as the landing, so
+		// offering a fresh press every other frame covers more of them than a
+		// single guess.
+		cmd->buttons |= IN_DUCK;
+
+		if( slayer_jumpbug_retry.value != 0.0f )
+		{
+			slayer_jb_press = !slayer_jb_press;
+			if( slayer_jb_press )
+				cmd->buttons |= IN_JUMP;
+			else
+				cmd->buttons &= ~IN_JUMP;
+		}
+		else
+		{
+			cmd->buttons &= ~IN_JUMP;
+		}
+
+		slayer_jb_fired = 0;
+	}
 }
 
 // ===========================================================================
@@ -584,6 +956,9 @@ void V_SlayerMovementTweaks( usercmd_t *cmd )
 	}
 
 	slayer_prev_onground = cl.local.onground;
+
+	// --- JumpBug (timing assist) ---
+	Slayer_JumpBug( cmd );
 }
 
 // ===========================================================================

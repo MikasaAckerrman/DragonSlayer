@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+	Bottom sheet offered when the user taps "Game data location".
+
+	Two ways to place the game files, because they are not equivalent: the app's
+	own directory is the only location the engine can be sure it may write to,
+	while a folder of the user's choosing survives the app being uninstalled.
+	Spelling both trade-offs out here is cheaper than a support conversation.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+	xmlns:app="http://schemas.android.com/apk/res-auto"
+	xmlns:tools="http://schemas.android.com/tools"
+	android:layout_width="match_parent"
+	android:layout_height="wrap_content"
+	android:orientation="vertical"
+	android:paddingHorizontal="8dp"
+	android:paddingTop="16dp"
+	android:paddingBottom="24dp">
+
+	<TextView
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:layout_marginHorizontal="16dp"
+		android:layout_marginBottom="4dp"
+		android:text="@string/game_data_location"
+		android:textAppearance="@style/TextAppearance.Material3.TitleLarge" />
+
+	<TextView
+		android:id="@+id/game_path_current"
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:layout_marginHorizontal="16dp"
+		android:layout_marginBottom="16dp"
+		android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+		tools:text="/storage/emulated/0/Android/data/su.xash.engine/files/xash" />
+
+	<com.google.android.material.card.MaterialCardView
+		android:id="@+id/game_path_default"
+		style="@style/Widget.Material3.CardView.Filled"
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:layout_marginHorizontal="8dp"
+		android:layout_marginBottom="8dp"
+		android:clickable="true"
+		android:focusable="true">
+
+		<LinearLayout
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:orientation="vertical"
+			android:padding="14dp">
+
+			<TextView
+				android:layout_width="match_parent"
+				android:layout_height="wrap_content"
+				android:text="@string/game_path_use_default"
+				android:textAppearance="@style/TextAppearance.Material3.TitleMedium" />
+
+			<TextView
+				android:layout_width="match_parent"
+				android:layout_height="wrap_content"
+				android:layout_marginTop="2dp"
+				android:text="@string/game_path_use_default_summary"
+				android:textAppearance="@style/TextAppearance.Material3.BodyMedium" />
+		</LinearLayout>
+	</com.google.android.material.card.MaterialCardView>
+
+	<com.google.android.material.card.MaterialCardView
+		android:id="@+id/game_path_custom"
+		style="@style/Widget.Material3.CardView.Filled"
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:layout_marginHorizontal="8dp"
+		android:clickable="true"
+		android:focusable="true">
+
+		<LinearLayout
+			android:layout_width="match_parent"
+			android:layout_height="wrap_content"
+			android:orientation="vertical"
+			android:padding="14dp">
+
+			<TextView
+				android:layout_width="match_parent"
+				android:layout_height="wrap_content"
+				android:text="@string/game_path_choose_folder"
+				android:textAppearance="@style/TextAppearance.Material3.TitleMedium" />
+
+			<TextView
+				android:layout_width="match_parent"
+				android:layout_height="wrap_content"
+				android:layout_marginTop="2dp"
+				android:text="@string/game_path_choose_folder_summary"
+				android:textAppearance="@style/TextAppearance.Material3.BodyMedium" />
+		</LinearLayout>
+	</com.google.android.material.card.MaterialCardView>
+</LinearLayout>

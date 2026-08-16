@@ -19,9 +19,16 @@ import sys
 
 
 def run_cmake(bin_path, libs, inst_path):
+	# NOTE: both cmake steps below are checked. Previously their return codes
+	# were discarded, so a subproject that failed to compile (e.g. mainui ->
+	# no libmenu_android_*.so) left the Android build GREEN while the APK
+	# silently shipped without that library.
 	cmake_exec = ["cmake", "--build", bin_path]
 	cmake_process = subprocess.Popen(cmake_exec)
 	cmake_process.communicate()
+	if cmake_process.returncode != 0:
+		print("ERROR: cmake build failed for {} (exit {})".format(bin_path, cmake_process.returncode))
+		sys.exit(1)
 
 	if libs:
 		for lib in libs:
@@ -38,6 +45,9 @@ def run_cmake(bin_path, libs, inst_path):
 		cmake_exec = ["cmake", "--install", bin_path, "--prefix", inst_path]
 		cmake_process = subprocess.Popen(cmake_exec)
 		cmake_process.communicate()
+		if cmake_process.returncode != 0:
+			print("ERROR: cmake install failed for {} (exit {})".format(bin_path, cmake_process.returncode))
+			sys.exit(1)
 
 def main():
 	parser = argparse.ArgumentParser()

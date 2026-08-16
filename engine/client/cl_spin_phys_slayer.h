@@ -1,0 +1,322 @@
+/*
+cl_spin_phys_slayer.h - Slayer3D shared rotational dynamics for loose objects
+Copyright (C) 2026 Slayer3D contributors
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+*/
+#ifndef CL_SPIN_PHYS_SLAYER_H
+#define CL_SPIN_PHYS_SLAYER_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// Angular dynamics for objects whose TRANSLATION belongs to the server and
+// whose ROTATION is ours to invent: grenades in flight, dropped weapons, a
+// dropped shield, any prop a mod throws on the ground.
+//
+// The point of this module is that angular velocity is STATE, not a function of
+// how fast the object is currently moving. The previous grenade code computed
+// `rate = f(speed)` every frame and derived the axis from the current velocity,
+// which cannot express the things that actually make tumbling read as physical:
+// a hit against a wall changing the spin, a grenade that keeps turning after it
+// slows down, friction bleeding the spin off while it rolls, or two grenades
+// thrown identically ending up in different orientations.
+//
+// Deliberately NOT a rigid-body simulation. There is no inertia tensor and no
+// contact solver, because the server owns the position: any force model we
+// integrate would immediately disagree with where the object actually is. What
+// is modelled is exactly the part nobody else is computing -- the spin -- driven
+// by the velocity the server implies and by contacts the caller traces for us.
+//
+// Everything is world space. Arrays are plain float[N] rather than vec3_t so
+// this file can be compiled and tested on the host without the engine headers.
+
+// Tuning. One struct per kind of object, so a grenade and a dropped rifle can
+// behave differently without duplicating the code.
+typedef struct
+{
+	float radius;        // effective rolling radius, units. Never <= 0.
+	float throw_spin;    // spin imparted per unit of throw speed (dimensionless)
+	float spin_bias;     // 0..1: share of the spin about the flight line itself,
+	                     // so objects do not all tumble in one flat plane
+	float impact_grip;   // 0..1: how much contact slip converts to spin on a hit
+	float roll_grip;     // 1/sec: how fast the spin converges to rolling
+	float roll_speed;    // units/sec: tangential speed above which the object
+	                     // SKIDS instead of rolling. The no-slip condition
+	                     // omega = (n x v)/r is only physical for something that
+	                     // is actually rolling; applied at any speed it makes an
+	                     // object arriving fast spin up violently on contact
+	                     // (measured: 0.40 -> 5.08 turns/sec six frames after
+	                     // landing) and swings the axis onto n x v, which is
+	                     // exactly the "spins buggily, not about its own axis"
+	                     // report. 0 = always roll (the old behaviour).
+	float slide_drag;    // 1/sec: spin lost to friction while skidding
+	float contact_omega; // rad/sec: cap on the ROLLING target. The no-slip
+	                     // condition is geometrically right and visually wrong at
+	                     // these radii -- a 3.5-unit grenade rolling at 200 u/s
+	                     // works out to nine turns a second, which is a smear on a
+	                     // phone screen. max_omega exists to survive one bad
+	                     // frame; this is what rolling is allowed to look like.
+	                     // 0 = no separate cap.
+	float air_drag;      // 1/sec: spin decay in flight
+	float spin_drag;     // 1/sec: extra decay of spin about the contact normal
+	float rest_speed;    // units/sec: below this it may settle
+	float rest_omega;    // rad/sec: below this it may settle
+	float rest_time;     // sec: how long "slow" must last to settle WITHOUT a
+	                     // reported contact. Nothing rests in mid-air, so an
+	                     // object with no contact has to prove it is not simply
+	                     // passing through the slow part of its arc.
+	float spinup_time;   // sec: how long the throw impulse may keep tracking a
+	                     // rising velocity before it is considered final
+	float max_omega;     // rad/sec: hard cap, keeps one bad frame from blurring
+	float impact_dv;     // units/sec: velocity change that counts as a collision
+} slayer_spin_params_t;
+
+// What the caller learned about the object's surroundings this frame. All of it
+// is optional: with a zeroed struct the object simply tumbles in free flight.
+typedef struct
+{
+	int   on_ground;        // resting on / sliding along a surface
+	float normal[3];        // that surface's normal (unit)
+	int   has_impact_normal;// true if impact_normal is meaningful
+	float impact_normal[3]; // surface the object hit this frame (unit)
+} slayer_spin_contact_t;
+
+// Per-object state. Owned by the caller, one per tracked entity.
+typedef struct
+{
+	float orient[4];     // accumulated orientation, quaternion (x,y,z,w)
+	float omega[3];      // angular velocity, rad/sec, world space
+	float prev_vel[3];
+	int   have_prev_vel;
+	int   resting;       // latched with hysteresis, see Slayer_Spin_Step
+	int   impacts;       // diagnostics: collisions seen since seeding
+
+	// THE THROW IMPULSE IS APPLIED IN Slayer_Spin_Step, NOT IN Slayer_Spin_Seed.
+	//
+	// Seeding happens on the first frame an object becomes visible, and on that
+	// frame its velocity is not known yet: the caller derives velocity by
+	// differencing render positions, so it needs two samples, and the value it
+	// passes to the seed is zero. The core used to take that zero as "this was
+	// dropped, not thrown" and latch `resting` -- which meant the throw impulse
+	// was never applied to anything, ever. Objects then only span up from
+	// contact (rolling, bounces), which is exactly what the reported bug looked
+	// like: "grenades roll along the ground instead of tumbling in the air",
+	// "dropped weapons only start moving when they touch a surface".
+	//
+	// So the spin-up is a WINDOW rather than an event: while the object has not
+	// spun up yet, the spin tracks the rising velocity, and the window closes as
+	// soon as the velocity stops rising (the caller's low-pass has caught up) or
+	// something happens that owns the spin instead -- a collision or a contact.
+	int   spun_up;       // throw impulse has been applied and is final
+	float spinup_peak;   // highest speed seen during the spin-up window
+	float spinup_age;    // seconds the window has been open
+	float still_time;    // seconds spent slow enough to be considered settled
+	int   seed;          // per-object tumble bias, kept so the window can re-aim
+} slayer_spin_t;
+
+// Sensible defaults for a hand grenade (radius ~3.5 units).
+void Slayer_Spin_DefaultParams( slayer_spin_params_t *p );
+
+// Start tracking. `orient` is the object's current orientation as a quaternion
+// (pass the server's angles converted, NOT identity -- otherwise the object
+// visibly snaps the moment we take it over); `vel` is its current velocity.
+// `seed` picks the per-object spin bias direction and only needs to differ
+// between objects, so an entity index is fine.
+void Slayer_Spin_Seed( slayer_spin_t *st, const float *orient, const float *vel,
+	int seed, const slayer_spin_params_t *p );
+
+// Advance one frame. `vel` is the velocity implied by the server this frame,
+// `contact` may be NULL. Safe with dt <= 0 (does nothing) and with a NULL
+// contact (free flight).
+void Slayer_Spin_Step( slayer_spin_t *st, const float *vel, float dt,
+	const slayer_spin_contact_t *contact, const slayer_spin_params_t *p );
+
+// Nudge the spin as if struck; used when the caller knows about a hit the
+// velocity does not show (e.g. a server event).
+void Slayer_Spin_AddImpulse( slayer_spin_t *st, const float *axis, float rad_per_sec,
+	const slayer_spin_params_t *p );
+
+// True while the object is considered settled (no spin is applied).
+int Slayer_Spin_IsResting( const slayer_spin_t *st );
+
+// Current spin magnitude in rad/sec, for diagnostics.
+float Slayer_Spin_Rate( const slayer_spin_t *st );
+
+// Rotate `orient` so the object's local up leans onto a surface whose normal is
+// `normal`, easing at `rate` per second. This is the "lies against the wall"
+// look for dropped items: the position stays exactly where the server put it,
+// only the pose changes, so a weapon wedged in a corner reads as resting on the
+// corner instead of standing upright inside it. Does nothing if `normal` is
+// degenerate.
+void Slayer_Spin_SettleTo( slayer_spin_t *st, const float *normal, float rate, float dt );
+
+// The same, generalised, and what dropped items actually use.
+//
+// Two things the version above cannot express, both of which the device showed:
+//
+//  * WHICH body axis should face the surface. "Local up" is meaningless for a
+//    rifle: its mesh is authored lying along its own X, so aligning Z to the
+//    floor normal is arbitrary and the model ends up in a pose nothing chose.
+//    Real objects come to rest on their LARGEST face, i.e. with their SHORTEST
+//    extent along the normal, and the caller knows the model's extents.
+//  * A TOLERANCE. Easing all the way to exact alignment is what produced "you
+//    drop a weapon and it slowly straightens itself out, which looks wrong":
+//    an item that landed at a plausible angle was rotated anyway. With a
+//    tolerance, a pose that already reads as resting is left completely alone,
+//    and only a grossly wrong one (standing on end inside a step) is corrected.
+//    This is also what lets an item rest ON AN EDGE: leaning on a step is within
+//    tolerance of both surfaces, so neither pulls it flat.
+//
+// `local_axis` is in the object's own frame and need not be normalised.
+// `tol_cos` is the cosine of the angle considered "already resting" (1 = always
+// correct, 0.7 ~ 45 degrees of slack). Does nothing when already inside it.
+//
+// SUPERSEDED by Slayer_Spin_Settle below, and kept only so the old behaviour can
+// still be selected live for comparison. See that function for why aiming at a
+// target orientation was the wrong model in the first place.
+void Slayer_Spin_SettleAxisTo( slayer_spin_t *st, const float *normal,
+	const float *local_axis, float rate, float dt, float tol_cos );
+
+// ===========================================================================
+// Toppling: how a dropped item actually comes to rest
+// ===========================================================================
+//
+// WHAT WAS WRONG WITH THE FUNCTION ABOVE
+//
+// It computes a TARGET orientation (short body axis perpendicular to the surface
+// normal) and eases toward it every frame. That is a servo, and it reads as one:
+// the reported symptom was "you drop a weapon and when it touches the ground it
+// straightens itself out and spins". Three separate problems, none fixable by
+// tuning the rate or the tolerance:
+//
+//   1. the target is recomputed every frame from a traced normal, and the trace
+//      normal jitters, so the pose chases a moving target and never arrives;
+//   2. it has exactly one notion of "correct" -- flat against one normal -- so an
+//      item balanced across a step is actively pulled off it. That is why resting
+//      on an edge did not work;
+//   3. it is a KINEMATIC correction, so the motion has no relation to how an
+//      object of that shape would actually come to rest.
+//
+// WHAT THIS DOES INSTEAD
+//
+// No target orientation exists anywhere in the model, so there is nothing to
+// servo toward. The item is an oriented box. Wherever a corner of that box is
+// INSIDE the surface, the surface pushes it out, and the pose that results is
+// whatever pose has nothing buried. Resting flat, resting on an edge and hanging
+// off a ledge are the same three lines of code with different contact sets.
+//
+// THE CONSTRAINT THAT SHAPES EVERYTHING: the origin is the server's and we never
+// move it. So the item cannot fall, it can only rotate about its own origin, and
+// the poses available to it are limited by non-penetration. For a box with
+// half-length a and half-thickness b whose origin sits d above the floor:
+//
+//     a*sin(theta) + b*cos(theta) <= d
+//
+// Measured for a real w_ak47 (a = 17.72, b = 1.22):
+//
+//     origin  1.3 above the floor  ->  at most  0.3 degrees of tilt
+//     origin  4.0                  ->           9.1
+//     origin  8.0                  ->          22.8
+//     origin 16.0                  ->          60.3
+//
+// That single inequality explains both complaints. On flat ground the server parks
+// the origin at d ~= b, so the weapon MUST end up flat -- not because anything
+// aligns it, but because every other pose is inside the floor. The old servo was
+// forcing what the geometry already guaranteed, which is exactly why it was both
+// visible and pointless. On a step or a ledge the origin sits high, a leaning pose
+// is feasible, and nothing pushes it down.
+//
+// NOTE, and this cost a rewrite: gravity does NOT drive this. With the centre of
+// mass pinned at the origin, rotating the body does not change its potential
+// energy, so a gravity torque about the centre is zero and a model built on one
+// pendulums forever (measured: 231 degrees of travel). The force that rotates a
+// dropped weapon is the normal force at the buried corner. See SP_ContactAxis.
+//
+// The last detail is rate. Resolving penetration in one step moves the model as
+// much as 19.7 degrees in a SINGLE FRAME (measured), and that frame is the "it
+// glues itself flat on contact" the player saw. Capped at topple_rate the same
+// correction takes 4.3 degrees per frame over 0.083s, which reads as the item
+// tipping over. Transient penetration is free: only the pose is ours.
+
+#define SLAYER_SUPPORT_AIR   0   // nothing within reach: free flight, no settling
+#define SLAYER_SUPPORT_POINT 1   // one corner touching: balanced on a tip
+#define SLAYER_SUPPORT_EDGE  2   // two corners: resting on an edge
+#define SLAYER_SUPPORT_FACE  3   // three or more: lying on a face
+
+typedef struct
+{
+	float gravity;      // units/sec^2. GoldSrc is 800.
+	float damping;      // 1/sec, contact friction bleeding the tumble off
+	float restitution;  // 0..1: share of the spin surviving a corner landing
+	float topple_rate;  // rad/sec: fastest the pose may be pushed toward feasible
+	float contact_eps;  // units: a corner this close to the surface is touching
+	float pen_tol;      // units: penetration below which nothing is corrected
+	float rest_omega;   // rad/sec: below this, and stable, it is settled
+} slayer_spin_settle_params_t;
+
+// What the last Slayer_Spin_Settle found. Diagnostics AND control: the caller
+// sleeps an item once `settled` is set, and the class is what a harness asserts on.
+typedef struct
+{
+	int   contacts;     // corners within contact_eps of the surface, 0..8
+	int   support;      // SLAYER_SUPPORT_*
+	int   stable;       // nothing buried: no surface is pushing on the item
+	int   settled;      // stable and no longer turning
+	float penetration;  // lowest corner height above the surface (negative = inside)
+	float applied;      // radians of rotation applied this frame
+} slayer_spin_support_t;
+
+// Defaults measured with tests/settle_proto.py: 260 deg/sec topple rate, 0.10
+// restitution, damping 5/sec. See that file for the two failed models that
+// preceded them (a gravity torque about a pinned centre pendulums for 231
+// degrees; an inelastic slap applied to an already-penetrating pose never
+// rotates at all).
+void Slayer_Spin_DefaultSettleParams( slayer_spin_settle_params_t *sp );
+
+// Advance the resting pose by one frame.
+//
+//   half   - the item's REAL half-extents in its own frame, from
+//            Slayer_ModelExtent_Get. Not the engine's hull: that has the axes
+//            permuted on 24 of 34 stock models (see cl_model_extent_slayer.h),
+//            which is what made every earlier attempt at this hopeless.
+//   normal - the supporting surface's normal, unit length.
+//   dist   - how far the origin sits above that surface, along the normal.
+//   out    - may be NULL.
+//
+// Does nothing and reports SLAYER_SUPPORT_AIR when the box does not reach the
+// surface, so an item in flight is left entirely to Slayer_Spin_Step.
+void Slayer_Spin_Settle( slayer_spin_t *st, const float *half,
+	const float *normal, float dist, float dt,
+	const slayer_spin_settle_params_t *sp, slayer_spin_support_t *out );
+
+// The largest tilt, in radians, at which a box of these half-extents still clears
+// a surface `dist` below its origin. Exposed because it is the whole explanation
+// for why items look flat on the floor and leaning on a step, and a harness
+// asserting on the numbers above is worth more than a comment claiming them.
+float Slayer_Spin_MaxTilt( float half_long, float half_short, float dist );
+
+
+// Convert the stored orientation into the Euler angles the studio renderer
+// wants, compensating for its pitch negation.
+//
+// Declared here but IMPLEMENTED IN cl_spin_phys_engine.c, because it needs the
+// engine headers and this file must stay compilable with only <math.h> -- that
+// is what lets the dynamics above be tested on the host against the real source
+// rather than a copy. Every consumer shares this one conversion so the pitch
+// compensation cannot drift apart between them.
+void Slayer_Spin_PoseToAngles( const slayer_spin_t *st, float *out_angles );
+#ifdef __cplusplus
+}
+#endif
+
+#endif // CL_SPIN_PHYS_SLAYER_H

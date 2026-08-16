@@ -38,6 +38,14 @@ void V_InitSlayerCvars( void );
 // Returns true when the Slayer3D third-person mode is active.
 qboolean V_IsSlayerThirdPerson( void );
 
+// GoldSrc observer context. Indices are 1-based entity indices. Roaming and
+// map-free deliberately fall back to the local entity because iuser2 may keep
+// a stale target in those modes.
+int Slayer_ObserverMode( void );
+int Slayer_ObserverFocusIndex( void );
+qboolean Slayer_ObserverFollowsPlayer( void );
+struct cl_entity_s *Slayer_ObserverFocusEntity( void );
+
 // Adjust the given viewpass so the camera orbits the player.
 // Safe to call every frame; no-op when slayer_thirdperson is 0.
 void V_ApplySlayerThirdPerson( ref_viewpass_t *rvp );
@@ -61,6 +69,7 @@ void V_SlayerCamSnapCheck( struct usercmd_s *cmd );
 // Applies ducktap, autostrafe, and autojump logic to the current usercmd.
 // Called from CL_CreateCmd after V_SlayerCamSnapCheck.
 void V_SlayerMovementTweaks( struct usercmd_s *cmd );
+void Slayer_JumpBug( struct usercmd_s *cmd );
 
 // ---------------------------------------------------------------------------
 // Smooth zoom
@@ -87,6 +96,12 @@ void Slayer_OnDeathMsg( const byte *pbuf, int iSize );
 //   pbuf  - raw payload bytes (pbuf[0] = client slot, pbuf[1..] = team)
 //   iSize - payload length in bytes
 void Slayer_OnTeamInfo( const byte *pbuf, int iSize );
+
+// Team name for a 1-based client slot, as reported by the server's "TeamInfo"
+// usermsg. Returns an empty string (never NULL) when the team is unknown.
+// Exposed so the radar and the scoreboard can group players by side without
+// each keeping its own copy of the parse.
+const char *Slayer_PlayerTeam( int slot );
 
 // Reset the Slayer3D per-match state (team table, etc).
 // Called when the engine clears client state (disconnect / map change).

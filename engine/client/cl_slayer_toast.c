@@ -79,7 +79,7 @@ static int Slayer_Toast_LocalAvatar( uint64_t id )
 	if( toast_avatar_tex != 0 )
 		return ( toast_avatar_tex > 0 ) ? toast_avatar_tex : 0;
 
-	Q_snprintf( path, sizeof( path ), "avatars/%"PRIu64".png", id );
+	Slayer_AvatarPath( path, sizeof( path ), id );
 
 	if( !FS_FileExists( path, false ))
 	{

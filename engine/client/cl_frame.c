@@ -24,6 +24,8 @@ GNU General Public License for more details.
 #include "input.h"
 #include "cl_view_slayer.h"
 #include "cl_grenade_tumble_slayer.h"
+#include "cl_item_phys_slayer.h"
+#include "cl_tracer_slayer.h"
 
 // #define STUDIO_INTERPOLATION_FIX
 
@@ -952,9 +954,14 @@ all the visible entities should pass this filter
 qboolean CL_AddVisibleEntity( cl_entity_t *ent, int entityType )
 {
 	qboolean draw_player = true;
+	qboolean force_observer_focus;
 
 	if( !ent || !ent->model )
 		return false;
+
+	force_observer_focus = V_IsSlayerThirdPerson() &&
+		Slayer_ObserverFollowsPlayer() &&
+		ent->index == Slayer_ObserverFocusIndex();
 
 	// don't add the player in firstperson mode
 	if( RP_LOCALCLIENT( ent ))
@@ -970,9 +977,14 @@ qboolean CL_AddVisibleEntity( cl_entity_t *ent, int entityType )
 		}
 	}
 
-	// check for adding this entity
+	// Let the game DLL keep its normal in-eye filtering, except when Slayer's own
+	// third-person camera is active: then hiding iuser2 removes the very player
+	// the camera is orbiting.
 	if( !clgame.dllFuncs.pfnAddEntity( entityType, ent, ent->model->name ))
 	{
+		if( force_observer_focus )
+			goto add_to_renderer;
+
 		// local player was reject by game code, so ignore any effects
 		if( RP_LOCALCLIENT( ent ))
 			cl.local.apply_effects = false;
@@ -982,8 +994,15 @@ qboolean CL_AddVisibleEntity( cl_entity_t *ent, int entityType )
 	if( !draw_player )
 		return false;
 
+add_to_renderer:
 	// Slayer3D: 3-axis grenade tumble (proportional to linear speed)
 	Slayer_GrenadeTumble_Apply( ent );
+
+	// Slayer3D: physical pose for dropped weapons/shields/props. Runs AFTER the
+	// grenade pass on purpose: the grenade module owns grenade models and returns
+	// first for anything else, so the two never touch the same entity and the
+	// spin is never integrated twice in one frame.
+	Slayer_ItemPhys_Apply( ent );
 
 	if( !ref.dllFuncs.R_AddEntity( ent, entityType ))
 		return false;
@@ -1044,6 +1063,14 @@ static void CL_LinkPlayers( frame_t *frame )
 	if( ent && FBitSet( ent->curstate.effects, EF_MUZZLEFLASH ))
 		SetBits( clgame.viewent.curstate.effects, EF_MUZZLEFLASH );
 
+	// Slayer3D: use the viewmodel edge only in first person. In third person the
+	// renderer intentionally skips R_DrawViewModel, so it never consumes/clears
+	// EF_MUZZLEFLASH on clgame.viewent; its rising edge would fire once and then
+	// remain stuck ON. The local player entity below carries the live flag and
+	// is the correct third-person source.
+	if( !V_IsSlayerThirdPerson() && !CL_IsThirdPerson())
+		Slayer_Tracer_CheckMuzzleflash( &clgame.viewent, 0, true );
+
 	// check all the clients but add only visible
 	for( i = 0, state = frame->playerstate; i < MAX_CLIENTS; i++, state++ )
 	{
@@ -1101,6 +1128,14 @@ static void CL_LinkPlayers( frame_t *frame )
 		VectorCopy( ent->origin, ent->attachment[1] );
 		VectorCopy( ent->origin, ent->attachment[2] );
 		VectorCopy( ent->origin, ent->attachment[3] );
+
+		// Remote players always use their own entity. In third person the local
+		// player does too (see the viewmodel comment above), but remains tagged
+		// local so aiming and diagnostics use the local-player path.
+		if( i != cl.playernum )
+			Slayer_Tracer_CheckMuzzleflash( ent, i + 1, false );
+		else if( V_IsSlayerThirdPerson() || CL_IsThirdPerson())
+			Slayer_Tracer_CheckMuzzleflash( ent, 0, true );
 
 		CL_AddVisibleEntity( ent, ET_PLAYER );
 	}

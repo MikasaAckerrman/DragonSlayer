@@ -38,6 +38,8 @@ static CVAR_DEFINE_AUTO( slayer_steam_apikey, "", FCVAR_ARCHIVE | FCVAR_PROTECTE
 // Batch request state
 static qboolean sapi_initialized = false;
 static qboolean sapi_batch_in_progress = false;
+static qboolean sapi_batch_disabled = false;   // set on a rejected key; cleared when the key changes
+static char     sapi_last_apikey[128] = "";     // key last sent, to detect an edit after a rejection
 static uint64_t sapi_batch_ids[SAPI_MAX_PLAYERS];
 static int      sapi_batch_slots[SAPI_MAX_PLAYERS]; // original player slot for each ID
 static int      sapi_batch_count = 0;
@@ -57,6 +59,7 @@ static int      sapi_batch_count = 0;
 #define SAPI_RESULT_IN_PROGRESS 1
 #define SAPI_RESULT_SUCCESS     2
 #define SAPI_RESULT_FAIL        3
+#define SAPI_RESULT_BADKEY      4      // API key rejected (401/403): stop using Web API
 
 static JavaVM           *sapi_jvm;
 static jclass            sapi_helper_class;    // global ref to SteamAPIHelper
@@ -133,7 +136,12 @@ static void *SAPI_WorkerThread( void *arg )
 		"SteamAPI: worker done, result=%d", result );
 
 	__sync_synchronize();
-	sapi_result = ( result >= 0 ) ? SAPI_RESULT_SUCCESS : SAPI_RESULT_FAIL;
+	// result -2 = the key is invalid (401/403); anything else negative is a
+	// transient failure. Only the former is permanent.
+	if( result == -2 )
+		sapi_result = SAPI_RESULT_BADKEY;
+	else
+		sapi_result = ( result >= 0 ) ? SAPI_RESULT_SUCCESS : SAPI_RESULT_FAIL;
 	__sync_synchronize();
 
 	free( work );
@@ -221,6 +229,63 @@ void Slayer_SteamAPI_Reset( void )
 	sapi_result = SAPI_RESULT_IDLE;
 }
 
+/*
+====================
+SAPI_KeyLooksValid
+
+Is the configured key even the right SHAPE?
+
+A Steam Web API key is exactly 32 hex characters. The key on the reporting
+device is 63, and every batch spent a request to be told HTTP 403 -- forever,
+because the rejection path re-arms as soon as the key changes and the key never
+changed. Checking the length costs nothing and turns an endless silent 403 into
+one actionable line.
+
+Says so ONCE per distinct key, not per batch: this is asked several times a
+minute and a wall of identical warnings is its own bug. Returns false and marks
+the Web API disabled, exactly like a server-side rejection, so the XML fallback
+takes over untouched.
+====================
+*/
+static qboolean SAPI_KeyLooksValid( void )
+{
+	int  keylen = (int)Q_strlen( slayer_steam_apikey.string );
+	int  i;
+
+	if( keylen == 32 )
+	{
+		for( i = 0; i < 32; i++ )
+		{
+			char c = slayer_steam_apikey.string[i];
+
+			if( !(( c >= '0' && c <= '9' ) || ( c >= 'a' && c <= 'f' )
+				|| ( c >= 'A' && c <= 'F' )))
+				break;
+		}
+
+		if( i == 32 )
+			return true;
+
+		Con_Printf( S_WARN "SteamAPI: the Web API key contains a non-hex character at position %d.\n", i + 1 );
+	}
+	else
+	{
+		Con_Printf( S_WARN "SteamAPI: the Web API key is %d characters, expected 32.\n", keylen );
+	}
+
+	Con_Printf( "  Steam will refuse it (HTTP 403). Avatars still load from public profiles,\n" );
+	Con_Printf( "  so nothing else is affected. Fix or clear it in Settings -> Steam Web API key;\n" );
+	Con_Printf( "  a valid key is 32 hex characters from steamcommunity.com/dev/apikey\n" );
+	Slayer_Log_Printf( "batch: refusing a malformed API key (%d chars, expected 32 hex) — "
+		"XML fallback only, no request spent", keylen );
+
+	// Same state a real rejection leaves behind, so editing the key re-enables
+	// the Web API through the existing path rather than a second mechanism.
+	sapi_batch_disabled = true;
+	Q_strncpy( sapi_last_apikey, slayer_steam_apikey.string, sizeof( sapi_last_apikey ));
+	return false;
+}
+
 void Slayer_SteamAPI_RequestBatch( const uint64_t *steamids, int count )
 {
 	sapi_work_t *work;
@@ -235,6 +300,21 @@ void Slayer_SteamAPI_RequestBatch( const uint64_t *steamids, int count )
 	if( sapi_batch_in_progress )
 		return;
 
+	// The key was rejected earlier and has not changed since. Retrying it just
+	// earns another 403; the XML fallback covers avatars in the meantime.
+	if( sapi_batch_disabled )
+	{
+		if( Q_strcmp( slayer_steam_apikey.string, sapi_last_apikey ) != 0 )
+		{
+			sapi_batch_disabled = false;   // key edited: give it another chance
+			Slayer_Log_Printf( "batch: API key changed, re-enabling Web API" );
+		}
+		else
+		{
+			return;
+		}
+	}
+
 	if( slayer_steam_apikey.string[0] == '\0' )
 	{
 		Slayer_Log_Printf( "SteamAPI batch: %d ID(s) pending but slayer_steam_apikey is EMPTY "
@@ -244,6 +324,14 @@ void Slayer_SteamAPI_RequestBatch( const uint64_t *steamids, int count )
 
 	if( !steamids || count <= 0 )
 		return;
+
+	// Shape check before the network: a malformed key can only earn a 403.
+	if( !SAPI_KeyLooksValid( ))
+		return;
+
+	// Remember the key we are about to try, so a later rejection can be told
+	// apart from a subsequent edit of the key.
+	Q_strncpy( sapi_last_apikey, slayer_steam_apikey.string, sizeof( sapi_last_apikey ) );
 
 	Slayer_Log_Printf( "SteamAPI batch: requesting %d avatar(s) via Web API", count );
 
@@ -291,7 +379,7 @@ void Slayer_SteamAPI_RequestBatch( const uint64_t *steamids, int count )
 		gamedir = "valve";
 
 	Q_snprintf( work->basepath, sizeof( work->basepath ),
-		"%s/%s/avatars", basedir, gamedir );
+		"%s/%s/" SLAYER_AVATAR_DIR, basedir, gamedir );
 
 	sapi_batch_in_progress = true;
 	sapi_result = SAPI_RESULT_IN_PROGRESS;
@@ -323,6 +411,8 @@ qboolean Slayer_SteamAPI_Frame( void )
 		int i;
 
 		Con_Printf( "Slayer3D: batch avatar fetch completed\n" );
+		Slayer_Log_Printf( "batch: fetch completed, %d slot(s) queued for reload",
+			sapi_batch_count );
 
 		// Mark avatar slots for reload — the Java side saved PNGs directly.
 		// Trigger avatar download system to notice new files on disk.
@@ -341,9 +431,29 @@ qboolean Slayer_SteamAPI_Frame( void )
 		return true;
 	}
 
+	if( sapi_result == SAPI_RESULT_BADKEY )
+	{
+		// Say what to DO, not just what happened. A rejected key is almost always
+		// a typo or a revoked key, and the feature is optional: avatars still load
+		// from public profiles, so the message must not read like a failure the
+		// player has to fix before anything works.
+		Con_Printf( S_WARN "SteamAPI: Steam rejected the Web API key (HTTP 403).\n" );
+		Con_Printf( "  Avatars still load from public profiles — the key only speeds up bulk loading.\n" );
+		Con_Printf( "  Check it in Settings -> Steam Web API key, or clear it to stop retrying:\n" );
+		Con_Printf( "  a valid key is 32 hex characters from steamcommunity.com/dev/apikey\n" );
+		Slayer_Log_Printf( "batch: API key rejected (401/403) — Web API disabled, falling back to XML (key length=%d, expected 32)",
+			(int)Q_strlen( slayer_steam_apikey.string ));
+		sapi_batch_disabled = true;
+		sapi_batch_in_progress = false;
+		sapi_batch_count = 0;
+		sapi_result = SAPI_RESULT_IDLE;
+		return false;
+	}
+
 	if( sapi_result == SAPI_RESULT_FAIL )
 	{
 		Con_Printf( S_WARN "SteamAPI: batch avatar fetch failed\n" );
+		Slayer_Log_Printf( "batch: fetch FAILED (see slayer_java.log for the reason)" );
 		sapi_batch_in_progress = false;
 		sapi_batch_count = 0;
 		sapi_result = SAPI_RESULT_IDLE;

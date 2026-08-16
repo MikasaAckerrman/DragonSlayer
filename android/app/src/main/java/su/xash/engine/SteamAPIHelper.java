@@ -2,7 +2,6 @@ package su.xash.engine;
 
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.util.Log;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -23,11 +22,16 @@ import javax.net.ssl.HttpsURLConnection;
  */
 public class SteamAPIHelper
 {
-	private static final String TAG = "SteamAPIHelper";
 	private static final int CONNECT_TIMEOUT = 15000;
 	private static final int READ_TIMEOUT = 15000;
 	private static final int MAX_RESPONSE_SIZE = 262144; // 256 KB
 	private static final int MAX_IMAGE_SIZE = 524288;    // 512 KB
+
+	// HTTP status of the most recent fetchUrl call, so fetchBatchAvatars
+	// can tell an invalid API key (401/403 -- wrong and staying wrong) from
+	// a transient failure, and report it as permanent rather than have the
+	// engine keep retrying a key that will keep being rejected.
+	private static volatile int sLastHttpCode = 0;
 
 
 	/**
@@ -42,17 +46,18 @@ public class SteamAPIHelper
 	{
 		if( apiKey == null || apiKey.isEmpty() )
 		{
-			Log.w( TAG, "fetchBatchAvatars: no API key" );
+			SlayerLog.log( "batch", "FAIL no API key" );
 			return -1;
 		}
 
 		if( steamIds == null || steamIds.isEmpty() )
 		{
-			Log.w( TAG, "fetchBatchAvatars: no steam IDs" );
+			SlayerLog.log( "batch", "FAIL no steam IDs" );
 			return -1;
 		}
 
-		Log.d( TAG, "fetchBatchAvatars: starting for IDs: " + steamIds );
+		SlayerLog.deriveFrom( basePath + "/x.png" );
+		SlayerLog.log( "batch", "start, ids=" + steamIds + " -> " + basePath );
 
 		// Ensure output directory exists
 		File outDir = new File( basePath );
@@ -69,11 +74,17 @@ public class SteamAPIHelper
 			String json = fetchUrl( apiUrl );
 			if( json == null )
 			{
-				Log.e( TAG, "fetchBatchAvatars: API request failed" );
+				if( sLastHttpCode == 401 || sLastHttpCode == 403 )
+				{
+					SlayerLog.log( "batch", "FAIL invalid API key (HTTP " + sLastHttpCode
+						+ ") -- disabling Web API until the key changes" );
+					return -2;   // permanent: bad key
+				}
+				SlayerLog.log( "batch", "FAIL GetPlayerSummaries request" );
 				return -1;
 			}
 
-			Log.d( TAG, "fetchBatchAvatars: got response (" + json.length() + " chars)" );
+			SlayerLog.log( "batch", "API ok, " + json.length() + " chars" );
 
 			// Step 2: Parse JSON and download each avatar
 			int downloaded = 0;
@@ -124,12 +135,12 @@ public class SteamAPIHelper
 				searchFrom = objEnd;
 			}
 
-			Log.i( TAG, "fetchBatchAvatars: downloaded " + downloaded + " avatars" );
+			SlayerLog.log( "batch", "done, " + downloaded + " avatar(s) downloaded" );
 			return downloaded;
 		}
 		catch( Exception e )
 		{
-			Log.e( TAG, "fetchBatchAvatars: exception: " + e.getMessage() );
+			SlayerLog.log( "batch", "FAIL exception: " + e );
 			return -1;
 		}
 	}
@@ -155,9 +166,10 @@ public class SteamAPIHelper
 			conn.setInstanceFollowRedirects( true );
 
 			int code = conn.getResponseCode();
+			sLastHttpCode = code;
 			if( code != 200 )
 			{
-				Log.w( TAG, "fetchUrl: HTTP " + code + " for " + urlStr );
+				SlayerLog.log( "batch", "FAIL HTTP " + code + " for " + urlStr );
 				return null;
 			}
 
@@ -172,7 +184,7 @@ public class SteamAPIHelper
 				totalRead += n;
 				if( totalRead > MAX_RESPONSE_SIZE )
 				{
-					Log.w( TAG, "fetchUrl: response too large" );
+					SlayerLog.log( "batch", "FAIL response too large (>" + MAX_RESPONSE_SIZE + " bytes)" );
 					return null;
 				}
 				baos.write( buf, 0, n );
@@ -182,7 +194,7 @@ public class SteamAPIHelper
 		}
 		catch( IOException e )
 		{
-			Log.e( TAG, "fetchUrl: " + e.getMessage() );
+			SlayerLog.log( "batch", "FAIL fetchUrl: " + e );
 			return null;
 		}
 		finally
@@ -223,7 +235,7 @@ public class SteamAPIHelper
 				totalRead += n;
 				if( totalRead > MAX_IMAGE_SIZE )
 				{
-					Log.w( TAG, "downloadAvatarImage: too large: " + imageUrl );
+					SlayerLog.log( "batch", "FAIL image too large: " + imageUrl );
 					return false;
 				}
 				baos.write( buf, 0, n );
@@ -233,7 +245,7 @@ public class SteamAPIHelper
 			Bitmap bitmap = BitmapFactory.decodeByteArray( imageData, 0, imageData.length );
 			if( bitmap == null )
 			{
-				Log.w( TAG, "downloadAvatarImage: decode failed: " + imageUrl );
+				SlayerLog.log( "batch", "FAIL decode: " + imageUrl );
 				return false;
 			}
 
@@ -261,13 +273,13 @@ public class SteamAPIHelper
 				return false;
 			}
 
-			Log.d( TAG, "downloadAvatarImage: saved " + savePath
-				+ " (" + outFile.length() + " bytes)" );
+			SlayerLog.log( "batch", "OK saved " + outFile.length()
+				+ " bytes -> " + savePath );
 			return true;
 		}
 		catch( IOException e )
 		{
-			Log.e( TAG, "downloadAvatarImage: " + e.getMessage() );
+			SlayerLog.log( "batch", "FAIL downloadAvatarImage: " + e );
 			if( outFile != null && outFile.exists() )
 				outFile.delete();
 			return false;

@@ -1205,11 +1205,22 @@ static void R_StudioCalcAttachments( void )
 {
 	mstudioattachment_t	*pAtt;
 	int		i;
+	int		count;
 
 	// calculate attachment points
 	pAtt = (mstudioattachment_t *)((byte *)m_pStudioHeader + m_pStudioHeader->attachmentindex);
 
-	for( i = 0; i < Q_min( MAXSTUDIOATTACHMENTS, m_pStudioHeader->numattachments ); i++ )
+	// Slayer3D: the DESTINATION is cl_entity_t::attachment[4], not
+	// MAXSTUDIOATTACHMENTS. Vanilla bounded this loop by 64 and wrote straight
+	// past the array into the fields that follow it (trivial_accept, model,
+	// efrag...) for any model carrying five or more attachments. Nothing in stock
+	// CS does -- 154 models measured, maximum 4 -- but a custom model is one
+	// download away, and the failure would look like unrelated corruption.
+	count = m_pStudioHeader->numattachments;
+	if( count > 4 ) count = 4;
+	if( count > MAXSTUDIOATTACHMENTS ) count = MAXSTUDIOATTACHMENTS;
+
+	for( i = 0; i < count; i++ )
 	{
 		Matrix3x4_VectorTransform( g_studio.lighttransform[pAtt[i].bone], pAtt[i].org, RI.currententity->attachment[i] );
 	}
@@ -3445,7 +3456,11 @@ void R_DrawViewModel( void )
 		break;
 	case mod_studio:
 		R_StudioSetupTimings();
-		R_StudioDrawModelInternal( RI.currententity, STUDIO_RENDER );
+		// Slayer3D: dispatch studio events for the viewmodel too (vanilla only
+		// asks for STUDIO_RENDER here). This fills attachment[0] with the real
+		// gun-tip muzzle so first-person tracers can start from the barrel, and
+		// forwards muzzle events through pfnStudioEvent like third-person does.
+		R_StudioDrawModelInternal( RI.currententity, STUDIO_RENDER|STUDIO_EVENTS );
 		break;
 	}
 

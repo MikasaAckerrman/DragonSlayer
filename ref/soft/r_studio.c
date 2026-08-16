@@ -1220,11 +1220,19 @@ static void R_StudioCalcAttachments( void )
 	vec3_t forward, bonepos;
 	vec3_t localOrg, localAng;
 	int    i;
+	int    count;
 
 	// calculate attachment points
 	pAtt = (mstudioattachment_t *)((byte *)m_pStudioHeader + m_pStudioHeader->attachmentindex );
 
-	for( i = 0; i < Q_min( MAXSTUDIOATTACHMENTS, m_pStudioHeader->numattachments ); i++ )
+	// Slayer3D: bounded by the DESTINATION array (cl_entity_t::attachment[4]),
+	// not by MAXSTUDIOATTACHMENTS. Same overflow as in ref_gl; see the comment
+	// there.
+	count = m_pStudioHeader->numattachments;
+	if( count > 4 ) count = 4;
+	if( count > MAXSTUDIOATTACHMENTS ) count = MAXSTUDIOATTACHMENTS;
+
+	for( i = 0; i < count; i++ )
 	{
 		Matrix3x4_VectorTransform( g_studio.lighttransform[pAtt[i].bone], pAtt[i].org, RI.currententity->attachment[i] );
 		VectorSubtract( RI.currententity->attachment[i], RI.currententity->origin, localOrg );

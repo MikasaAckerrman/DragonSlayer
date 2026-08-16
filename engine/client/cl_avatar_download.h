@@ -19,6 +19,18 @@ GNU General Public License for more details.
 #include <inttypes.h>
 #include "xash3d_types.h"
 
+// Where downloaded avatars live, relative to the gamedir. Kept in one place
+// because the path is built in four different files, and an earlier attempt to
+// change it by hand left some of them writing where others were not reading.
+#define SLAYER_AVATAR_DIR "downloaded/avatars"
+
+// Builds the cache path for one avatar: "<SLAYER_AVATAR_DIR>/<steamid64>.png".
+void Slayer_AvatarPath( char *dst, size_t size, uint64_t steamid64 );
+
+// Moves any avatars left in the pre-downloaded/ location into the current one.
+// Called once during init; a no-op when there is nothing to move.
+void Slayer_AvatarDownload_MigrateCache( void );
+
 // Initialize avatar download system (register cvars).
 void Slayer_AvatarDownload_Init( void );
 

@@ -65,6 +65,31 @@
 	<string name="engine_install_failed">Update install failed: %1$s</string>
 	<string name="game_path_restart_required">Requires app restart</string>
 	<string name="game_path_invalid_folder">Selected folder must contain valve/ or cstrike/ subfolder</string>
+	<string name="game_path_use_default">App storage (recommended)</string>
+	<string name="game_path_use_default_summary">The game\'s own folder under Android/data. Fastest and always writable, but Android deletes it when the app is uninstalled.</string>
+	<string name="game_path_choose_folder">Choose a folder</string>
+	<string name="game_path_choose_folder_summary">Pick any folder yourself. It survives uninstalling the app, and is easier to reach with a file manager.</string>
+	<string name="game_path_reset_to_default">Using app storage: %1$s</string>
+	<!-- Moving the game files between a chosen folder and the app directory -->
+	<string name="game_transfer">Transfer game files</string>
+	<string name="game_transfer_title">Transfer game files</string>
+	<string name="game_transfer_summary">Copy a folder into app storage, or move app storage back out to a folder</string>
+	<string name="game_transfer_paths">Folder: %1$s\nApp storage: %2$s</string>
+	<string name="game_transfer_import">Copy folder to app storage</string>
+	<string name="game_transfer_import_summary">Copies everything into the app\'s own directory. The chosen folder is left untouched.</string>
+	<string name="game_transfer_export">Move app storage to folder</string>
+	<string name="game_transfer_export_summary">Moves the files out of the app directory, freeing it. A file is deleted only after its copy is verified.</string>
+	<string name="game_transfer_running_import">Copying to app storage</string>
+	<string name="game_transfer_running_export">Moving to folder</string>
+	<string name="game_transfer_done">Done: %1$d files, %2$s</string>
+	<string name="game_transfer_failed">Transfer failed: %1$s</string>
+	<string name="game_transfer_no_folder">Choose a folder first under Game data location</string>
+	<string name="game_transfer_source_missing">Nothing to transfer: %1$s does not exist</string>
+	<string name="game_transfer_not_a_game_dir">%1$s has no valve/ or cstrike/ inside</string>
+	<string name="game_transfer_confirm_export_title">Move files out of app storage?</string>
+	<string name="game_transfer_confirm_export">Files will be MOVED to %1$s and removed from app storage. A file is deleted only after its copy is verified.</string>
+	<string name="game_transfer_continue">Continue</string>
+
 
 	<!-- Steam account -->
 	<string name="steam_category">Steam account</string>
@@ -75,6 +100,41 @@
 	<string name="steam_apikey">Steam Web API key (optional)</string>
 	<string name="steam_apikey_summary">Optional — speeds up bulk avatar loading. Avatars already load without it from public profiles. Free key: steamcommunity.com/dev/apikey</string>
 	<string name="steam_apikey_unset">Not set — avatars load from public profiles</string>
+	<string name="steam_apikey_malformed">Invalid: %1$d characters, expected 32. Steam refuses it (HTTP 403); avatars still load from public profiles. Get a key at steamcommunity.com/dev/apikey or clear this field.</string>
 	<string name="steam_advertise">Show my Steam avatar to others</string>
 	<string name="steam_advertise_summary">Sends your real SteamID to servers so other players see your avatar. Turn off if a server refuses the connection.</string>
+	<!-- Steam presence (playing status) -->
+	<string name="steam_presence">Show what I’m playing</string>
+	<string name="steam_presence_summary">Your Steam profile shows “Playing Counter-Strike” while you are in a game.</string>
+	<string name="steam_presence_needs_signin">Sign in with Steam first — the profile status needs a signed-in account.</string>
+	<string name="steam_presence_active">On — your profile shows the game while you play.</string>
+	<string name="steam_presence_off">Off — nothing is sent to Steam.</string>
+
+	<!-- Steam sign-in (token flow) -->
+	<string name="steam_auth_title">Sign in with Steam</string>
+	<string name="steam_auth_starting">Contacting Steam…</string>
+	<string name="steam_auth_qr_ready">Approve this sign-in in the Steam Mobile app.\n\nIf Steam is installed here, tap the button below. To approve from another device, open:\n%1$s</string>
+	<string name="steam_auth_open_app">Approve in the Steam app</string>
+	<string name="steam_auth_use_password">Use account name and password instead</string>
+	<string name="steam_auth_account_hint">Steam account name</string>
+	<string name="steam_auth_password_hint">Password</string>
+	<string name="steam_auth_sign_in">Sign in</string>
+	<string name="steam_auth_need_credentials">Enter both an account name and a password.</string>
+	<string name="steam_auth_signing_in">Signing in…</string>
+	<string name="steam_auth_waiting_approval">Waiting for you to approve the sign-in…</string>
+	<string name="steam_auth_email_code">Code from the email</string>
+	<string name="steam_auth_app_code">Code from the Steam app</string>
+	<string name="steam_auth_enter_email_code">Steam emailed you a code. Enter it below.</string>
+	<string name="steam_auth_enter_app_code">Enter the Steam Guard code from your authenticator.</string>
+	<string name="steam_auth_submit_code">Submit code</string>
+	<string name="steam_auth_intro">Enter your Steam account name and password. The password is encrypted with a key from Steam and is never stored in the app.</string>
+	<string name="steam_auth_app_route">Approve in the Steam app instead</string>
+	<string name="steam_auth_code_or_approve">Enter the Steam Guard code — or simply approve the sign-in in the Steam app if you got a notification. Either one works.</string>
+	<string name="steam_auth_checking_code">Checking the code…</string>
+	<string name="steam_auth_code_accepted">Code accepted, finishing sign-in…</string>
+	<string name="steam_auth_code_rejected">Code refused: %1$s\nEnter a fresh code and try again.</string>
+	<string name="steam_auth_signed_in">Signed in to Steam — SteamID %1$s</string>
+	<string name="steam_auth_failed">Sign-in failed: %1$s</string>
+	<string name="steam_auth_cancelled">Sign-in cancelled.</string>
+	<string name="steam_auth_timed_out">Sign-in timed out. Try again.</string>
 </resources>

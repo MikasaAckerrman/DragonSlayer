@@ -29,6 +29,7 @@ GNU General Public License for more details.
 #include "demo_api.h"
 #include "ivoicetweak.h"
 #include "cl_scoreboard_slayer.h" // Slayer3D: suppress the game's own scoreboard
+#include "cl_stockboard_gate_slayer.h" // Slayer3D: ... including one drawn via our own exports
 #include "pm_local.h"
 #include "cl_tent.h"
 #include "input.h"
@@ -911,6 +912,12 @@ void CL_DrawHUD( int state )
 	if( state == CL_ACTIVE && cl.paused )
 		state = CL_PAUSED;
 
+	// Slayer3D: the stock-board gate latches within ONE client redraw, so its
+	// state has to be cleared before every redraw. Doing it here rather than
+	// inside the gate means there is exactly one place that decides what "a
+	// frame" is, and a board seen last frame can never suppress this one.
+	Slayer_StockBoard_BeginFrame();
+
 	switch( state )
 	{
 	case CL_ACTIVE:
@@ -930,7 +937,10 @@ void CL_DrawHUD( int state )
 		CL_DrawScreenFade ();
 		CL_DrawCrosshair ();
 		CL_DrawCenterPrint ();
-		clgame.dllFuncs.pfnRedraw( cl.time, cl.intermission );
+		// Same protection as CL_ACTIVE: if our scoreboard is visible,
+		// suppress the client DLL redraw so the stock board cannot appear.
+		if( Slayer_Scoreboard_StockBlockLevel() < 2 )
+			clgame.dllFuncs.pfnRedraw( cl.time, cl.intermission );
 		if( showpause.value )
 		{
 			if( !cls.pauseIcon )
@@ -1651,6 +1661,13 @@ static void GAME_EXPORT CL_FillRGBA( int x, int y, int w, int h, int r, int g, i
 {
 	float x_ = x, y_ = y, w_ = w, h_ = h;
 
+	// Slayer3D: the client library's own scoreboard draws itself through here, so
+	// this is where it can be dropped -- see cl_stockboard_gate_slayer.c. Checked
+	// BEFORE SPR_AdjustSize, because the gate reasons in the HUD coordinate space
+	// the client library uses, not in real pixels.
+	if( Slayer_StockBoard_FilterRect( x, y, w, h, a ))
+		return;
+
 	r = bound( 0, r, 255 );
 	g = bound( 0, g, 255 );
 	b = bound( 0, b, 255 );
@@ -1968,9 +1985,21 @@ static int GAME_EXPORT pfnDrawCharacter( int x, int y, int number, int r, int g,
 {
 	rgba_t color = { r, g, b, 255 };
 	int flags = FONT_DRAW_HUD;
+	int width = 0, height = 0;
 
 	if( hud_utf8.value )
 		flags |= FONT_DRAW_UTF8;
+
+	// Slayer3D: the stock scoreboard's TEXT arrives here, one glyph at a time
+	// (DrawUtils::DrawHudString -> TextMessageDrawChar -> pfnDrawCharacter). The
+	// gate only ever answers true after a board background was seen in this frame,
+	// so this cannot swallow the rest of the HUD.
+	//
+	// The glyph's own size is needed to ask whether it is inside the board, and
+	// asking the font for it is exactly what the draw below does anyway.
+	CL_DrawCharacterLen( &cls.creditsFont, number, &width, &height );
+	if( Slayer_StockBoard_FilterPrim( x, y, width, height ))
+		return width;   // report the advance: the caller lays out the next glyph from it
 
 	return CL_DrawCharacter( x, y, number, color, &cls.creditsFont, flags );
 }
@@ -3242,6 +3271,12 @@ pfnFillRGBABlend
 static void GAME_EXPORT CL_FillRGBABlend( int x, int y, int w, int h, int r, int g, int b, int a )
 {
 	float x_ = x, y_ = y, w_ = w, h_ = h;
+
+	// Slayer3D: DrawUtils::DrawRectangle -- which is what draws the stock
+	// scoreboard's background -- comes through THIS export rather than CL_FillRGBA,
+	// so the gate has to be here too. See cl_stockboard_gate_slayer.c.
+	if( Slayer_StockBoard_FilterRect( x, y, w, h, a ))
+		return;
 
 	r = bound( 0, r, 255 );
 	g = bound( 0, g, 255 );
