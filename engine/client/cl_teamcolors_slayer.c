@@ -157,31 +157,29 @@ static byte Slayer_TC_SideOf( const char *team )
 	return SLAYER_TC_SIDE_NONE;
 }
 
-// Local player's team name, or "" when unknown.
-static const char *Slayer_TC_LocalTeam( void )
-{
-	if( cl.playernum < 0 || cl.playernum >= MAX_CLIENTS )
-		return "";
-
-	return Slayer_PlayerTeam( cl.playernum + 1 );
-}
-
-qboolean Slayer_TeamColors_IsAlly( int slot )
+qboolean Slayer_TeamColors_IsAllyOf( int observer_slot, int slot )
 {
 	const char *mine, *theirs;
 
+	if( observer_slot < 0 || observer_slot >= MAX_CLIENTS )
+		return false;
 	if( slot < 0 || slot >= MAX_CLIENTS )
 		return false;
-	if( slot == cl.playernum )
+	if( slot == observer_slot )
 		return true;
 
-	mine = Slayer_TC_LocalTeam();
+	mine = Slayer_PlayerTeam( observer_slot + 1 );
 	theirs = Slayer_PlayerTeam( slot + 1 );
 
 	if( COM_StringEmptyOrNULL( mine ) || COM_StringEmptyOrNULL( theirs ))
 		return false;
 
 	return Q_stricmp( mine, theirs ) == 0 ? true : false;
+}
+
+qboolean Slayer_TeamColors_IsAlly( int slot )
+{
+	return Slayer_TeamColors_IsAllyOf( cl.playernum, slot );
 }
 
 byte Slayer_TeamColors_Side( int slot )

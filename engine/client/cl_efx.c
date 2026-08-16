@@ -2164,9 +2164,16 @@ static void CL_FreeDeadBeams( void )
 
 void CL_DrawEFX( float time, qboolean fTrans )
 {
-	// Slayer3D: advance tracer barrel-heat once per frame before drawing, so
-	// the custom tracer colour tracks sustained fire.
-	Slayer_Tracer_Frame();
+	// The translucent pass starts after every player studio model has populated
+	// attachment[]. Flush before CL_DrawBeams as well, so the legacy beam renderer
+	// does not wait an extra frame.
+	if( fTrans )
+		Slayer_Tracer_FlushDeferred();
+
+	// Slayer3D: advance tracer barrel-heat once per rendered frame. CL_DrawEFX is
+	// called for opaque and translucent passes, so only the latter owns time.
+	if( fTrans )
+		Slayer_Tracer_Frame();
 
 	CL_FreeDeadBeams();
 	if( cl_draw_beams.value )

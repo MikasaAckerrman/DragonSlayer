@@ -954,9 +954,14 @@ all the visible entities should pass this filter
 qboolean CL_AddVisibleEntity( cl_entity_t *ent, int entityType )
 {
 	qboolean draw_player = true;
+	qboolean force_observer_focus;
 
 	if( !ent || !ent->model )
 		return false;
+
+	force_observer_focus = V_IsSlayerThirdPerson() &&
+		Slayer_ObserverFollowsPlayer() &&
+		ent->index == Slayer_ObserverFocusIndex();
 
 	// don't add the player in firstperson mode
 	if( RP_LOCALCLIENT( ent ))
@@ -972,9 +977,14 @@ qboolean CL_AddVisibleEntity( cl_entity_t *ent, int entityType )
 		}
 	}
 
-	// check for adding this entity
+	// Let the game DLL keep its normal in-eye filtering, except when Slayer's own
+	// third-person camera is active: then hiding iuser2 removes the very player
+	// the camera is orbiting.
 	if( !clgame.dllFuncs.pfnAddEntity( entityType, ent, ent->model->name ))
 	{
+		if( force_observer_focus )
+			goto add_to_renderer;
+
 		// local player was reject by game code, so ignore any effects
 		if( RP_LOCALCLIENT( ent ))
 			cl.local.apply_effects = false;
@@ -984,6 +994,7 @@ qboolean CL_AddVisibleEntity( cl_entity_t *ent, int entityType )
 	if( !draw_player )
 		return false;
 
+add_to_renderer:
 	// Slayer3D: 3-axis grenade tumble (proportional to linear speed)
 	Slayer_GrenadeTumble_Apply( ent );
 
